@@ -1,0 +1,62 @@
+package com.example.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Taskz Corporate Workforce Palette - Deep Navy, Slate, Electric Cyan
+val TaskzSlate950 = Color(0xFF090D16)
+val TaskzSlate900 = Color(0xFF0F172A)
+val TaskzSlate800 = Color(0xFF1E293B)
+val TaskzSlate700 = Color(0xFF334155)
+val TaskzSlate600 = Color(0xFF475569)
+val TaskzSlate500 = Color(0xFF64748B)
+val TaskzSlate400 = Color(0xFF94A3B8)
+val TaskzSlate300 = Color(0xFFCBD5E1)
+val TaskzSlate200 = Color(0xFFE2E8F0)
+val TaskzSlate100 = Color(0xFFF1F5F9)
+val TaskzSlate50 = Color(0xFFF8FAFC)
+
+val TaskzCyanPrimary = Color(0xFF0284C7)
+val TaskzCyanBright = Color(0xFF0EA5E9)
+val TaskzCyanLight = Color(0xFF38BDF8)
+val TaskzCyanDark = Color(0xFF0369A1)
+val TaskzCyanContainerDark = Color(0xFF0C4A6E)
+val TaskzCyanContainerLight = Color(0xFFE0F2FE)
+
+val TaskzSuccess = Color(0xFF10B981)
+val TaskzWarning = Color(0xFFF59E0B)
+val TaskzError = Color(0xFFEF4444)
+val TaskzInfo = Color(0xFF3B82F6)
+
+// Light Theme Palette
+val LightPrimary = Color(0xFF0284C7)
+val LightOnPrimary = Color(0xFFFFFFFF)
+val LightPrimaryContainer = Color(0xFFE0F2FE)
+val LightOnPrimaryContainer = Color(0xFF0369A1)
+val LightSecondary = Color(0xFF334155)
+val LightOnSecondary = Color(0xFFFFFFFF)
+val LightSecondaryContainer = Color(0xFFE2E8F0)
+val LightOnSecondaryContainer = Color(0xFF0F172A)
+val LightBackground = Color(0xFFF8FAFC)
+val LightOnBackground = Color(0xFF0F172A)
+val LightSurface = Color(0xFFFFFFFF)
+val LightOnSurface = Color(0xFF0F172A)
+val LightSurfaceVariant = Color(0xFFF1F5F9)
+val LightOnSurfaceVariant = Color(0xFF475569)
+val LightOutline = Color(0xFFCBD5E1)
+
+// Dark Theme Palette
+val DarkPrimary = Color(0xFF38BDF8)
+val DarkOnPrimary = Color(0xFF082F49)
+val DarkPrimaryContainer = Color(0xFF0C4A6E)
+val DarkOnPrimaryContainer = Color(0xFFE0F2FE)
+val DarkSecondary = Color(0xFF94A3B8)
+val DarkOnSecondary = Color(0xFF0F172A)
+val DarkSecondaryContainer = Color(0xFF1E293B)
+val DarkOnSecondaryContainer = Color(0xFFF1F5F9)
+val DarkBackground = Color(0xFF090D16)
+val DarkOnBackground = Color(0xFFF1F5F9)
+val DarkSurface = Color(0xFF0F172A)
+val DarkOnSurface = Color(0xFFF1F5F9)
+val DarkSurfaceVariant = Color(0xFF1E293B)
+val DarkOnSurfaceVariant = Color(0xFF94A3B8)
+val DarkOutline = Color(0xFF334155)

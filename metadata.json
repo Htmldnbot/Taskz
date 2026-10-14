@@ -1,0 +1,6 @@
+{
+  "name": "Taskz",
+  "description": "Internal employee task assignment, tracking, and workforce synchronization application.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
