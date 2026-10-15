@@ -13,7 +13,6 @@ import com.example.data.local.entity.SyncMetadataEntity
 import com.example.data.remote.SupabaseClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 import java.io.IOException
 
 class SyncRepository(
@@ -29,9 +28,17 @@ class SyncRepository(
         outboxDao.getPendingCountFlow()
     ) { entity, pendingCount ->
         if (entity != null) {
-            entity.toDomain().copy(pendingSyncCount = pendingCount)
+            val base = entity.toDomain().copy(pendingSyncCount = pendingCount)
+            if (pendingCount > 0 && base.status == SyncStatus.SYNCED) {
+                base.copy(status = SyncStatus.PENDING)
+            } else {
+                base
+            }
         } else {
-            SyncMetadata(pendingSyncCount = pendingCount, status = SyncStatus.SYNCED)
+            SyncMetadata(
+                pendingSyncCount = pendingCount,
+                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
+            )
         }
     }
 
@@ -57,11 +64,13 @@ class SyncRepository(
     /**
      * Manual refresh operation.
      * Strictly adheres to the rule:
-     * - Checks connectivity
-     * - Validates session and account status with the server
-     * - Updates Last Server Fetch
-     * - Only updates Last Successful Sync if actual server verification succeeds
-     * - If offline or server error, flags appropriate status without fabricating success
+     * - Checks connectivity; never marks success merely because internet exists.
+     * - Validates session and account status with the server.
+     * - Calls real server RPC record_server_fetch() to log fetch in user_sync_state.
+     * - Updates Last Server Fetch.
+     * - NEVER uses fake acknowledgements like "ack-$now".
+     * - If pending events exist without Phase 2 server handlers, they remain strictly PENDING.
+     * - "Last Successful Sync" only updates when server acknowledgement of EVERY operation is confirmed.
      */
     suspend fun manualSync(): Result<SyncMetadata> {
         val now = System.currentTimeMillis()
@@ -72,19 +81,19 @@ class SyncRepository(
         }
 
         // Set status to SYNCING
-        syncMetadataDao.updateSyncStatus(SyncStatus.SYNCING.name, "Validating with server...")
+        syncMetadataDao.updateSyncStatus(SyncStatus.SYNCING.name, "Synchronizing with server...")
 
         val session = userPrefs.getUserSession()
         val token = session.accessToken
-        val authId = session.authUserId
+        val userId = session.userId
 
-        if (token.isNullOrBlank() || authId.isNullOrBlank()) {
+        if (token.isNullOrBlank() || userId.isNullOrBlank()) {
             syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "No active session")
             return Result.failure(IOException("Session not active"))
         }
 
         // 1. Validate session & profile against Supabase
-        val remoteProfileRes = supabaseClient.fetchProfileByAuthId(token, authId)
+        val remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
 
         // Always update Last Server Fetch when a request to the server was performed
         syncMetadataDao.updateLastServerFetch(now)
@@ -108,31 +117,43 @@ class SyncRepository(
             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
         }
 
+        // Record fetch in Supabase server sync state via RPC
+        supabaseClient.recordServerFetch(token)
+
         // Cache fresh profile
-        profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile))
-
-        // 2. Process outbox queue events (Phase 1 foundation)
-        val pendingEvents = outboxDao.getPendingEvents()
-        for (event in pendingEvents) {
-            // Future Phase 2 synchronization logic will dispatch each event type
-            // and verify server acknowledgement before marking SYNCED.
-            // For now, if events exist, mark as acknowledged.
-            outboxDao.updateEventStatus(event.transactionId, "SYNCED", "ack-$now")
+        val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(token, remoteProfile.profilePhotoPath).getOrNull()
+        } else {
+            null
         }
+        profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile.copy(avatarSignedUrl = signedUrl)))
 
-        // 3. Mark successful sync
-        syncMetadataDao.updateLastSuccessfulSync(now)
+        // 2. Outbox queue check:
+        // Do NOT mark pending events as SYNCED without real server acknowledgement!
+        // Leave them as PENDING until Phase 2 server handlers process and acknowledge them.
+        val pendingCount = outboxDao.getPendingEvents().size
+
+        if (pendingCount > 0) {
+            // Un-acknowledged events remain pending; do NOT advance Last Successful Sync
+            syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
+        } else {
+            // All operations confirmed with server
+            syncMetadataDao.updateLastSuccessfulSync(now)
+            syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+        }
 
         val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
             lastServerFetch = now,
-            lastSuccessfulSync = now,
-            status = SyncStatus.SYNCED
+            lastSuccessfulSync = if (pendingCount == 0) now else null,
+            pendingSyncCount = pendingCount,
+            status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
         )
         return Result.success(updated)
     }
 
     /**
-     * Foundation for queuing local actions in Phase 2.
+     * Enqueue a local action.
+     * Operations enter LOCAL/PENDING and never transition to SYNCED without real server ACK.
      */
     suspend fun enqueueLocalAction(
         transactionId: String,

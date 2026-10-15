@@ -1,6 +1,5 @@
 package com.example.domain.repository
 
-import android.util.Log
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncStatus
 import com.example.core.model.UserProfile
@@ -18,19 +17,15 @@ class AuthRepository(
     private val syncMetadataDao: SyncMetadataDao,
     private val userPrefs: UserPreferencesDataStore
 ) {
-    companion object {
-        private const val TAG = "TaskzAuthRepo"
-    }
-
     val currentProfileFlow: Flow<UserProfile?> = profileDao.getCachedProfileFlow().map { it?.toDomain() }
 
     /**
-     * Complete Sign Up flow:
-     * 1. Register with deterministic internal ID and password
-     * 2. (Optional) Upload photo to Supabase storage if provided
-     * 3. Insert record in 'profiles' table
-     * 4. Cache profile in Room
-     * 5. Save session in DataStore
+     * Sign Up flow:
+     * 1. Register with deterministic internal ID and password.
+     *    The database trigger (on_auth_user_created) automatically creates the profile row with id = auth.users.id.
+     * 2. (Optional) Upload photo to private 'profile-photos' storage if provided.
+     * 3. Update profile_photo_path in profiles.
+     * 4. Cache profile in Room and save session in secure session storage.
      */
     suspend fun signUp(
         employeeId: String,
@@ -50,18 +45,6 @@ class AuthRepository(
 
         val session = authResult.getOrElse { return Result.failure(it) }
 
-        var photoUrl: String? = null
-        if (photoBytes != null && photoFilename != null && session.accessToken.isNotBlank()) {
-            val uploadRes = supabaseClient.uploadProfilePhoto(
-                accessToken = session.accessToken,
-                authUserId = session.authUserId,
-                imageBytes = photoBytes,
-                filename = photoFilename
-            )
-            photoUrl = uploadRes.getOrNull()
-        }
-
-        // If access token is empty (e.g., Supabase email confirmation required), attempt immediate login
         var activeToken = session.accessToken
         if (activeToken.isBlank()) {
             val loginRes = supabaseClient.login(trimmedEmpId, password)
@@ -70,53 +53,86 @@ class AuthRepository(
             }
         }
 
-        val newProfile = UserProfile(
-            authUserId = session.authUserId,
-            employeeId = trimmedEmpId,
-            fullName = fullName.trim(),
-            mobile = mobile.trim(),
-            profilePhotoUrl = photoUrl,
-            appRole = "employee",
-            isActive = true
-        )
-
-        val createResult = if (activeToken.isNotBlank()) {
-            supabaseClient.createProfile(activeToken, newProfile)
-        } else {
-            Result.success(newProfile)
+        var photoPath: String? = null
+        if (photoBytes != null && photoFilename != null && activeToken.isNotBlank()) {
+            val uploadRes = supabaseClient.uploadProfilePhoto(
+                accessToken = activeToken,
+                userId = session.userId,
+                imageBytes = photoBytes,
+                filename = photoFilename
+            )
+            photoPath = uploadRes.getOrNull()
+            if (photoPath != null) {
+                supabaseClient.updateProfile(
+                    accessToken = activeToken,
+                    userId = session.userId,
+                    fullName = fullName.trim(),
+                    mobile = mobile.trim(),
+                    photoPath = photoPath
+                )
+            }
         }
 
-        val createdProfile = createResult.getOrElse { return Result.failure(it) }
+        val remoteProfile = if (activeToken.isNotBlank()) {
+            val fetched = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
+            fetched ?: UserProfile(
+                id = session.userId,
+                employeeId = trimmedEmpId,
+                fullName = fullName.trim(),
+                mobile = mobile.trim(),
+                profilePhotoPath = photoPath,
+                appRole = "employee",
+                isActive = true
+            )
+        } else {
+            UserProfile(
+                id = session.userId,
+                employeeId = trimmedEmpId,
+                fullName = fullName.trim(),
+                mobile = mobile.trim(),
+                profilePhotoPath = photoPath,
+                appRole = "employee",
+                isActive = true
+            )
+        }
+
+        val signedUrl = if (activeToken.isNotBlank() && !remoteProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(activeToken, remoteProfile.profilePhotoPath).getOrNull()
+        } else {
+            null
+        }
+
+        val finalProfile = remoteProfile.copy(avatarSignedUrl = signedUrl)
 
         // Cache in Room & DataStore
-        profileDao.insertProfile(ProfileEntity.fromDomain(createdProfile))
+        profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
         if (activeToken.isNotBlank()) {
             userPrefs.saveSession(
                 accessToken = activeToken,
                 refreshToken = session.refreshToken,
-                authUserId = session.authUserId,
+                userId = session.userId,
                 employeeId = trimmedEmpId
             )
             syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
         }
 
-        return Result.success(createdProfile)
+        return Result.success(finalProfile)
     }
 
     /**
      * Login flow:
-     * 1. Authenticate with Employee ID + Password
-     * 2. Fetch user profile from Supabase PostgREST
-     * 3. Check is_active flag. If inactive, block access immediately!
-     * 4. Cache in Room & DataStore
+     * 1. Authenticate with Employee ID + Password.
+     * 2. Fetch profile from Supabase PostgREST (profiles.id = user.id).
+     * 3. Check is_active flag. If inactive, block immediately.
+     * 4. Cache in Room & DataStore.
      */
     suspend fun login(employeeId: String, password: String): Result<UserProfile> {
         val trimmedEmpId = employeeId.trim().uppercase()
         val loginResult = supabaseClient.login(trimmedEmpId, password)
         val session = loginResult.getOrElse { return Result.failure(it) }
 
-        // Fetch remote profile
-        val profileResult = supabaseClient.fetchProfileByAuthId(session.accessToken, session.authUserId)
+        // Fetch remote profile using profiles.id = auth.users.id
+        val profileResult = supabaseClient.fetchProfileById(session.accessToken, session.userId)
         val profile = profileResult.getOrElse {
             return Result.failure(IOException("Failed to retrieve profile: ${it.message}"))
         }
@@ -125,27 +141,34 @@ class AuthRepository(
             return Result.failure(IOException("Profile record not found for this user."))
         }
 
-        // Enforce account status:
+        // Enforce account active status:
         if (!profile.isActive) {
             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
         }
+
+        val signedUrl = if (!profile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(session.accessToken, profile.profilePhotoPath).getOrNull()
+        } else {
+            null
+        }
+        val finalProfile = profile.copy(avatarSignedUrl = signedUrl)
 
         // Persist session and cache
         userPrefs.saveSession(
             accessToken = session.accessToken,
             refreshToken = session.refreshToken,
-            authUserId = session.authUserId,
+            userId = session.userId,
             employeeId = profile.employeeId,
             mustChangePassword = profile.mustChangePassword
         )
-        profileDao.insertProfile(ProfileEntity.fromDomain(profile))
+        profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
         syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
 
-        return Result.success(profile)
+        return Result.success(finalProfile)
     }
 
     /**
-     * Restore session on app launch without prompting for login if valid.
+     * Restore session on app launch without prompting for login if session is valid.
      */
     suspend fun restoreSession(): Result<UserProfile?> {
         val session = userPrefs.getUserSession()
@@ -155,50 +178,67 @@ class AuthRepository(
 
         val cachedProfile = profileDao.getCachedProfile()?.toDomain()
 
-        // Verify with server in background
+        // Verify with server
         val token = session.accessToken ?: return Result.success(cachedProfile)
-        val remoteProfileRes = supabaseClient.fetchProfileByAuthId(token, session.authUserId ?: "")
+        val userId = session.userId ?: return Result.success(cachedProfile)
+
+        val remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
 
         if (remoteProfileRes.isSuccess) {
             val remoteProfile = remoteProfileRes.getOrNull()
             if (remoteProfile != null) {
                 if (!remoteProfile.isActive) {
-                    // Account was deactivated! Clear session and notify
                     logout()
                     return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
                 }
-                profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile))
+
+                val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
+                    supabaseClient.getSignedProfilePhotoUrl(token, remoteProfile.profilePhotoPath).getOrNull()
+                } else {
+                    null
+                }
+                val enriched = remoteProfile.copy(avatarSignedUrl = signedUrl)
+
+                profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
                 syncMetadataDao.updateLastServerFetch(System.currentTimeMillis())
-                return Result.success(remoteProfile)
+                return Result.success(enriched)
             }
         } else {
-            // Attempt token refresh if error looks like expired token
+            // Attempt token refresh
             val refresh = session.refreshToken
             if (!refresh.isNullOrBlank()) {
                 val refreshRes = supabaseClient.refreshSession(refresh)
                 if (refreshRes.isSuccess) {
                     val newSession = refreshRes.getOrThrow()
                     userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-                    val retryProfileRes = supabaseClient.fetchProfileByAuthId(newSession.accessToken, session.authUserId ?: "")
+                    val retryProfileRes = supabaseClient.fetchProfileById(newSession.accessToken, newSession.userId)
                     if (retryProfileRes.isSuccess && retryProfileRes.getOrNull() != null) {
                         val validProfile = retryProfileRes.getOrThrow()!!
                         if (!validProfile.isActive) {
                             logout()
                             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
                         }
-                        profileDao.insertProfile(ProfileEntity.fromDomain(validProfile))
-                        return Result.success(validProfile)
+
+                        val signedUrl = if (!validProfile.profilePhotoPath.isNullOrBlank()) {
+                            supabaseClient.getSignedProfilePhotoUrl(newSession.accessToken, validProfile.profilePhotoPath).getOrNull()
+                        } else {
+                            null
+                        }
+                        val enriched = validProfile.copy(avatarSignedUrl = signedUrl)
+
+                        profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
+                        return Result.success(enriched)
                     }
                 }
             }
         }
 
-        // If offline, return cached profile gracefully
+        // Return cached profile if offline
         return Result.success(cachedProfile)
     }
 
     /**
-     * Logout and clear all sensitive data.
+     * Logout and clear session.
      */
     suspend fun logout() {
         val session = userPrefs.getUserSession()

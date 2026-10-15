@@ -53,20 +53,7 @@ class TaskzApplication : Application() {
         networkMonitor = NetworkMonitor(this)
         supabaseClient = SupabaseClient()
 
-        // 2. Load custom config from DataStore if user configured it at runtime
-        applicationScope.launch {
-            val custom = userPreferences.customConfigFlow.first()
-            if (!custom.first.isNullOrBlank()) {
-                SupabaseConfig.runtimeUrl = custom.first
-            }
-            if (!custom.second.isNullOrBlank()) {
-                SupabaseConfig.runtimeAnonKey = custom.second
-            }
-            // Initialize sync metadata table
-            syncRepository.initializeSyncState()
-        }
-
-        // 3. Repositories
+        // 2. Initialize Repositories
         authRepository = AuthRepository(
             supabaseClient = supabaseClient,
             profileDao = database.profileDao(),
@@ -93,6 +80,19 @@ class TaskzApplication : Application() {
             supabaseClient = supabaseClient,
             userPrefs = userPreferences
         )
+
+        // 3. Load custom config & initialize sync state in background
+        applicationScope.launch {
+            val custom = userPreferences.customConfigFlow.first()
+            if (!custom.first.isNullOrBlank()) {
+                SupabaseConfig.runtimeUrl = custom.first
+            }
+            if (!custom.second.isNullOrBlank()) {
+                SupabaseConfig.runtimeAnonKey = custom.second
+            }
+            // Initialize sync metadata table
+            syncRepository.initializeSyncState()
+        }
     }
 
     companion object {

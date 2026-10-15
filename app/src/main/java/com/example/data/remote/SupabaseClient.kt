@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 data class AuthSessionResponse(
     val accessToken: String,
     val refreshToken: String?,
-    val authUserId: String,
+    val userId: String,
     val employeeId: String
 )
 
@@ -40,7 +40,7 @@ class SupabaseClient(
 
     private fun checkConfig() {
         if (!SupabaseConfig.isConfigured) {
-            throw IOException("Supabase is not configured. Please check your SUPABASE_URL and SUPABASE_ANON_KEY.")
+            throw IOException("Supabase is not configured. Please configure SUPABASE_URL and SUPABASE_ANON_KEY.")
         }
     }
 
@@ -79,7 +79,6 @@ class SupabaseClient(
 
             if (!response.isSuccessful) {
                 val errorMsg = parseErrorMessage(responseBody, "Sign up failed (${response.code})")
-                // Check if user already exists
                 if (errorMsg.contains("already registered", ignoreCase = true) ||
                     errorMsg.contains("User already exists", ignoreCase = true)
                 ) {
@@ -98,13 +97,11 @@ class SupabaseClient(
                 return@withContext Result.failure(IOException("Invalid response from auth server: user ID missing"))
             }
 
-            // Note: If email confirmations are disabled in Supabase, access_token is returned immediately.
-            // If email confirmation is enabled, access_token might be null until confirmed.
             Result.success(
                 AuthSessionResponse(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
-                    authUserId = userId,
+                    userId = userId,
                     employeeId = employeeId.trim()
                 )
             )
@@ -159,7 +156,7 @@ class SupabaseClient(
                 AuthSessionResponse(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
-                    authUserId = userId,
+                    userId = userId,
                     employeeId = employeeId.trim()
                 )
             )
@@ -203,7 +200,7 @@ class SupabaseClient(
                 AuthSessionResponse(
                     accessToken = newAccessToken,
                     refreshToken = newRefreshToken.takeIf { it.isNotBlank() },
-                    authUserId = userId,
+                    userId = userId,
                     employeeId = ""
                 )
             )
@@ -228,21 +225,20 @@ class SupabaseClient(
             okHttpClient.newCall(request).execute().close()
             Result.success(Unit)
         } catch (e: Exception) {
-            // Logout locally even if network fails
             Result.success(Unit)
         }
     }
 
     /**
-     * Fetch user profile from PostgREST by authUserId.
+     * Fetch user profile from PostgREST by id (public.profiles.id = auth.users.id).
      */
-    suspend fun fetchProfileByAuthId(
+    suspend fun fetchProfileById(
         accessToken: String,
-        authUserId: String
+        userId: String
     ): Result<UserProfile?> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val url = "${baseUrl()}/rest/v1/profiles?auth_user_id=eq.$authUserId&select=*"
+            val url = "${baseUrl()}/rest/v1/profiles?id=eq.$userId&select=*"
             val request = Request.Builder()
                 .url(url)
                 .addHeader("apikey", anonKey())
@@ -271,7 +267,7 @@ class SupabaseClient(
     }
 
     /**
-     * Insert new profile row.
+     * Insert new profile row if needed (note: on_auth_user_created trigger in DB usually creates it).
      */
     suspend fun createProfile(
         accessToken: String,
@@ -280,12 +276,12 @@ class SupabaseClient(
         try {
             checkConfig()
             val body = JSONObject().apply {
-                put("auth_user_id", profile.authUserId)
+                put("id", profile.id)
                 put("employee_id", profile.employeeId.trim())
                 put("full_name", profile.fullName.trim())
                 put("mobile", profile.mobile.trim())
-                if (!profile.profilePhotoUrl.isNullOrBlank()) {
-                    put("profile_photo_url", profile.profilePhotoUrl)
+                if (!profile.profilePhotoPath.isNullOrBlank()) {
+                    put("profile_photo_path", profile.profilePhotoPath)
                 }
                 put("app_role", "employee")
                 put("is_active", true)
@@ -305,7 +301,7 @@ class SupabaseClient(
             if (!response.isSuccessful) {
                 val errorMsg = parseErrorMessage(responseBody, "Failed to create profile")
                 if (errorMsg.contains("duplicate key", ignoreCase = true) ||
-                    errorMsg.contains("idx_profiles_employee_id", ignoreCase = true)
+                    errorMsg.contains("profiles_employee_id_unique", ignoreCase = true)
                 ) {
                     return@withContext Result.failure(IOException("Employee ID is already in use by another account."))
                 }
@@ -321,27 +317,28 @@ class SupabaseClient(
     }
 
     /**
-     * Update safe profile fields (Full Name, Mobile, Photo).
+     * Update safe profile fields (Full Name, Mobile, Photo Path).
+     * Where profiles.id = userId.
      */
     suspend fun updateProfile(
         accessToken: String,
-        authUserId: String,
+        userId: String,
         fullName: String,
         mobile: String,
-        photoUrl: String?
+        photoPath: String?
     ): Result<UserProfile> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
             val body = JSONObject().apply {
                 put("full_name", fullName.trim())
                 put("mobile", mobile.trim())
-                if (photoUrl != null) {
-                    put("profile_photo_url", photoUrl)
+                if (photoPath != null) {
+                    put("profile_photo_path", photoPath)
                 }
             }
 
             val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/profiles?auth_user_id=eq.$authUserId")
+                .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId")
                 .addHeader("apikey", anonKey())
                 .addHeader("Authorization", "Bearer $accessToken")
                 .addHeader("Prefer", "return=representation")
@@ -364,18 +361,20 @@ class SupabaseClient(
     }
 
     /**
-     * Upload photo to Supabase Storage in 'profile-photos' bucket.
+     * Upload photo to private Supabase Storage bucket 'profile-photos'.
+     * Path convention: USER_UUID/avatar_timestamp.jpg
+     * Returns: The relative storage path "USER_UUID/filename.jpg" (NOT a permanent public URL).
      */
     suspend fun uploadProfilePhoto(
         accessToken: String,
-        authUserId: String,
+        userId: String,
         imageBytes: ByteArray,
         filename: String
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val objectPath = "$authUserId/$filename"
-            val uploadUrl = "${baseUrl()}/storage/v1/object/profile-photos/$objectPath"
+            val storagePath = "$userId/$filename"
+            val uploadUrl = "${baseUrl()}/storage/v1/object/profile-photos/$storagePath"
 
             val request = Request.Builder()
                 .url(uploadUrl)
@@ -392,8 +391,100 @@ class SupabaseClient(
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to upload photo")))
             }
 
-            val publicUrl = "${baseUrl()}/storage/v1/object/public/profile-photos/$objectPath"
-            Result.success(publicUrl)
+            Result.success(storagePath)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Generate a short-lived signed URL for a private profile photo in 'profile-photos' bucket.
+     */
+    suspend fun getSignedProfilePhotoUrl(
+        accessToken: String,
+        photoPath: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val signUrl = "${baseUrl()}/storage/v1/object/sign/profile-photos/$photoPath"
+            val jsonBody = JSONObject().apply {
+                put("expiresIn", 7200) // 2 hours
+            }
+
+            val request = Request.Builder()
+                .url(signUrl)
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to generate signed image URL")))
+            }
+
+            val json = JSONObject(responseBody)
+            val signedPart = json.getString("signedURL")
+            val fullSignedUrl = "${baseUrl()}/storage/v1$signedPart"
+            Result.success(fullSignedUrl)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete an old profile photo from private 'profile-photos' bucket.
+     */
+    suspend fun deleteProfilePhoto(
+        accessToken: String,
+        photoPath: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val deleteUrl = "${baseUrl()}/storage/v1/object/profile-photos"
+            val jsonBody = JSONObject().apply {
+                put("prefixes", JSONArray().apply { put(photoPath) })
+            }
+
+            val request = Request.Builder()
+                .url(deleteUrl)
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .delete(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            response.close()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Call Supabase database function: public.record_server_fetch()
+     * Records real server sync fetch timestamp in public.user_sync_state.
+     */
+    suspend fun recordServerFetch(accessToken: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/record_server_fetch")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "record_server_fetch failed")))
+            }
+
+            Result.success(responseBody.trim('"'))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -584,14 +675,14 @@ class SupabaseClient(
     private fun parseProfileJson(json: JSONObject): UserProfile {
         return UserProfile(
             id = json.optString("id"),
-            authUserId = json.optString("auth_user_id"),
             employeeId = json.optString("employee_id"),
             fullName = json.optString("full_name"),
             mobile = json.optString("mobile"),
-            profilePhotoUrl = json.optString("profile_photo_url").takeIf { it.isNotBlank() },
+            profilePhotoPath = json.optString("profile_photo_path").takeIf { it.isNotBlank() },
             appRole = json.optString("app_role", "employee"),
             isActive = json.optBoolean("is_active", true),
             mustChangePassword = json.optBoolean("must_change_password", false),
+            lastSeenAt = json.optString("last_seen_at").takeIf { it.isNotBlank() },
             createdAt = json.optString("created_at"),
             updatedAt = json.optString("updated_at")
         )

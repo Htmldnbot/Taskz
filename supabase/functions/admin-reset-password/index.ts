@@ -1,4 +1,3 @@
-// Follow Deno deploy standards for Supabase Edge Functions
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
@@ -14,7 +13,6 @@ interface ResetPasswordPayload {
 }
 
 serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -31,7 +29,7 @@ serve(async (req: Request) => {
       );
     }
 
-    // 1. Authenticate the caller using the Bearer token
+    // 1. Authenticate caller
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(
@@ -40,7 +38,6 @@ serve(async (req: Request) => {
       );
     }
 
-    // User client with caller's token to verify identity
     const userClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -53,14 +50,13 @@ serve(async (req: Request) => {
       );
     }
 
-    // Admin client with service_role privileges
+    // 2. Verify caller is active admin using service role
     const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-    // 2. Verify caller has admin role and is active
     const { data: callerProfile, error: profileError } = await adminClient
       .from("profiles")
-      .select("app_role, is_active")
-      .eq("auth_user_id", user.id)
+      .select("id, app_role, is_active")
+      .eq("id", user.id)
       .single();
 
     if (profileError || !callerProfile || callerProfile.app_role !== "admin" || !callerProfile.is_active) {
@@ -70,7 +66,7 @@ serve(async (req: Request) => {
       );
     }
 
-    // 3. Parse request payload
+    // 3. Parse input
     const payload: ResetPasswordPayload = await req.json();
     const { requestId, employeeId, newTemporaryPassword } = payload;
 
@@ -88,12 +84,14 @@ serve(async (req: Request) => {
       );
     }
 
-    // 4. Find the target profile
+    // 4. Find target profile: profiles.id = auth.users.id
+    let targetProfileId: string | null = null;
     let targetEmployeeId = employeeId;
-    if (!targetEmployeeId && requestId) {
+
+    if (requestId) {
       const { data: requestRecord, error: reqErr } = await adminClient
         .from("password_reset_requests")
-        .select("employee_id")
+        .select("id, target_user_id, employee_id")
         .eq("id", requestId)
         .single();
 
@@ -103,25 +101,43 @@ serve(async (req: Request) => {
           { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      targetEmployeeId = requestRecord.employee_id;
+      targetProfileId = requestRecord.target_user_id;
+      if (!targetEmployeeId) {
+        targetEmployeeId = requestRecord.employee_id;
+      }
     }
 
-    const { data: targetProfile, error: targetError } = await adminClient
-      .from("profiles")
-      .select("id, auth_user_id, employee_id, full_name")
-      .ilike("employee_id", targetEmployeeId!.trim())
-      .single();
+    let targetProfile: { id: string; employee_id: string; full_name: string } | null = null;
 
-    if (targetError || !targetProfile) {
+    if (targetProfileId) {
+      const { data, error } = await adminClient
+        .from("profiles")
+        .select("id, employee_id, full_name")
+        .eq("id", targetProfileId)
+        .single();
+      if (!error && data) targetProfile = data;
+    }
+
+    if (!targetProfile && targetEmployeeId) {
+      const normalized = targetEmployeeId.trim().toUpperCase();
+      const { data, error } = await adminClient
+        .from("profiles")
+        .select("id, employee_id, full_name")
+        .eq("employee_id", normalized)
+        .single();
+      if (!error && data) targetProfile = data;
+    }
+
+    if (!targetProfile) {
       return new Response(
-        JSON.stringify({ error: `No profile matching Employee ID: ${targetEmployeeId}` }),
+        JSON.stringify({ error: `No profile matching Employee ID: ${targetEmployeeId || targetProfileId}` }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // 5. Update password using Supabase Auth Admin API
+    // 5. Update user password in auth.users (targetProfile.id IS the auth user id!)
     const { error: resetAuthError } = await adminClient.auth.admin.updateUserById(
-      targetProfile.auth_user_id,
+      targetProfile.id,
       { password: newTemporaryPassword }
     );
 
@@ -132,13 +148,13 @@ serve(async (req: Request) => {
       );
     }
 
-    // 6. Mark profile flag must_change_password = true
+    // 6. Set must_change_password = true
     await adminClient
       .from("profiles")
       .update({ must_change_password: true, updated_at: new Date().toISOString() })
       .eq("id", targetProfile.id);
 
-    // 7. If there is a request ID, update its status
+    // 7. Update password_reset_requests
     if (requestId) {
       await adminClient
         .from("password_reset_requests")
@@ -149,7 +165,6 @@ serve(async (req: Request) => {
         })
         .eq("id", requestId);
     } else {
-      // Mark any pending request for this employee as resolved
       await adminClient
         .from("password_reset_requests")
         .update({
@@ -157,9 +172,19 @@ serve(async (req: Request) => {
           resolved_at: new Date().toISOString(),
           resolved_by: user.id,
         })
-        .ilike("employee_id", targetEmployeeId!.trim())
+        .eq("employee_id", targetProfile.employee_id)
         .eq("status", "pending");
     }
+
+    // 8. Record in admin_audit_log
+    await adminClient.from("admin_audit_log").insert({
+      admin_user_id: user.id,
+      target_user_id: targetProfile.id,
+      action: "ADMIN_RESET_PASSWORD",
+      entity_type: "user",
+      entity_id: targetProfile.id,
+      metadata: { employee_id: targetProfile.employee_id }
+    });
 
     return new Response(
       JSON.stringify({

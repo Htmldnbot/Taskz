@@ -326,9 +326,10 @@ private fun UserAdminCard(
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (!user.profilePhotoUrl.isNullOrBlank()) {
+            val photoModel = user.avatarSignedUrl
+            if (!photoModel.isNullOrBlank()) {
                 AsyncImage(
-                    model = user.profilePhotoUrl,
+                    model = photoModel,
                     contentDescription = null,
                     modifier = Modifier
                         .size(44.dp)

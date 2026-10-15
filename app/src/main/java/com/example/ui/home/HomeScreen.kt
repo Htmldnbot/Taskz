@@ -92,9 +92,10 @@ fun HomeScreen(
                     .padding(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!profile?.profilePhotoUrl.isNullOrBlank()) {
+                val photoUrl = profile?.avatarSignedUrl
+                if (!photoUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = profile!!.profilePhotoUrl,
+                        model = photoUrl,
                         contentDescription = "Profile Photo",
                         modifier = Modifier
                             .size(60.dp)

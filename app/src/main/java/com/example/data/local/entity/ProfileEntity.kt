@@ -6,43 +6,46 @@ import com.example.core.model.UserProfile
 
 @Entity(tableName = "cached_profile")
 data class ProfileEntity(
-    @PrimaryKey val authUserId: String,
-    val id: String,
+    @PrimaryKey val id: String, // UUID matching auth.users(id)
     val employeeId: String,
     val fullName: String,
     val mobile: String,
-    val profilePhotoUrl: String?,
+    val profilePhotoPath: String?,
+    val avatarSignedUrl: String?,
     val appRole: String,
     val isActive: Boolean,
     val mustChangePassword: Boolean,
+    val lastSeenAt: String?,
     val createdAt: String,
     val updatedAt: String
 ) {
     fun toDomain(): UserProfile = UserProfile(
         id = id,
-        authUserId = authUserId,
         employeeId = employeeId,
         fullName = fullName,
         mobile = mobile,
-        profilePhotoUrl = profilePhotoUrl,
+        profilePhotoPath = profilePhotoPath,
+        avatarSignedUrl = avatarSignedUrl,
         appRole = appRole,
         isActive = isActive,
         mustChangePassword = mustChangePassword,
+        lastSeenAt = lastSeenAt,
         createdAt = createdAt,
         updatedAt = updatedAt
     )
 
     companion object {
         fun fromDomain(domain: UserProfile): ProfileEntity = ProfileEntity(
-            authUserId = domain.authUserId,
             id = domain.id,
             employeeId = domain.employeeId,
             fullName = domain.fullName,
             mobile = domain.mobile,
-            profilePhotoUrl = domain.profilePhotoUrl,
+            profilePhotoPath = domain.profilePhotoPath,
+            avatarSignedUrl = domain.avatarSignedUrl,
             appRole = domain.appRole,
             isActive = domain.isActive,
             mustChangePassword = domain.mustChangePassword,
+            lastSeenAt = domain.lastSeenAt,
             createdAt = domain.createdAt,
             updatedAt = domain.updatedAt
         )

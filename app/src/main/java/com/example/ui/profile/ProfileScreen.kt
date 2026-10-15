@@ -123,9 +123,9 @@ fun ProfileScreen(
                         .border(3.dp, MaterialTheme.colorScheme.primary, CircleShape),
                     contentScale = ContentScale.Crop
                 )
-            } else if (!profile?.profilePhotoUrl.isNullOrBlank()) {
+            } else if (!profile?.avatarSignedUrl.isNullOrBlank()) {
                 AsyncImage(
-                    model = profile!!.profilePhotoUrl,
+                    model = profile!!.avatarSignedUrl,
                     contentDescription = "Profile Photo",
                     modifier = Modifier
                         .size(100.dp)
