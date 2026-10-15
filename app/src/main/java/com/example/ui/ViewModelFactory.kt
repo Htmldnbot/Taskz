@@ -7,6 +7,7 @@ import com.example.ui.admin.AdminViewModel
 import com.example.ui.auth.AuthViewModel
 import com.example.ui.home.HomeViewModel
 import com.example.ui.profile.ProfileViewModel
+import com.example.ui.splash.SplashViewModel
 
 @Suppress("UNCHECKED_CAST")
 class TaskzViewModelFactory(
@@ -15,6 +16,9 @@ class TaskzViewModelFactory(
 
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
+            modelClass.isAssignableFrom(SplashViewModel::class.java) -> {
+                SplashViewModel(app.authRepository) as T
+            }
             modelClass.isAssignableFrom(AuthViewModel::class.java) -> {
                 AuthViewModel(app.authRepository) as T
             }

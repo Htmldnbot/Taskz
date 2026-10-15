@@ -53,8 +53,18 @@ class AuthRepository(
             }
         }
 
+        if (activeToken.isBlank()) {
+            return Result.failure(
+                IOException(
+                    "Account registered, but no active session could be created. " +
+                    "Ensure Supabase 'Confirm email' is disabled so employees can sign in immediately."
+                )
+            )
+        }
+
+        // 2. Upload optional photo to private 'profile-photos' bucket
         var photoPath: String? = null
-        if (photoBytes != null && photoFilename != null && activeToken.isNotBlank()) {
+        if (photoBytes != null && photoFilename != null) {
             val uploadRes = supabaseClient.uploadProfilePhoto(
                 accessToken = activeToken,
                 userId = session.userId,
@@ -73,30 +83,20 @@ class AuthRepository(
             }
         }
 
-        val remoteProfile = if (activeToken.isNotBlank()) {
-            val fetched = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
-            fetched ?: UserProfile(
-                id = session.userId,
-                employeeId = trimmedEmpId,
-                fullName = fullName.trim(),
-                mobile = mobile.trim(),
-                profilePhotoPath = photoPath,
-                appRole = "employee",
-                isActive = true
-            )
-        } else {
-            UserProfile(
-                id = session.userId,
-                employeeId = trimmedEmpId,
-                fullName = fullName.trim(),
-                mobile = mobile.trim(),
-                profilePhotoPath = photoPath,
-                appRole = "employee",
-                isActive = true
+        // 3. Confirm that the required server profile exists
+        var remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
+        if (remoteProfile == null) {
+            kotlinx.coroutines.delay(500)
+            remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
+        }
+
+        if (remoteProfile == null) {
+            return Result.failure(
+                IOException("Signup verification failed: the server profile record could not be confirmed.")
             )
         }
 
-        val signedUrl = if (activeToken.isNotBlank() && !remoteProfile.profilePhotoPath.isNullOrBlank()) {
+        val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
             supabaseClient.getSignedProfilePhotoUrl(activeToken, remoteProfile.profilePhotoPath).getOrNull()
         } else {
             null
@@ -104,17 +104,15 @@ class AuthRepository(
 
         val finalProfile = remoteProfile.copy(avatarSignedUrl = signedUrl)
 
-        // Cache in Room & DataStore
+        // 4. Cache in Room & secure session storage only after confirmed server profile
         profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
-        if (activeToken.isNotBlank()) {
-            userPrefs.saveSession(
-                accessToken = activeToken,
-                refreshToken = session.refreshToken,
-                userId = session.userId,
-                employeeId = trimmedEmpId
-            )
-            syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
-        }
+        userPrefs.saveSession(
+            accessToken = activeToken,
+            refreshToken = session.refreshToken,
+            userId = session.userId,
+            employeeId = trimmedEmpId
+        )
+        syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
 
         return Result.success(finalProfile)
     }

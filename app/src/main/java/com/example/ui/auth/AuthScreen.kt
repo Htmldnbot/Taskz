@@ -613,7 +613,7 @@ fun ContactAdminModal(
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (resetState is ResetRequestUiState.Success) {
                     Text(
-                        text = "Your request has been sent to the administrator. The admin will verify your details and issue a temporary password.",
+                        text = "Your request has been sent to the administrator.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )

@@ -15,6 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -23,38 +25,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.domain.repository.AuthRepository
-import kotlinx.coroutines.delay
 
 @Composable
 fun SplashScreen(
-    authRepository: AuthRepository,
+    viewModel: SplashViewModel,
     onNavigateToMain: () -> Unit,
     onNavigateToAuth: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val navState by viewModel.navigationState.collectAsState()
+
     LaunchedEffect(Unit) {
-        val startTime = System.currentTimeMillis()
-        val sessionResult = authRepository.restoreSession()
+        viewModel.checkSession()
+    }
 
-        // Ensure splash displays at least 500ms for smooth visual transition
-        val elapsed = System.currentTimeMillis() - startTime
-        if (elapsed < 500) {
-            delay(500 - elapsed)
+    LaunchedEffect(navState) {
+        when (navState) {
+            SplashNavigationState.NavigateToMain -> onNavigateToMain()
+            SplashNavigationState.NavigateToAuth -> onNavigateToAuth()
+            SplashNavigationState.Loading -> Unit
         }
-
-        sessionResult.fold(
-            onSuccess = { profile ->
-                if (profile != null && profile.isActive) {
-                    onNavigateToMain()
-                } else {
-                    onNavigateToAuth()
-                }
-            },
-            onFailure = {
-                onNavigateToAuth()
-            }
-        )
     }
 
     Box(

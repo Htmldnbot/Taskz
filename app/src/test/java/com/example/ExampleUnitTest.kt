@@ -6,40 +6,67 @@ import com.example.core.model.UserProfile
 import com.example.core.network.SupabaseConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExampleUnitTest {
 
     @Test
-    fun testInternalAuthEmailMapping() {
+    fun testDeterministicEmployeeIdAuthMapping() {
+        // Casing and whitespace normalize identically
         val email1 = SupabaseConfig.toInternalAuthEmail("EMP1024")
-        assertEquals("emp1024@taskz.internal", email1)
+        val email2 = SupabaseConfig.toInternalAuthEmail("  emp1024  ")
+        assertEquals(email1, email2)
+        assertTrue(email1.endsWith("@taskz.internal"))
 
-        val email2 = SupabaseConfig.toInternalAuthEmail("  ADMIN_01  ")
-        assertEquals("admin_01@taskz.internal", email2)
+        // Punctuation differences must NEVER collide
+        val emailWithHyphen = SupabaseConfig.toInternalAuthEmail("EMP-1024")
+        val emailWithoutHyphen = SupabaseConfig.toInternalAuthEmail("EMP1024")
+        val emailWithDot = SupabaseConfig.toInternalAuthEmail("EMP.1024")
+        val emailWithUnderscore = SupabaseConfig.toInternalAuthEmail("EMP_1024")
 
-        val email3 = SupabaseConfig.toInternalAuthEmail("emp-999#special")
-        assertEquals("emp-999special@taskz.internal", email3)
+        assertNotEquals(emailWithHyphen, emailWithoutHyphen)
+        assertNotEquals(emailWithHyphen, emailWithDot)
+        assertNotEquals(emailWithHyphen, emailWithUnderscore)
+        assertNotEquals(emailWithDot, emailWithUnderscore)
+
+        // Special characters never collide with alphanumeric equivalents
+        val emailSpecial = SupabaseConfig.toInternalAuthEmail("emp-999#special")
+        val emailPlain = SupabaseConfig.toInternalAuthEmail("emp-999special")
+        assertNotEquals(emailSpecial, emailPlain)
+
+        // RFC 5321 length constraint: local part must be under 64 characters
+        val localPart = emailWithHyphen.substringBefore("@")
+        assertTrue("Local part length must be <= 64 characters", localPart.length <= 64)
     }
 
     @Test
-    fun testUserProfileAdminRole() {
-        val adminUser = UserProfile(
-            employeeId = "ADMIN01",
-            appRole = "admin"
-        )
-        assertTrue(adminUser.isAdmin)
+    fun testUserProfileSingleIdentityModel() {
+        val userUuid = "550e8400-e29b-41d4-a716-446655440000"
+        val photoPath = "$userUuid/avatar_1791997779230.jpg"
 
-        val employeeUser = UserProfile(
+        val profile = UserProfile(
+            id = userUuid,
             employeeId = "EMP1024",
-            appRole = "employee"
+            fullName = "Alex Mercer",
+            mobile = "+15551234567",
+            profilePhotoPath = photoPath,
+            appRole = "employee",
+            isActive = true
         )
-        assertFalse(employeeUser.isAdmin)
+
+        assertEquals(userUuid, profile.id)
+        assertEquals(photoPath, profile.profilePhotoPath)
+        assertFalse(profile.isAdmin)
+        assertTrue(profile.isActive)
+
+        val adminProfile = profile.copy(appRole = "admin")
+        assertTrue(adminProfile.isAdmin)
     }
 
     @Test
-    fun testSyncMetadataState() {
+    fun testSyncMetadataTransitions() {
         val meta = SyncMetadata(
             lastServerFetch = 1700000000000L,
             lastSuccessfulSync = 1700000000000L,
@@ -48,5 +75,13 @@ class ExampleUnitTest {
         )
         assertEquals(SyncStatus.SYNCED, meta.status)
         assertEquals(0, meta.pendingSyncCount)
+
+        // Verify status enum values match strict lifecycle
+        val statuses = SyncStatus.values().map { it.name }
+        assertTrue(statuses.contains("PENDING"))
+        assertTrue(statuses.contains("SYNCING"))
+        assertTrue(statuses.contains("SYNCED"))
+        assertTrue(statuses.contains("OFFLINE"))
+        assertTrue(statuses.contains("ERROR"))
     }
 }

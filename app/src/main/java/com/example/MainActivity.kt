@@ -48,8 +48,9 @@ fun TaskzAppNavigation() {
         startDestination = "splash"
     ) {
         composable("splash") {
+            val splashViewModel: com.example.ui.splash.SplashViewModel = viewModel(factory = viewModelFactory)
             SplashScreen(
-                authRepository = TaskzApplication.instance.authRepository,
+                viewModel = splashViewModel,
                 onNavigateToMain = {
                     navController.navigate("main") {
                         popUpTo("splash") { inclusive = true }

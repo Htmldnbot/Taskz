@@ -491,28 +491,27 @@ class SupabaseClient(
     }
 
     /**
-     * Submit a password reset request.
+     * Submit a password reset request via controlled RPC function.
+     * Prevents account enumeration and does not allow direct table manipulation.
      */
     suspend fun submitPasswordResetRequest(
         employeeId: String,
         mobile: String,
         message: String?
-    ): Result<PasswordResetRequest> = withContext(Dispatchers.IO) {
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
             val body = JSONObject().apply {
-                put("employee_id", employeeId.trim())
-                put("mobile", mobile.trim())
+                put("p_employee_id", employeeId.trim())
+                put("p_mobile", mobile.trim())
                 if (!message.isNullOrBlank()) {
-                    put("message", message.trim())
+                    put("p_message", message.trim())
                 }
-                put("status", "pending")
             }
 
             val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/password_reset_requests")
+                .url("${baseUrl()}/rest/v1/rpc/submit_password_reset_request")
                 .addHeader("apikey", anonKey())
-                .addHeader("Prefer", "return=representation")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -523,9 +522,7 @@ class SupabaseClient(
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Request submission failed")))
             }
 
-            val jsonArray = JSONArray(responseBody)
-            val created = jsonArray.getJSONObject(0)
-            Result.success(parseResetRequestJson(created))
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
