@@ -79,10 +79,24 @@ class SupabaseClient(
 
             if (!response.isSuccessful) {
                 val errorMsg = parseErrorMessage(responseBody, "Sign up failed (${response.code})")
+                if (response.code == 429 || errorMsg.contains("rate limit", ignoreCase = true) || errorMsg.contains("over_email_send_rate_limit", ignoreCase = true)) {
+                    return@withContext Result.failure(
+                        IOException(
+                            "SUPABASE_EMAIL_RATE_LIMIT: Supabase email rate limit exceeded. " +
+                            "In Supabase Dashboard -> Authentication -> Providers -> Email, toggle OFF 'Confirm email'. " +
+                            "Since Taskz uses Employee ID login, email confirmation is not needed."
+                        )
+                    )
+                }
                 if (errorMsg.contains("already registered", ignoreCase = true) ||
                     errorMsg.contains("User already exists", ignoreCase = true)
                 ) {
                     return@withContext Result.failure(IOException("Employee ID '$employeeId' is already registered."))
+                }
+                if (errorMsg.contains("Database error saving new user", ignoreCase = true)) {
+                    return@withContext Result.failure(
+                        IOException("Database validation rejected registration. Check that Full Name has at least 2 characters, Employee ID is alphanumeric, and Mobile has country code (e.g. +91 9876543210).")
+                    )
                 }
                 return@withContext Result.failure(IOException(errorMsg))
             }

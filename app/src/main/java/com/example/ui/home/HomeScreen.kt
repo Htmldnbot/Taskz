@@ -1,6 +1,5 @@
 package com.example.ui.home
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,11 +21,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.Badge
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.EventNote
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Today
+import androidx.compose.material.icons.filled.WorkOutline
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,14 +50,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.ui.common.AccountInactiveDialog
 import com.example.ui.common.SyncStatusCard
-import com.example.ui.theme.TaskzCyanBright
-import com.example.ui.theme.TaskzSlate800
-import com.example.ui.theme.TaskzSuccess
 
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
     onNavigateToTasks: () -> Unit,
+    onNavigateToGroups: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToAdmin: () -> Unit,
     onSignedOut: () -> Unit,
@@ -63,8 +63,13 @@ fun HomeScreen(
 ) {
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
     val syncMetadata by viewModel.syncMetadataFlow.collectAsStateWithLifecycle()
+    val dashboardStats by viewModel.dashboardStats.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val isAccountInactive by viewModel.isAccountInactive.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadDashboardStats()
+    }
 
     if (isAccountInactive) {
         AccountInactiveDialog(
@@ -182,11 +187,70 @@ fun HomeScreen(
         // Synchronization Status Card
         SyncStatusCard(
             syncMetadata = syncMetadata,
-            onRefreshClick = { viewModel.triggerManualRefresh() },
+            onRefreshClick = {
+                viewModel.triggerManualRefresh()
+            },
             isRefreshing = isRefreshing
         )
 
         Spacer(modifier = Modifier.height(20.dp))
+
+        // Real Dashboard Summary Statistics
+        Text(
+            text = "Operational Overview",
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            StatCard(
+                title = "My Tasks Today",
+                value = dashboardStats.myTasksToday.toString(),
+                icon = Icons.Default.Today,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToTasks
+            )
+            StatCard(
+                title = "Upcoming Tasks",
+                value = dashboardStats.upcomingTasks.toString(),
+                icon = Icons.Default.EventNote,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToTasks
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            StatCard(
+                title = "Pending Requests",
+                value = dashboardStats.pendingRequests.toString(),
+                icon = Icons.Default.HourglassTop,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToTasks
+            )
+            StatCard(
+                title = "Vacancies",
+                value = dashboardStats.vacancies.toString(),
+                icon = Icons.Default.WorkOutline,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToTasks
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = "Workforce Modules",
@@ -196,14 +260,24 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Quick Navigation Tiles
         ModuleTile(
             title = "Task Management",
-            subtitle = "Phase 2 foundation ready for assignments and join requests",
+            subtitle = "View your assigned duties, discover available tasks, or manage created tasks",
             icon = Icons.Default.Assignment,
-            tag = "Phase 2 Preview",
+            tag = "Active",
             onClick = onNavigateToTasks,
             testTag = "home_module_tasks"
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        ModuleTile(
+            title = "Groups & Events",
+            subtitle = "Organize workforce by event, shifts, and departments",
+            icon = Icons.Default.Groups,
+            tag = "Events",
+            onClick = onNavigateToGroups,
+            testTag = "home_module_groups"
         )
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -212,7 +286,7 @@ fun HomeScreen(
             title = "Employee Profile",
             subtitle = "View credentials, photo, and update contact information",
             icon = Icons.Default.Person,
-            tag = "Active",
+            tag = "Profile",
             onClick = onNavigateToProfile,
             testTag = "home_module_profile"
         )
@@ -221,7 +295,7 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(10.dp))
             ModuleTile(
                 title = "Administrative Console",
-                subtitle = "Manage employees, account statuses & temporary password resets",
+                subtitle = "Manage employees, temporary password resets & configure work roles",
                 icon = Icons.Default.AdminPanelSettings,
                 tag = "Admin Access",
                 isHighlighted = true,
@@ -229,39 +303,59 @@ fun HomeScreen(
                 testTag = "home_module_admin"
             )
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // System Architecture Info Card
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+@Composable
+private fun StatCard(
+    title: String,
+    value: String,
+    icon: ImageVector,
+    color: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.Top
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "Phase 1 Architecture Active",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Native Android stack initialized with Room local cache, DataStore preferences, deterministic Employee ID Supabase Auth, and offline-first queue foundation.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(color.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = color,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = color
+                    )
+                )
             }
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

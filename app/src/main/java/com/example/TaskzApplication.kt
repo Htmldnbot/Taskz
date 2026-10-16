@@ -10,6 +10,7 @@ import com.example.domain.repository.AdminRepository
 import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ProfileRepository
 import com.example.domain.repository.SyncRepository
+import com.example.domain.repository.TaskRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -39,6 +40,9 @@ class TaskzApplication : Application() {
         private set
 
     lateinit var adminRepository: AdminRepository
+        private set
+
+    lateinit var taskRepository: TaskRepository
         private set
 
     private val applicationScope = CoroutineScope(Dispatchers.IO)
@@ -77,6 +81,16 @@ class TaskzApplication : Application() {
         )
 
         adminRepository = AdminRepository(
+            supabaseClient = supabaseClient,
+            userPrefs = userPreferences
+        )
+
+        taskRepository = com.example.domain.repository.TaskRepository(
+            taskDao = database.taskDao(),
+            taskGroupDao = database.taskGroupDao(),
+            shiftDao = database.shiftDao(),
+            workRoleDao = database.workRoleDao(),
+            profileDao = database.profileDao(),
             supabaseClient = supabaseClient,
             userPrefs = userPreferences
         )

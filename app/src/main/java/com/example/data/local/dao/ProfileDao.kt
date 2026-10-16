@@ -18,6 +18,15 @@ interface ProfileDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProfile(profile: ProfileEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertProfiles(profiles: List<ProfileEntity>)
+
+    @Query("SELECT * FROM cached_profile WHERE isActive = 1 ORDER BY fullName ASC")
+    fun getAllProfilesFlow(): Flow<List<ProfileEntity>>
+
+    @Query("SELECT * FROM cached_profile WHERE fullName LIKE '%' || :query || '%' OR employeeId LIKE '%' || :query || '%'")
+    suspend fun searchProfiles(query: String): List<ProfileEntity>
+
     @Query("DELETE FROM cached_profile")
     suspend fun clearProfile()
 }

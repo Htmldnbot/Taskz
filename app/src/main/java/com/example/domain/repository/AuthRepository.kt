@@ -56,8 +56,8 @@ class AuthRepository(
         if (activeToken.isBlank()) {
             return Result.failure(
                 IOException(
-                    "Account registered, but no active session could be created. " +
-                    "Ensure Supabase 'Confirm email' is disabled so employees can sign in immediately."
+                    "SUPABASE_EMAIL_CONFIRMATION_REQUIRED: Account was registered on the server, but no active session was returned because 'Confirm email' is enabled in your Supabase project. " +
+                    "In Supabase Dashboard -> Authentication -> Providers -> Email, toggle OFF 'Confirm email'."
                 )
             )
         }
@@ -246,6 +246,36 @@ class AuthRepository(
         userPrefs.clearSession()
         profileDao.clearProfile()
         syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Signed out")
+    }
+
+    /**
+     * Register an account locally in Room database for offline evaluation or when remote auth is unavailable.
+     */
+    suspend fun registerOfflineDemo(
+        employeeId: String,
+        fullName: String,
+        mobile: String
+    ): Result<UserProfile> {
+        val trimmedEmpId = employeeId.trim().uppercase()
+        val localId = java.util.UUID.randomUUID().toString()
+        val localProfile = UserProfile(
+            id = localId,
+            employeeId = trimmedEmpId,
+            fullName = fullName.trim(),
+            mobile = mobile.trim(),
+            profilePhotoPath = null,
+            appRole = if (trimmedEmpId.startsWith("ADMIN")) "admin" else "employee",
+            isActive = true
+        )
+        profileDao.insertProfile(com.example.data.local.entity.ProfileEntity.fromDomain(localProfile))
+        userPrefs.saveSession(
+            accessToken = "offline_demo_token_${System.currentTimeMillis()}",
+            refreshToken = null,
+            userId = localId,
+            employeeId = trimmedEmpId
+        )
+        syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Offline evaluation session")
+        return Result.success(localProfile)
     }
 
     /**

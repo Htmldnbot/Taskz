@@ -66,6 +66,6 @@ object SupabaseConfig {
             .joinToString("") { "%02x".format(it) }
             .take(32)
         val prefix = if (readable.isNotEmpty()) "emp_${readable}_" else "emp_"
-        return "$prefix$hash@taskz.internal"
+        return "$prefix$hash@taskzapp.com"
     }
 }

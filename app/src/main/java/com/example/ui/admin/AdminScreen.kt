@@ -73,6 +73,7 @@ import com.example.ui.theme.TaskzWarning
 @Composable
 fun AdminScreen(
     viewModel: AdminViewModel,
+    workRolesViewModel: WorkRolesViewModel,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -220,6 +221,12 @@ fun AdminScreen(
                 },
                 modifier = Modifier.testTag("admin_tab_requests")
             )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = { selectedTab = 2 },
+                text = { Text("Work Roles", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("admin_tab_work_roles")
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -267,7 +274,7 @@ fun AdminScreen(
                     }
                 }
             }
-        } else {
+        } else if (selectedTab == 1) {
             // Password Reset Requests Tab
             if (isLoadingRequests) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -291,6 +298,9 @@ fun AdminScreen(
                     }
                 }
             }
+        } else {
+            // Work Roles Tab
+            WorkRolesScreen(viewModel = workRolesViewModel)
         }
     }
 

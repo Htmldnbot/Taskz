@@ -18,7 +18,7 @@ class ExampleUnitTest {
         val email1 = SupabaseConfig.toInternalAuthEmail("EMP1024")
         val email2 = SupabaseConfig.toInternalAuthEmail("  emp1024  ")
         assertEquals(email1, email2)
-        assertTrue(email1.endsWith("@taskz.internal"))
+        assertTrue(email1.endsWith("@taskzapp.com"))
 
         // Punctuation differences must NEVER collide
         val emailWithHyphen = SupabaseConfig.toInternalAuthEmail("EMP-1024")
@@ -83,5 +83,20 @@ class ExampleUnitTest {
         assertTrue(statuses.contains("SYNCED"))
         assertTrue(statuses.contains("OFFLINE"))
         assertTrue(statuses.contains("ERROR"))
+    }
+
+    @Test
+    fun testMobileNormalization() {
+        val indian10 = com.example.ui.auth.AuthViewModel.normalizeMobile("9876543210")
+        assertEquals("+919876543210", indian10)
+        assertTrue(indian10.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
+
+        val international = com.example.ui.auth.AuthViewModel.normalizeMobile("+15551234567")
+        assertEquals("+15551234567", international)
+        assertTrue(international.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
+
+        val us10 = com.example.ui.auth.AuthViewModel.normalizeMobile("5551234567")
+        assertEquals("+15551234567", us10)
+        assertTrue(us10.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
     }
 }

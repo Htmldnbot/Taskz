@@ -2,11 +2,13 @@ package com.example.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.core.model.DashboardStats
 import com.example.core.model.SyncMetadata
 import com.example.core.model.UserProfile
 import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ProfileRepository
 import com.example.domain.repository.SyncRepository
+import com.example.domain.repository.TaskRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +19,8 @@ import kotlinx.coroutines.launch
 class HomeViewModel(
     private val authRepository: AuthRepository,
     private val profileRepository: ProfileRepository,
-    private val syncRepository: SyncRepository
+    private val syncRepository: SyncRepository,
+    private val taskRepository: TaskRepository
 ) : ViewModel() {
 
     val profileFlow: StateFlow<UserProfile?> = profileRepository.profileFlow
@@ -34,6 +37,9 @@ class HomeViewModel(
             initialValue = SyncMetadata()
         )
 
+    private val _dashboardStats = MutableStateFlow(DashboardStats())
+    val dashboardStats: StateFlow<DashboardStats> = _dashboardStats.asStateFlow()
+
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
@@ -46,6 +52,13 @@ class HomeViewModel(
     init {
         // Initial silent validation on entering home
         triggerManualRefresh()
+        loadDashboardStats()
+    }
+
+    fun loadDashboardStats() {
+        viewModelScope.launch {
+            _dashboardStats.value = taskRepository.fetchDashboardStats()
+        }
     }
 
     fun triggerManualRefresh() {
@@ -58,6 +71,7 @@ class HomeViewModel(
             result.fold(
                 onSuccess = {
                     _isRefreshing.value = false
+                    loadDashboardStats()
                 },
                 onFailure = { error ->
                     _isRefreshing.value = false

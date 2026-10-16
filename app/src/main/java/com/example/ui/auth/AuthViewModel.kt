@@ -96,9 +96,10 @@ class AuthViewModel(
             _signUpState.value = AuthUiState.Error("Please enter your full name.")
             return
         }
-        val cleanMobile = trimmedMobile.replace(Regex("[^0-9]"), "")
-        if (cleanMobile.length < 10) {
-            _signUpState.value = AuthUiState.Error("Please enter a valid 10-digit mobile number.")
+        val normalizedMobile = normalizeMobile(trimmedMobile)
+        val mobileDigits = normalizedMobile.filter { it.isDigit() }
+        if (mobileDigits.length < 8 || mobileDigits.length > 15 || !normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
+            _signUpState.value = AuthUiState.Error("Please enter a valid mobile number (e.g., +91 9876543210 or 9876543210).")
             return
         }
         if (password.length < 6) {
@@ -125,7 +126,7 @@ class AuthViewModel(
                 employeeId = trimmedEmpId,
                 password = password,
                 fullName = trimmedName,
-                mobile = cleanMobile,
+                mobile = normalizedMobile,
                 photoBytes = photoBytes,
                 photoFilename = photoFilename
             )
@@ -138,6 +139,63 @@ class AuthViewModel(
                     _signUpState.value = AuthUiState.Error(error.message ?: "Sign up failed. Please try again.")
                 }
             )
+        }
+    }
+
+    /**
+     * Continue in Offline / Local Demo mode when backend auth is unavailable or rate limited.
+     */
+    fun registerOffline(
+        employeeId: String,
+        fullName: String,
+        mobile: String
+    ) {
+        val trimmedEmpId = employeeId.trim()
+        val trimmedName = fullName.trim()
+        val normalizedMobile = normalizeMobile(mobile.trim())
+
+        if (trimmedEmpId.length < 3) {
+            _signUpState.value = AuthUiState.Error("Employee ID must be at least 3 characters.")
+            return
+        }
+        if (trimmedName.isBlank()) {
+            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+            return
+        }
+
+        viewModelScope.launch {
+            _signUpState.value = AuthUiState.Loading
+            val result = authRepository.registerOfflineDemo(
+                employeeId = trimmedEmpId,
+                fullName = trimmedName,
+                mobile = normalizedMobile
+            )
+            result.fold(
+                onSuccess = { profile ->
+                    _signUpState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _signUpState.value = AuthUiState.Error(error.message ?: "Offline registration failed.")
+                }
+            )
+        }
+    }
+
+    companion object {
+        fun normalizeMobile(input: String): String {
+            val trimmed = input.trim()
+            val cleaned = trimmed.replace(Regex("[^0-9+]"), "")
+            if (cleaned.startsWith("+")) {
+                return cleaned
+            }
+            val digits = cleaned.replace("+", "")
+            return when {
+                digits.length == 10 && digits[0] in '6'..'9' -> "+91$digits"
+                digits.length == 10 -> "+1$digits"
+                digits.length == 11 && digits.startsWith("1") -> "+$digits"
+                digits.length == 12 && digits.startsWith("91") -> "+$digits"
+                else -> "+$digits"
+            }
         }
     }
 

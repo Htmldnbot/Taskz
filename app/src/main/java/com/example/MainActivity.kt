@@ -14,12 +14,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.ui.TaskzViewModelFactory
 import com.example.ui.admin.AdminViewModel
+import com.example.ui.admin.WorkRolesViewModel
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.AuthViewModel
+import com.example.ui.groups.GroupsViewModel
 import com.example.ui.home.HomeViewModel
 import com.example.ui.main.MainShell
 import com.example.ui.profile.ProfileViewModel
+import com.example.ui.shifts.ShiftsViewModel
 import com.example.ui.splash.SplashScreen
+import com.example.ui.tasks.TasksViewModel
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
@@ -80,11 +84,19 @@ fun TaskzAppNavigation() {
             val homeViewModel: HomeViewModel = viewModel(factory = viewModelFactory)
             val profileViewModel: ProfileViewModel = viewModel(factory = viewModelFactory)
             val adminViewModel: AdminViewModel = viewModel(factory = viewModelFactory)
+            val tasksViewModel: TasksViewModel = viewModel(factory = viewModelFactory)
+            val groupsViewModel: GroupsViewModel = viewModel(factory = viewModelFactory)
+            val shiftsViewModel: ShiftsViewModel = viewModel(factory = viewModelFactory)
+            val workRolesViewModel: WorkRolesViewModel = viewModel(factory = viewModelFactory)
 
             MainShell(
                 homeViewModel = homeViewModel,
                 profileViewModel = profileViewModel,
                 adminViewModel = adminViewModel,
+                tasksViewModel = tasksViewModel,
+                groupsViewModel = groupsViewModel,
+                shiftsViewModel = shiftsViewModel,
+                workRolesViewModel = workRolesViewModel,
                 onLogoutSuccess = {
                     navController.navigate("auth") {
                         popUpTo("main") { inclusive = true }

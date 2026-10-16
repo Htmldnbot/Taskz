@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material.icons.filled.Warning
+import com.example.core.network.SupabaseConfig
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -56,8 +58,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,11 +98,14 @@ fun AuthScreen(
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showContactAdminDialog by rememberSaveable { mutableStateOf(false) }
     var showConfigDialog by rememberSaveable { mutableStateOf(false) }
     var showInactiveDialog by rememberSaveable { mutableStateOf(false) }
+    var showSupabaseGuideDialog by rememberSaveable { mutableStateOf(false) }
+    var offlinePendingData by remember { mutableStateOf<Triple<String, String, String>?>(null) }
 
     val loginState by viewModel.loginState.collectAsStateWithLifecycle()
     val signUpState by viewModel.signUpState.collectAsStateWithLifecycle()
@@ -250,8 +257,14 @@ fun AuthScreen(
                     uiState = signUpState,
                     onSignUp = { empId, name, mob, pwd, confirmPwd, uri ->
                         focusManager.clearFocus()
+                        offlinePendingData = Triple(empId, name, mob)
                         viewModel.signUp(context, empId, name, mob, pwd, confirmPwd, uri)
-                    }
+                    },
+                    onSignUpOffline = { empId, name, mob ->
+                        focusManager.clearFocus()
+                        viewModel.registerOffline(empId, name, mob)
+                    },
+                    onOpenSupabaseGuide = { showSupabaseGuideDialog = true }
                 )
             }
 
@@ -297,13 +310,31 @@ fun AuthScreen(
     if (showConfigDialog) {
         ConfigureSupabaseDialog(
             onDismiss = { showConfigDialog = false },
-            onSave = { _, _ -> }
+            onSave = { savedUrl, savedKey ->
+                coroutineScope.launch {
+                    runCatching {
+                        com.example.TaskzApplication.instance.userPreferences.saveCustomConfig(savedUrl, savedKey)
+                    }
+                }
+            }
         )
     }
 
     if (showInactiveDialog) {
         AccountInactiveDialog(
             onDismiss = { showInactiveDialog = false }
+        )
+    }
+
+    if (showSupabaseGuideDialog) {
+        SupabaseEmailGuideDialog(
+            onDismiss = { showSupabaseGuideDialog = false },
+            onContinueOffline = {
+                val pending = offlinePendingData
+                if (pending != null) {
+                    viewModel.registerOffline(pending.first, pending.second, pending.third)
+                }
+            }
         )
     }
 }
@@ -384,7 +415,9 @@ private fun LoginForm(
 @Composable
 private fun SignUpForm(
     uiState: AuthUiState,
-    onSignUp: (String, String, String, String, String, Uri?) -> Unit
+    onSignUp: (String, String, String, String, String, Uri?) -> Unit,
+    onSignUpOffline: (String, String, String) -> Unit,
+    onOpenSupabaseGuide: () -> Unit
 ) {
     val focusManager = LocalFocusManager.current
     var employeeId by rememberSaveable { mutableStateOf("") }
@@ -562,19 +595,71 @@ private fun SignUpForm(
         )
 
         AnimatedVisibility(visible = uiState is AuthUiState.Error) {
+            val errorMsg = (uiState as? AuthUiState.Error)?.message.orEmpty()
+            val isEmailRateLimit = errorMsg.contains("rate limit", ignoreCase = true) ||
+                    errorMsg.contains("SUPABASE_EMAIL") ||
+                    errorMsg.contains("Confirm email", ignoreCase = true)
+
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isEmailRateLimit) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.errorContainer
+                ),
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp)
             ) {
-                Text(
-                    text = (uiState as? AuthUiState.Error)?.message.orEmpty(),
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp)
-                )
+                Column(modifier = Modifier.padding(14.dp)) {
+                    if (isEmailRateLimit) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Supabase Email Rate Limit",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Supabase throttles emails on free tier (~3/hour) because 'Confirm email' is enabled. Since Taskz employees authenticate with Employee IDs, email confirmation is not needed.",
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TextButton(
+                                onClick = onOpenSupabaseGuide,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("How to Fix", fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = {
+                                    onSignUpOffline(employeeId, fullName, mobile)
+                                },
+                                modifier = Modifier.weight(1.3f)
+                            ) {
+                                Text("Continue Offline", maxLines = 1)
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = errorMsg,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
             }
         }
 
@@ -589,6 +674,76 @@ private fun SignUpForm(
             testTag = "signup_submit_button"
         )
     }
+}
+
+@Composable
+fun SupabaseEmailGuideDialog(
+    onDismiss: () -> Unit,
+    onContinueOffline: () -> Unit
+) {
+    val projectUrl = SupabaseConfig.getActiveUrl()
+    val projectRef = projectUrl.removePrefix("https://").substringBefore(".supabase.co")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Disable 'Confirm Email' in Supabase",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Supabase built-in email service has a strict limit of 3 emails/hour. Because Taskz uses Employee ID login, verification emails are not needed and will trigger this limit.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("1. Open Supabase Dashboard", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                        if (projectRef.isNotBlank() && projectRef != "your-project") {
+                            Text("Project: $projectRef", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("2. Go to Authentication ➔ Providers", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("3. Click on Email", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("4. Toggle OFF 'Confirm email' and save", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("5. Return to Taskz and tap Create Account!", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "You can also enter Taskz immediately using local Room persistence:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onContinueOffline()
+                    onDismiss()
+                }
+            ) {
+                Text("Continue in Offline Mode")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable
