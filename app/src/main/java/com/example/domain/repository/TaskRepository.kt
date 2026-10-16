@@ -35,6 +35,23 @@ import org.json.JSONObject
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
+import android.content.Context
+import com.example.TaskzApplication
+import com.example.alarm.TaskAlarmScheduler
+import com.example.core.model.AlarmType
+import com.example.core.model.LanProgressItem
+import com.example.core.model.ResponseType
+import com.example.core.model.TaskAcknowledgementRecord
+import com.example.core.model.TaskImportance
+import com.example.core.model.TaskResponseItem
+import com.example.core.model.TaskType
+import com.example.core.model.TimeUrgency
+import com.example.data.local.TaskzDatabase
+import com.example.data.local.dao.ScheduledAlarmDao
+import com.example.data.local.dao.TaskResponseDao
+import com.example.data.local.entity.ScheduledAlarmRecordEntity
+import com.example.data.local.entity.TaskAcknowledgementEntity
+import com.example.data.local.entity.TaskResponseEntity
 import java.util.Locale
 import java.util.UUID
 
@@ -44,11 +61,15 @@ class TaskRepository(
     private val shiftDao: ShiftDao,
     private val workRoleDao: WorkRoleDao,
     private val profileDao: ProfileDao,
+    private val taskResponseDao: TaskResponseDao = TaskzDatabase.getInstance(TaskzApplication.instance).taskResponseDao(),
+    private val scheduledAlarmDao: ScheduledAlarmDao = TaskzDatabase.getInstance(TaskzApplication.instance).scheduledAlarmDao(),
     private val supabaseClient: SupabaseClient,
-    private val userPrefs: UserPreferencesDataStore
+    private val userPrefs: UserPreferencesDataStore,
+    private val context: Context = TaskzApplication.instance
 ) {
     private val tag = "TaskRepository"
     private val isoDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+    private val taskAlarmScheduler = TaskAlarmScheduler(context)
 
     // In-memory data store for rich relations (requirements, participants, join requests, activity)
     // Synchronized across the app lifecycle and persisted in-memory / backed by Supabase
@@ -713,7 +734,20 @@ class TaskRepository(
         notifyCreatorOnJoin: Boolean = true,
         requiresCompletionConfirmation: Boolean = false,
         maxParticipants: Int? = null,
-        requirements: List<Pair<String, Int>> = emptyList() // (roleId, count)
+        requirements: List<Pair<String, Int>> = emptyList(), // (roleId, count)
+        taskType: TaskType = TaskType.SIMPLE,
+        importance: TaskImportance = TaskImportance.NORMAL,
+        urgencyType: TimeUrgency = TimeUrgency.BEFORE_DEADLINE,
+        executionTime: String? = null,
+        targetPercentage: Int? = 100,
+        repeatIntervalMinutes: Int? = null,
+        alarmType: AlarmType = AlarmType.SOUND_ALERT,
+        advanceRemindersMinutes: List<Int> = listOf(0, 5),
+        remindUntilCompleted: Boolean = false,
+        overdueReminderIntervalMinutes: Int? = 5,
+        maxOverdueReminders: Int? = 3,
+        responseType: ResponseType = ResponseType.COMPLETED_NOT_COMPLETED,
+        lanTargetList: List<String> = emptyList()
     ): Result<TaskItem> = withContext(Dispatchers.IO) {
         try {
             val group = getGroupById(groupId) ?: return@withContext Result.failure(IOException("Group not found"))
@@ -744,10 +778,30 @@ class TaskRepository(
                 createdBy = userId,
                 creatorName = userName,
                 createdAt = nowIso(),
-                updatedAt = nowIso()
+                updatedAt = nowIso(),
+                taskType = taskType,
+                importance = importance,
+                urgencyType = urgencyType,
+                executionTime = executionTime,
+                targetPercentage = targetPercentage,
+                repeatIntervalMinutes = repeatIntervalMinutes,
+                alarmType = alarmType,
+                advanceRemindersMinutes = advanceRemindersMinutes,
+                remindUntilCompleted = remindUntilCompleted,
+                overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
+                maxOverdueReminders = maxOverdueReminders,
+                responseType = responseType,
+                lanTargetList = lanTargetList
             )
 
             taskDao.insertTask(TaskEntity.fromDomain(task))
+
+            // Schedule device alarms via AlarmManager
+            try {
+                taskAlarmScheduler.scheduleAlarmsForTask(task)
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to schedule alarm: ${e.message}")
+            }
 
             // Store visible users if visibility is restricted
             if (visibility == "restricted") {
@@ -778,7 +832,7 @@ class TaskRepository(
                     taskId = taskId,
                     actorName = userName,
                     eventType = "TASK_CREATED",
-                    message = "Task created by $userName",
+                    message = "Task created by $userName ($taskType, $importance priority)",
                     createdAt = nowIso()
                 )
             )
@@ -814,6 +868,188 @@ class TaskRepository(
             )
             taskDao.updateTask(TaskEntity.fromDomain(updated))
             Result.success(updated)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ============================================================
+    // PHASE 3: TIME-CRITICAL RESPONSES & ACKNOWLEDGEMENTS
+    // ============================================================
+
+    suspend fun submitTaskResponse(
+        taskId: String,
+        responseType: ResponseType,
+        responseValue: String? = null,
+        percentage: Int? = null,
+        numeric1: Double? = null,
+        numeric2: Double? = null,
+        textValue: String? = null,
+        lanNumber: String? = null
+    ): Result<TaskResponseItem> = withContext(Dispatchers.IO) {
+        try {
+            val user = profileDao.getCachedProfile()
+            val empId = user?.employeeId ?: "EMP"
+            val userId = user?.id ?: UUID.randomUUID().toString()
+            val userName = user?.fullName ?: empId
+            val nowIso = nowIso()
+            val responseId = UUID.randomUUID().toString()
+
+            val item = TaskResponseItem(
+                id = responseId,
+                taskId = taskId,
+                userId = userId,
+                employeeId = empId,
+                employeeName = userName,
+                lanNumber = lanNumber,
+                responseType = responseType,
+                responseValue = responseValue,
+                percentageValue = percentage,
+                numericValue1 = numeric1,
+                numericValue2 = numeric2,
+                textValue = textValue,
+                submittedAt = nowIso,
+                isPendingSync = true
+            )
+
+            taskResponseDao.insertResponse(TaskResponseEntity.fromDomain(item, syncStatus = "PENDING_SYNC"))
+
+            // If percentage update, update progress on task
+            if (percentage != null) {
+                taskDao.updateTaskProgress(taskId, percentage, nowIso)
+                val task = taskDao.getTaskById(taskId)?.toDomain()
+                if (task != null && percentage >= (task.targetPercentage ?: 100)) {
+                    taskDao.updateTaskStatus(taskId, "completed")
+                    taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                }
+            }
+
+            // Sync with server if online
+            val session = userPrefs.getUserSession()
+            if (!session.accessToken.isNullOrBlank()) {
+                val res = supabaseClient.submitTaskResponse(
+                    accessToken = session.accessToken,
+                    taskId = taskId,
+                    responseType = responseType.name,
+                    responseValue = responseValue,
+                    percentage = percentage,
+                    numeric1 = numeric1,
+                    numeric2 = numeric2,
+                    text = textValue,
+                    lanNumber = lanNumber,
+                    idempotencyKey = responseId
+                )
+                if (res.isSuccess) {
+                    taskResponseDao.markResponseSynced(responseId)
+                }
+            }
+
+            // Activity log
+            activityLogStore.getOrPut(taskId) { mutableListOf() }.add(
+                TaskActivityLog(
+                    id = System.currentTimeMillis(),
+                    taskId = taskId,
+                    actorName = userName,
+                    eventType = "RESPONSE_SUBMITTED",
+                    message = "$userName submitted response: ${responseValue ?: percentage?.let { "$it%" } ?: textValue ?: "Confirmed"}",
+                    createdAt = nowIso
+                )
+            )
+
+            Result.success(item)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun acknowledgeTaskAlarm(taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val user = profileDao.getCachedProfile()
+            val empId = user?.employeeId ?: "EMP"
+            val userId = user?.id ?: UUID.randomUUID().toString()
+            val userName = user?.fullName ?: empId
+            val eventId = UUID.randomUUID().toString()
+            val nowIso = nowIso()
+
+            val ack = TaskAcknowledgementEntity(
+                id = UUID.randomUUID().toString(),
+                taskId = taskId,
+                userId = userId,
+                employeeId = empId,
+                eventId = eventId,
+                deviceTimestamp = System.currentTimeMillis(),
+                acknowledgedAt = nowIso,
+                syncStatus = "PENDING_SYNC"
+            )
+            taskResponseDao.insertAcknowledgement(ack)
+            taskDao.markTaskAcknowledged(taskId, true, nowIso)
+
+            // Attempt remote acknowledgement
+            val session = userPrefs.getUserSession()
+            if (!session.accessToken.isNullOrBlank()) {
+                val res = supabaseClient.acknowledgeTaskAlarm(session.accessToken, taskId, eventId)
+                if (res.isSuccess) {
+                    taskResponseDao.markAcknowledgementSynced(ack.id)
+                }
+            }
+
+            activityLogStore.getOrPut(taskId) { mutableListOf() }.add(
+                TaskActivityLog(
+                    id = System.currentTimeMillis(),
+                    taskId = taskId,
+                    actorName = userName,
+                    eventType = "ALARM_ACKNOWLEDGED",
+                    message = "$userName acknowledged task alarm",
+                    createdAt = nowIso
+                )
+            )
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun getResponsesForTaskFlow(taskId: String): Flow<List<TaskResponseItem>> {
+        return taskResponseDao.getResponsesForTaskFlow(taskId).map { list ->
+            list.map { it.toDomain() }
+        }
+    }
+
+    fun getLanProgressFlow(taskId: String, lanList: List<String>): Flow<List<LanProgressItem>> {
+        return taskResponseDao.getResponsesForTaskFlow(taskId).map { responses ->
+            val latestByLan = responses.filter { !it.lanNumber.isNullOrBlank() }
+                .groupBy { it.lanNumber!! }
+                .mapValues { it.value.maxByOrNull { resp -> resp.submittedAt } }
+
+            lanList.map { lan ->
+                val latest = latestByLan[lan]
+                LanProgressItem(
+                    lanNumber = lan,
+                    isConfirmed = latest != null,
+                    percentage = latest?.percentageValue,
+                    numeric1 = latest?.numericValue1,
+                    numeric2 = latest?.numericValue2,
+                    employeeName = latest?.employeeName,
+                    employeeId = latest?.employeeId,
+                    submittedAt = latest?.submittedAt
+                )
+            }
+        }
+    }
+
+    suspend fun snoozeAlarm(taskId: String, minutes: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val task = taskDao.getTaskById(taskId)?.toDomain()
+                ?: return@withContext Result.failure(IOException("Task not found"))
+            taskAlarmScheduler.scheduleSnoozeAlarm(
+                taskId = task.id,
+                taskTitle = task.title,
+                importance = task.importance.name,
+                alarmType = task.alarmType.name,
+                snoozeMinutes = minutes
+            )
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1221,6 +1457,21 @@ class TaskRepository(
             Result.failure(e)
         }
     }
+
+    suspend fun updateTaskStatus(taskId: String, status: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            taskDao.updateTaskStatus(taskId, status)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitCompletionRequest(taskId: String, note: String?): Result<String> = completeTask(taskId, note)
+
+    suspend fun reviewCompletionRequest(taskId: String, confirmed: Boolean): Result<Unit> = reviewTaskCompletion(taskId, confirmed)
+
+    suspend fun leaveTask(taskId: String): Result<Unit> = leaveTask(taskId, null)
 
     // Dashboard Stats
     suspend fun fetchDashboardStats(): DashboardStats = withContext(Dispatchers.IO) {

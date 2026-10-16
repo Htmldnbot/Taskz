@@ -7,18 +7,23 @@ import androidx.room.RoomDatabase
 import com.example.data.local.dao.NotificationDao
 import com.example.data.local.dao.OutboxDao
 import com.example.data.local.dao.ProfileDao
+import com.example.data.local.dao.ScheduledAlarmDao
 import com.example.data.local.dao.ShiftDao
 import com.example.data.local.dao.SyncMetadataDao
 import com.example.data.local.dao.TaskDao
 import com.example.data.local.dao.TaskGroupDao
+import com.example.data.local.dao.TaskResponseDao
 import com.example.data.local.dao.WorkRoleDao
 import com.example.data.local.entity.NotificationEntity
 import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.ProfileEntity
+import com.example.data.local.entity.ScheduledAlarmRecordEntity
 import com.example.data.local.entity.ShiftEntity
 import com.example.data.local.entity.SyncMetadataEntity
+import com.example.data.local.entity.TaskAcknowledgementEntity
 import com.example.data.local.entity.TaskEntity
 import com.example.data.local.entity.TaskGroupEntity
+import com.example.data.local.entity.TaskResponseEntity
 import com.example.data.local.entity.WorkRoleEntity
 
 @Database(
@@ -30,9 +35,12 @@ import com.example.data.local.entity.WorkRoleEntity
         TaskGroupEntity::class,
         ShiftEntity::class,
         WorkRoleEntity::class,
-        NotificationEntity::class
+        NotificationEntity::class,
+        TaskResponseEntity::class,
+        TaskAcknowledgementEntity::class,
+        ScheduledAlarmRecordEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class TaskzDatabase : RoomDatabase() {
@@ -44,6 +52,8 @@ abstract class TaskzDatabase : RoomDatabase() {
     abstract fun shiftDao(): ShiftDao
     abstract fun workRoleDao(): WorkRoleDao
     abstract fun notificationDao(): NotificationDao
+    abstract fun taskResponseDao(): TaskResponseDao
+    abstract fun scheduledAlarmDao(): ScheduledAlarmDao
 
     companion object {
         @Volatile

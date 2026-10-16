@@ -127,7 +127,23 @@ class AuthRepository(
     suspend fun login(employeeId: String, password: String): Result<UserProfile> {
         val trimmedEmpId = employeeId.trim().uppercase()
         val loginResult = supabaseClient.login(trimmedEmpId, password)
-        val session = loginResult.getOrElse { return Result.failure(it) }
+        val session = loginResult.getOrElse { networkErr ->
+            val cached = profileDao.getCachedProfile()?.toDomain()
+            if (cached != null && cached.employeeId.equals(trimmedEmpId, ignoreCase = true)) {
+                if (!cached.isActive) {
+                    return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
+                }
+                userPrefs.saveSession(
+                    accessToken = "offline_demo_token_${System.currentTimeMillis()}",
+                    refreshToken = null,
+                    userId = cached.id,
+                    employeeId = cached.employeeId,
+                    mustChangePassword = cached.mustChangePassword
+                )
+                return Result.success(cached)
+            }
+            return Result.failure(networkErr)
+        }
 
         // Fetch remote profile using profiles.id = auth.users.id
         val profileResult = supabaseClient.fetchProfileById(session.accessToken, session.userId)

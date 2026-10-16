@@ -85,14 +85,20 @@ class TaskzApplication : Application() {
             userPrefs = userPreferences
         )
 
+        // Initialize notification channels for alarms & advance reminders
+        com.example.alarm.TaskAlarmReceiver.createNotificationChannels(this)
+
         taskRepository = com.example.domain.repository.TaskRepository(
             taskDao = database.taskDao(),
             taskGroupDao = database.taskGroupDao(),
             shiftDao = database.shiftDao(),
             workRoleDao = database.workRoleDao(),
             profileDao = database.profileDao(),
+            taskResponseDao = database.taskResponseDao(),
+            scheduledAlarmDao = database.scheduledAlarmDao(),
             supabaseClient = supabaseClient,
-            userPrefs = userPreferences
+            userPrefs = userPreferences,
+            context = this
         )
 
         // 3. Load custom config & initialize sync state in background

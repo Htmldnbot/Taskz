@@ -679,6 +679,87 @@ class SupabaseClient(
         }
     }
 
+    /**
+     * Submit task response via RPC function: public.submit_task_response()
+     */
+    suspend fun submitTaskResponse(
+        accessToken: String,
+        taskId: String,
+        responseType: String,
+        responseValue: String? = null,
+        percentage: Int? = null,
+        numeric1: Double? = null,
+        numeric2: Double? = null,
+        text: String? = null,
+        lanNumber: String? = null,
+        idempotencyKey: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task_id", taskId)
+                put("p_response_type", responseType)
+                if (responseValue != null) put("p_response_value", responseValue)
+                if (percentage != null) put("p_percentage", percentage)
+                if (numeric1 != null) put("p_numeric_1", numeric1)
+                if (numeric2 != null) put("p_numeric_2", numeric2)
+                if (text != null) put("p_text", text)
+                if (lanNumber != null) put("p_lan_number", lanNumber)
+                if (idempotencyKey != null) put("p_idempotency_key", idempotencyKey)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/submit_task_response")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Submit response failed (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Acknowledge task alarm via RPC function: public.acknowledge_task_alarm()
+     */
+    suspend fun acknowledgeTaskAlarm(
+        accessToken: String,
+        taskId: String,
+        eventId: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task_id", taskId)
+                put("p_event_id", eventId)
+                put("p_device_timestamp", java.time.Instant.now().toString())
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/acknowledge_task_alarm")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Acknowledge alarm failed (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     // ==========================================
     // JSON PARSING UTILS
     // ==========================================

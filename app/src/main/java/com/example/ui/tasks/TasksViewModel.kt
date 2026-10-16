@@ -2,11 +2,18 @@ package com.example.ui.tasks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.core.model.AlarmType
+import com.example.core.model.LanProgressItem
+import com.example.core.model.ResponseType
 import com.example.core.model.TaskActivityLog
+import com.example.core.model.TaskImportance
 import com.example.core.model.TaskItem
 import com.example.core.model.TaskJoinRequest
 import com.example.core.model.TaskParticipant
+import com.example.core.model.TaskResponseItem
 import com.example.core.model.TaskRoleRequirement
+import com.example.core.model.TaskType
+import com.example.core.model.TimeUrgency
 import com.example.core.model.UserProfile
 import com.example.core.model.WorkRole
 import com.example.domain.repository.TaskRepository
@@ -68,6 +75,12 @@ class TasksViewModel(
     private val _taskActivityLog = MutableStateFlow<List<TaskActivityLog>>(emptyList())
     val taskActivityLog: StateFlow<List<TaskActivityLog>> = _taskActivityLog.asStateFlow()
 
+    private val _taskResponses = MutableStateFlow<List<TaskResponseItem>>(emptyList())
+    val taskResponses: StateFlow<List<TaskResponseItem>> = _taskResponses.asStateFlow()
+
+    private val _lanProgress = MutableStateFlow<List<LanProgressItem>>(emptyList())
+    val lanProgress: StateFlow<List<LanProgressItem>> = _lanProgress.asStateFlow()
+
     private val _directoryEmployees = MutableStateFlow<List<UserProfile>>(emptyList())
     val directoryEmployees: StateFlow<List<UserProfile>> = _directoryEmployees.asStateFlow()
 
@@ -103,21 +116,15 @@ class TasksViewModel(
         if (query.isBlank()) {
             subFiltered
         } else {
+            val q = query.trim().lowercase()
             subFiltered.filter {
-                it.title.contains(query, ignoreCase = true) ||
-                        it.groupTitle?.contains(query, ignoreCase = true) == true ||
-                        it.location?.contains(query, ignoreCase = true) == true ||
-                        it.priority.contains(query, ignoreCase = true)
+                it.title.lowercase().contains(q) ||
+                (it.description?.lowercase()?.contains(q) == true) ||
+                (it.groupTitle?.lowercase()?.contains(q) == true) ||
+                (it.location?.lowercase()?.contains(q) == true)
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    init {
-        viewModelScope.launch {
-            taskRepository.fetchWorkRoles()
-            searchEmployees("")
-        }
-    }
 
     fun setTab(tab: TaskTabFilter) {
         _selectedTab.value = tab
@@ -145,6 +152,23 @@ class TasksViewModel(
             _taskParticipants.value = taskRepository.getTaskParticipants(taskId)
             _taskJoinRequests.value = taskRepository.getTaskJoinRequests(taskId)
             _taskActivityLog.value = taskRepository.getTaskActivityLog(taskId)
+
+            // Collect responses reactively
+            launch {
+                taskRepository.getResponsesForTaskFlow(taskId).collect { resps ->
+                    _taskResponses.value = resps
+                }
+            }
+
+            // Collect LAN progress if task has LAN targets
+            if (updated != null && updated.lanTargetList.isNotEmpty()) {
+                launch {
+                    taskRepository.getLanProgressFlow(taskId, updated.lanTargetList).collect { lans ->
+                        _lanProgress.value = lans
+                    }
+                }
+            }
+
             _isLoading.value = false
         }
     }
@@ -183,30 +207,13 @@ class TasksViewModel(
         }
     }
 
-    fun assignEmployee(taskId: String, userId: String, roleId: String) {
+    fun leaveTask(taskId: String) {
         viewModelScope.launch {
             _isLoading.value = true
-            val res = taskRepository.assignEmployee(taskId, userId, roleId)
+            val res = taskRepository.leaveTask(taskId)
             res.fold(
                 onSuccess = {
-                    _actionEvent.emit("Employee Assigned Successfully")
-                    loadTaskDetails(taskId)
-                },
-                onFailure = { error ->
-                    _actionEvent.emit(error.message ?: "Failed to assign employee")
-                }
-            )
-            _isLoading.value = false
-        }
-    }
-
-    fun leaveTask(taskId: String, reason: String?) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            val res = taskRepository.leaveTask(taskId, reason)
-            res.fold(
-                onSuccess = {
-                    _actionEvent.emit("Left Task")
+                    _actionEvent.emit("Left task successfully")
                     loadTaskDetails(taskId)
                 },
                 onFailure = { error ->
@@ -223,7 +230,7 @@ class TasksViewModel(
             val res = taskRepository.removeParticipant(participantId, reason)
             res.fold(
                 onSuccess = {
-                    _actionEvent.emit("Participant Removed")
+                    _actionEvent.emit("Participant removed")
                     loadTaskDetails(taskId)
                 },
                 onFailure = { error ->
@@ -234,27 +241,44 @@ class TasksViewModel(
         }
     }
 
-    fun completeTask(taskId: String, note: String?) {
+    fun startTask(taskId: String) {
         viewModelScope.launch {
             _isLoading.value = true
-            val res = taskRepository.completeTask(taskId, note)
+            val res = taskRepository.updateTaskStatus(taskId, "in_progress")
             res.fold(
-                onSuccess = { msg ->
-                    _actionEvent.emit(msg)
+                onSuccess = {
+                    _actionEvent.emit("Task marked In Progress")
                     loadTaskDetails(taskId)
                 },
                 onFailure = { error ->
-                    _actionEvent.emit(error.message ?: "Failed to complete task")
+                    _actionEvent.emit(error.message ?: "Failed to start task")
                 }
             )
             _isLoading.value = false
         }
     }
 
-    fun reviewCompletion(taskId: String, confirmed: Boolean) {
+    fun submitCompletion(taskId: String, notes: String?) {
         viewModelScope.launch {
             _isLoading.value = true
-            val res = taskRepository.reviewTaskCompletion(taskId, confirmed)
+            val res = taskRepository.submitCompletionRequest(taskId, notes)
+            res.fold(
+                onSuccess = { msg ->
+                    _actionEvent.emit(msg)
+                    loadTaskDetails(taskId)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to submit completion")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    fun reviewCompletion(requestId: String, confirmed: Boolean, taskId: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.reviewCompletionRequest(requestId, confirmed)
             res.fold(
                 onSuccess = {
                     _actionEvent.emit(if (confirmed) "Task Completion Confirmed" else "Returned for Revision")
@@ -262,6 +286,71 @@ class TasksViewModel(
                 },
                 onFailure = { error ->
                     _actionEvent.emit(error.message ?: "Failed to review completion")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    // Phase 3 Operations
+    fun acknowledgeAlarm(taskId: String) {
+        viewModelScope.launch {
+            val res = taskRepository.acknowledgeTaskAlarm(taskId)
+            res.fold(
+                onSuccess = {
+                    _actionEvent.emit("Alarm Acknowledged")
+                    loadTaskDetails(taskId)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to acknowledge alarm")
+                }
+            )
+        }
+    }
+
+    fun snoozeAlarm(taskId: String, minutes: Int) {
+        viewModelScope.launch {
+            val res = taskRepository.snoozeAlarm(taskId, minutes)
+            res.fold(
+                onSuccess = {
+                    _actionEvent.emit("Alarm snoozed for $minutes minutes")
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to snooze alarm")
+                }
+            )
+        }
+    }
+
+    fun submitTaskResponse(
+        taskId: String,
+        responseType: ResponseType,
+        responseValue: String? = null,
+        percentage: Int? = null,
+        numeric1: Double? = null,
+        numeric2: Double? = null,
+        textValue: String? = null,
+        lanNumber: String? = null
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.submitTaskResponse(
+                taskId = taskId,
+                responseType = responseType,
+                responseValue = responseValue,
+                percentage = percentage,
+                numeric1 = numeric1,
+                numeric2 = numeric2,
+                textValue = textValue,
+                lanNumber = lanNumber
+            )
+            res.fold(
+                onSuccess = {
+                    _actionEvent.emit("Response submitted successfully")
+                    loadTaskDetails(taskId)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to submit response")
                 }
             )
             _isLoading.value = false
@@ -285,6 +374,19 @@ class TasksViewModel(
         requiresCompletionConfirmation: Boolean,
         maxParticipants: Int?,
         requirements: List<Pair<String, Int>>,
+        taskType: TaskType = TaskType.SIMPLE,
+        importance: TaskImportance = TaskImportance.NORMAL,
+        urgencyType: TimeUrgency = TimeUrgency.BEFORE_DEADLINE,
+        executionTime: String? = null,
+        targetPercentage: Int? = 100,
+        repeatIntervalMinutes: Int? = null,
+        alarmType: AlarmType = AlarmType.SOUND_ALERT,
+        advanceRemindersMinutes: List<Int> = listOf(0, 5),
+        remindUntilCompleted: Boolean = false,
+        overdueReminderIntervalMinutes: Int? = 5,
+        maxOverdueReminders: Int? = 3,
+        responseType: ResponseType = ResponseType.COMPLETED_NOT_COMPLETED,
+        lanTargetList: List<String> = emptyList(),
         onSuccess: (TaskItem) -> Unit
     ) {
         viewModelScope.launch {
@@ -305,11 +407,24 @@ class TasksViewModel(
                 notifyCreatorOnJoin = notifyCreatorOnJoin,
                 requiresCompletionConfirmation = requiresCompletionConfirmation,
                 maxParticipants = maxParticipants,
-                requirements = requirements
+                requirements = requirements,
+                taskType = taskType,
+                importance = importance,
+                urgencyType = urgencyType,
+                executionTime = executionTime,
+                targetPercentage = targetPercentage,
+                repeatIntervalMinutes = repeatIntervalMinutes,
+                alarmType = alarmType,
+                advanceRemindersMinutes = advanceRemindersMinutes,
+                remindUntilCompleted = remindUntilCompleted,
+                overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
+                maxOverdueReminders = maxOverdueReminders,
+                responseType = responseType,
+                lanTargetList = lanTargetList
             )
             res.fold(
                 onSuccess = { task ->
-                    _actionEvent.emit("Task Created Successfully")
+                    _actionEvent.emit("Task Created Successfully with Alarms")
                     onSuccess(task)
                 },
                 onFailure = { error ->

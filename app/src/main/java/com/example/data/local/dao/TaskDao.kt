@@ -34,6 +34,15 @@ interface TaskDao {
     @Update
     suspend fun updateTask(task: TaskEntity)
 
+    @Query("UPDATE cached_tasks SET isAcknowledged = :isAcknowledged, acknowledgedAt = :acknowledgedAt WHERE id = :taskId")
+    suspend fun markTaskAcknowledged(taskId: String, isAcknowledged: Boolean, acknowledgedAt: String?)
+
+    @Query("UPDATE cached_tasks SET status = :status WHERE id = :taskId")
+    suspend fun updateTaskStatus(taskId: String, status: String)
+
+    @Query("UPDATE cached_tasks SET currentProgress = :progress, lastProgressUpdate = :updatedAt WHERE id = :taskId")
+    suspend fun updateTaskProgress(taskId: String, progress: Int, updatedAt: String)
+
     @Query("DELETE FROM cached_tasks WHERE id = :taskId")
     suspend fun deleteTask(taskId: String)
 
