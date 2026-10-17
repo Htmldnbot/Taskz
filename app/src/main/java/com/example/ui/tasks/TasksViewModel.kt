@@ -3,9 +3,11 @@ package com.example.ui.tasks
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.model.AlarmType
+import com.example.core.model.CompletionPolicy
 import com.example.core.model.LanProgressItem
 import com.example.core.model.ResponseType
 import com.example.core.model.TaskActivityLog
+import com.example.core.model.TaskGroup
 import com.example.core.model.TaskImportance
 import com.example.core.model.TaskItem
 import com.example.core.model.TaskJoinRequest
@@ -46,6 +48,9 @@ class TasksViewModel(
 ) : ViewModel() {
 
     val allTasksFlow: StateFlow<List<TaskItem>> = taskRepository.getAllTasksFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val taskGroupsFlow: StateFlow<List<TaskGroup>> = taskRepository.getGroupsFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val activeWorkRolesFlow: StateFlow<List<WorkRole>> = taskRepository.getActiveWorkRolesFlow()
@@ -387,6 +392,8 @@ class TasksViewModel(
         maxOverdueReminders: Int? = 3,
         responseType: ResponseType = ResponseType.COMPLETED_NOT_COMPLETED,
         lanTargetList: List<String> = emptyList(),
+        completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
+        responseFormSchemaJson: String? = null,
         onSuccess: (TaskItem) -> Unit
     ) {
         viewModelScope.launch {
@@ -420,7 +427,9 @@ class TasksViewModel(
                 overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
                 maxOverdueReminders = maxOverdueReminders,
                 responseType = responseType,
-                lanTargetList = lanTargetList
+                lanTargetList = lanTargetList,
+                completionPolicy = completionPolicy,
+                responseFormSchemaJson = responseFormSchemaJson
             )
             res.fold(
                 onSuccess = { task ->
@@ -433,6 +442,46 @@ class TasksViewModel(
             )
             _isLoading.value = false
         }
+    }
+
+    fun createTask(
+        task: TaskItem,
+        onSuccess: (TaskItem) -> Unit
+    ) {
+        createTask(
+            groupId = task.groupId,
+            shiftId = task.shiftId,
+            title = task.title,
+            description = task.description,
+            location = task.location,
+            startsAt = task.startsAt,
+            dueAt = task.dueAt,
+            priority = task.priority,
+            visibility = task.visibility,
+            selectedEmployeeIds = emptyList(),
+            allowSelfJoin = task.allowSelfJoin,
+            joinRequiresApproval = task.joinRequiresApproval,
+            notifyCreatorOnJoin = task.notifyCreatorOnJoin,
+            requiresCompletionConfirmation = task.requiresCompletionConfirmation,
+            maxParticipants = task.maxParticipants,
+            requirements = emptyList(),
+            taskType = task.taskType,
+            importance = task.importance,
+            urgencyType = task.urgencyType,
+            executionTime = task.executionTime,
+            targetPercentage = task.targetPercentage,
+            repeatIntervalMinutes = task.repeatIntervalMinutes,
+            alarmType = task.alarmType,
+            advanceRemindersMinutes = task.advanceRemindersMinutes,
+            remindUntilCompleted = task.remindUntilCompleted,
+            overdueReminderIntervalMinutes = task.overdueReminderIntervalMinutes,
+            maxOverdueReminders = task.maxOverdueReminders,
+            responseType = task.responseType,
+            lanTargetList = task.lanTargetList,
+            completionPolicy = task.completionPolicy,
+            responseFormSchemaJson = task.responseFormSchemaJson,
+            onSuccess = onSuccess
+        )
     }
 
     fun searchEmployees(query: String) {

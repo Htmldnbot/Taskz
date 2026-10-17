@@ -1,5 +1,7 @@
 package com.example.domain.repository
 
+import android.content.Context
+import com.example.TaskzApplication
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncMetadata
 import com.example.core.model.SyncStatus
@@ -11,9 +13,11 @@ import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.ProfileEntity
 import com.example.data.local.entity.SyncMetadataEntity
 import com.example.data.remote.SupabaseClient
+import com.example.sync.SyncWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.io.IOException
+import java.util.UUID
 
 class SyncRepository(
     private val supabaseClient: SupabaseClient,
@@ -21,7 +25,8 @@ class SyncRepository(
     private val outboxDao: OutboxDao,
     private val profileDao: ProfileDao,
     private val userPrefs: UserPreferencesDataStore,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val context: Context = TaskzApplication.instance
 ) {
     val syncMetadataFlow: Flow<SyncMetadata> = combine(
         syncMetadataDao.getSyncMetadataFlow(),
@@ -68,8 +73,7 @@ class SyncRepository(
      * - Validates session and account status with the server.
      * - Calls real server RPC record_server_fetch() to log fetch in user_sync_state.
      * - Updates Last Server Fetch.
-     * - NEVER uses fake acknowledgements like "ack-$now".
-     * - If pending events exist without Phase 2 server handlers, they remain strictly PENDING.
+     * - Triggers WorkManager outbox sync.
      * - "Last Successful Sync" only updates when server acknowledgement of EVERY operation is confirmed.
      */
     suspend fun manualSync(): Result<SyncMetadata> {
@@ -128,16 +132,14 @@ class SyncRepository(
         }
         profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile.copy(avatarSignedUrl = signedUrl)))
 
-        // 2. Outbox queue check:
-        // Do NOT mark pending events as SYNCED without real server acknowledgement!
-        // Leave them as PENDING until Phase 2 server handlers process and acknowledge them.
-        val pendingCount = outboxDao.getPendingEvents().size
+        // 2. Trigger WorkManager to flush outbox events for this active user
+        SyncWorker.enqueueSync(context)
+
+        val pendingCount = outboxDao.getPendingEventsForUser(userId).size
 
         if (pendingCount > 0) {
-            // Un-acknowledged events remain pending; do NOT advance Last Successful Sync
             syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
         } else {
-            // All operations confirmed with server
             syncMetadataDao.updateLastSuccessfulSync(now)
             syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
         }
@@ -152,23 +154,32 @@ class SyncRepository(
     }
 
     /**
-     * Enqueue a local action.
-     * Operations enter LOCAL/PENDING and never transition to SYNCED without real server ACK.
+     * Enqueue a durable local action in outbox.
+     * Never transition to SYNCED without real server ACK.
      */
     suspend fun enqueueLocalAction(
-        transactionId: String,
-        eventType: String,
-        payloadJson: String
+        userId: String,
+        taskId: String,
+        operationType: String,
+        payloadJson: String,
+        eventId: String = UUID.randomUUID().toString()
     ): Long {
         val event = OutboxEventEntity(
-            transactionId = transactionId,
-            eventType = eventType,
+            eventId = eventId,
+            userId = userId,
+            taskId = taskId,
+            operationType = operationType,
             payloadJson = payloadJson,
-            status = "PENDING",
+            syncStatus = "PENDING",
             createdAt = System.currentTimeMillis()
         )
         val id = outboxDao.enqueueEvent(event)
         syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "Pending operations")
+
+        // Trigger WorkManager if network is connected
+        if (networkMonitor.isCurrentlyConnected()) {
+            SyncWorker.enqueueSync(context)
+        }
         return id
     }
 }

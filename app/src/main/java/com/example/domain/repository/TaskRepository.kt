@@ -2,6 +2,7 @@ package com.example.domain.repository
 
 import android.util.Log
 import com.example.core.datastore.UserPreferencesDataStore
+import com.example.core.model.CompletionPolicy
 import com.example.core.model.DashboardStats
 import com.example.core.model.GroupJoinRequest
 import com.example.core.model.GroupMember
@@ -83,34 +84,10 @@ class TaskRepository(
     private val taskVisibleUsersStore = mutableMapOf<String, MutableSet<String>>()
 
     init {
-        seedInitialDemoDataIfEmpty()
+        // Production initialization without fake demo data
     }
 
     private fun nowIso(): String = isoDateFormat.format(Date())
-
-    private fun seedInitialDemoDataIfEmpty() {
-        // Pre-populate realistic work roles and default group/shift if none exist
-        val defaultRoles = listOf(
-            WorkRole("role_invigilator", "Invigilator", "INV", "Examination hall monitor & invigilation", true, 1),
-            WorkRole("role_it_manager", "IT Manager", "ITM", "Technical support and workstation maintenance", true, 2),
-            WorkRole("role_security", "Security Guard", "SEC", "Entry/exit security & perimeter monitoring", true, 3),
-            WorkRole("role_supervisor", "Floor Supervisor", "SUP", "Operational floor oversight and coordination", true, 4),
-            WorkRole("role_coordinator", "Event Coordinator", "CRD", "Event management and participant assistance", true, 5)
-        )
-
-        // Seed in-memory activity logs
-        val sampleTaskId = "task_demo_1"
-        activityLogStore[sampleTaskId] = mutableListOf(
-            TaskActivityLog(
-                id = 1,
-                taskId = sampleTaskId,
-                actorName = "System",
-                eventType = "TASK_CREATED",
-                message = "Task created with manpower requirements",
-                createdAt = "2026-10-15T08:00:00Z"
-            )
-        )
-    }
 
     suspend fun getActiveUserId(): String? {
         return userPrefs.getUserSession().userId ?: profileDao.getCachedProfile()?.id
@@ -597,6 +574,7 @@ class TaskRepository(
                 val st = sourceTaskEntity.toDomain()
                 val newTaskStart = st.startsAt?.let { formatMillisToDateTime(parseDateTimeToMillis(it) + timeOffsetMillis) }
                 val newTaskDue = st.dueAt?.let { formatMillisToDateTime(parseDateTimeToMillis(it) + timeOffsetMillis) }
+                val newExecutionTime = st.executionTime?.let { formatMillisToDateTime(parseDateTimeToMillis(it) + timeOffsetMillis) }
                 val newTaskId = UUID.randomUUID().toString()
 
                 val newTask = st.copy(
@@ -605,11 +583,18 @@ class TaskRepository(
                     shiftName = newShiftName,
                     startsAt = newTaskStart,
                     dueAt = newTaskDue,
+                    executionTime = newExecutionTime,
                     status = "open",
+                    currentProgress = 0,
+                    lastProgressUpdate = null,
+                    isAcknowledged = false,
+                    acknowledgedAt = null,
+                    isPendingCompletionConfirmation = false,
                     createdAt = nowIso(),
                     updatedAt = nowIso()
                 )
                 taskDao.insertTask(TaskEntity.fromDomain(newTask))
+                taskAlarmScheduler.scheduleAlarmsForTask(newTask)
 
                 // Copy Manpower requirements
                 if (copyManpowerRequirements) {
@@ -747,7 +732,9 @@ class TaskRepository(
         overdueReminderIntervalMinutes: Int? = 5,
         maxOverdueReminders: Int? = 3,
         responseType: ResponseType = ResponseType.COMPLETED_NOT_COMPLETED,
-        lanTargetList: List<String> = emptyList()
+        lanTargetList: List<String> = emptyList(),
+        completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
+        responseFormSchemaJson: String? = null
     ): Result<TaskItem> = withContext(Dispatchers.IO) {
         try {
             val group = getGroupById(groupId) ?: return@withContext Result.failure(IOException("Group not found"))
@@ -791,7 +778,9 @@ class TaskRepository(
                 overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
                 maxOverdueReminders = maxOverdueReminders,
                 responseType = responseType,
-                lanTargetList = lanTargetList
+                lanTargetList = lanTargetList,
+                completionPolicy = completionPolicy,
+                responseFormSchemaJson = responseFormSchemaJson
             )
 
             taskDao.insertTask(TaskEntity.fromDomain(task))
@@ -885,15 +874,24 @@ class TaskRepository(
         numeric1: Double? = null,
         numeric2: Double? = null,
         textValue: String? = null,
-        lanNumber: String? = null
+        lanNumber: String? = null,
+        dynamicValues: Map<String, String> = emptyMap()
     ): Result<TaskResponseItem> = withContext(Dispatchers.IO) {
         try {
+            val session = userPrefs.getUserSession()
             val user = profileDao.getCachedProfile()
+            val userId = session.userId ?: user?.id
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required"))
+            }
+
             val empId = user?.employeeId ?: "EMP"
-            val userId = user?.id ?: UUID.randomUUID().toString()
             val userName = user?.fullName ?: empId
             val nowIso = nowIso()
             val responseId = UUID.randomUUID().toString()
+
+            val task = taskDao.getTaskById(taskId)?.toDomain()
+            val isMultiLan = !task?.lanTargetList.isNullOrEmpty() || task?.taskType == TaskType.MULTI_CONFIRMATION
 
             val item = TaskResponseItem(
                 id = responseId,
@@ -908,24 +906,60 @@ class TaskRepository(
                 numericValue1 = numeric1,
                 numericValue2 = numeric2,
                 textValue = textValue,
+                dynamicValues = dynamicValues,
                 submittedAt = nowIso,
                 isPendingSync = true
             )
 
+            // Cache response locally
             taskResponseDao.insertResponse(TaskResponseEntity.fromDomain(item, syncStatus = "PENDING_SYNC"))
 
-            // If percentage update, update progress on task
-            if (percentage != null) {
-                taskDao.updateTaskProgress(taskId, percentage, nowIso)
-                val task = taskDao.getTaskById(taskId)?.toDomain()
-                if (task != null && percentage >= (task.targetPercentage ?: 100)) {
-                    taskDao.updateTaskStatus(taskId, "completed")
-                    taskAlarmScheduler.cancelAlarmsForTask(taskId)
+            // Durable Outbox Entry (PART 4)
+            val payload = JSONObject().apply {
+                put("responseType", responseType.name)
+                if (responseValue != null) put("responseValue", responseValue)
+                if (percentage != null) put("percentage", percentage)
+                if (numeric1 != null) put("numeric1", numeric1)
+                if (numeric2 != null) put("numeric2", numeric2)
+                if (textValue != null) put("textValue", textValue)
+                if (lanNumber != null) put("lanNumber", lanNumber)
+                put("deviceTimestamp", nowIso)
+                if (dynamicValues.isNotEmpty()) {
+                    put("dynamic_values", JSONObject(dynamicValues))
                 }
             }
 
-            // Sync with server if online
-            val session = userPrefs.getUserSession()
+            val outboxEvent = com.example.data.local.entity.OutboxEventEntity(
+                eventId = responseId,
+                userId = userId,
+                taskId = taskId,
+                operationType = "TASK_RESPONSE",
+                payloadJson = payload.toString(),
+                syncStatus = "PENDING",
+                createdAt = System.currentTimeMillis()
+            )
+            val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
+
+            // For Progress or Single Assignee (non-multi-LAN), update progress locally
+            if (percentage != null && !isMultiLan) {
+                taskDao.updateTaskProgress(taskId, percentage, nowIso)
+                if (percentage >= (task?.targetPercentage ?: 100)) {
+                    if (task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION) {
+                        taskDao.updateTaskStatus(taskId, "pending_confirmation")
+                    } else {
+                        taskDao.updateTaskStatus(taskId, "completed")
+                        taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                    }
+                }
+            } else if (isMultiLan) {
+                // Multi-LAN task: NEVER mark task completed from a single LAN submission!
+                taskDao.updateTaskStatus(taskId, "in_progress")
+            }
+
+            // Trigger WorkManager sync
+            com.example.sync.SyncWorker.enqueueSync(context)
+
+            // Attempt instant sync if online
             if (!session.accessToken.isNullOrBlank()) {
                 val res = supabaseClient.submitTaskResponse(
                     accessToken = session.accessToken,
@@ -937,10 +971,22 @@ class TaskRepository(
                     numeric2 = numeric2,
                     text = textValue,
                     lanNumber = lanNumber,
-                    idempotencyKey = responseId
+                    idempotencyKey = responseId,
+                    deviceTimestamp = nowIso,
+                    dynamicValues = dynamicValues
                 )
                 if (res.isSuccess) {
+                    val serverObj = res.getOrThrow()
                     taskResponseDao.markResponseSynced(responseId)
+                    TaskzDatabase.getInstance(context).outboxDao().markEventSynced(outboxId, responseId, System.currentTimeMillis())
+
+                    val serverStatus = serverObj.optString("task_status")
+                    if (serverStatus.isNotBlank()) {
+                        taskDao.updateTaskStatus(taskId, serverStatus)
+                        if (serverStatus.equals("completed", ignoreCase = true)) {
+                            taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                        }
+                    }
                 }
             }
 
@@ -964,9 +1010,14 @@ class TaskRepository(
 
     suspend fun acknowledgeTaskAlarm(taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            val session = userPrefs.getUserSession()
             val user = profileDao.getCachedProfile()
+            val userId = session.userId ?: user?.id
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required"))
+            }
+
             val empId = user?.employeeId ?: "EMP"
-            val userId = user?.id ?: UUID.randomUUID().toString()
             val userName = user?.fullName ?: empId
             val eventId = UUID.randomUUID().toString()
             val nowIso = nowIso()
@@ -984,12 +1035,29 @@ class TaskRepository(
             taskResponseDao.insertAcknowledgement(ack)
             taskDao.markTaskAcknowledged(taskId, true, nowIso)
 
+            val payload = JSONObject().apply {
+                put("deviceTimestamp", nowIso)
+            }
+            val outboxEvent = com.example.data.local.entity.OutboxEventEntity(
+                eventId = eventId,
+                userId = userId,
+                taskId = taskId,
+                operationType = "TASK_ACKNOWLEDGEMENT",
+                payloadJson = payload.toString(),
+                syncStatus = "PENDING",
+                createdAt = System.currentTimeMillis()
+            )
+            val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
+
+            // Trigger WorkManager
+            com.example.sync.SyncWorker.enqueueSync(context)
+
             // Attempt remote acknowledgement
-            val session = userPrefs.getUserSession()
             if (!session.accessToken.isNullOrBlank()) {
-                val res = supabaseClient.acknowledgeTaskAlarm(session.accessToken, taskId, eventId)
+                val res = supabaseClient.acknowledgeTaskAlarm(session.accessToken, taskId, eventId, nowIso)
                 if (res.isSuccess) {
                     taskResponseDao.markAcknowledgementSynced(ack.id)
+                    TaskzDatabase.getInstance(context).outboxDao().markEventSynced(outboxId, "ACK_CONFIRMED", System.currentTimeMillis())
                 }
             }
 
@@ -1005,6 +1073,67 @@ class TaskRepository(
             )
 
             Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchTaskOperationsDashboard(taskId: String): Result<com.example.core.model.TaskOperationsDashboardData> = withContext(Dispatchers.IO) {
+        try {
+            val session = userPrefs.getUserSession()
+            val token = session.accessToken
+            if (!token.isNullOrBlank()) {
+                val res = supabaseClient.getTaskOperationsDashboard(token, taskId)
+                if (res.isSuccess) {
+                    return@withContext res
+                }
+            }
+
+            // Offline / fallback calculation from local cache
+            val task = taskDao.getTaskById(taskId)?.toDomain()
+                ?: return@withContext Result.failure(IOException("Task not found"))
+            val responses = taskResponseDao.getResponsesForTask(taskId).map { it.toDomain() }
+            val acks = taskResponseDao.getAcknowledgementsForTaskFlow(taskId).firstOrNull() ?: emptyList()
+
+            val lans = task.lanTargetList.map { lanNum ->
+                val lanResp = responses.firstOrNull { it.lanNumber.equals(lanNum, ignoreCase = true) }
+                val isCompleted = lanResp?.responseValue in listOf("COMPLETED", "YES") || (lanResp?.percentageValue ?: 0) >= 100
+                com.example.core.model.LanStatusItem(
+                    lanNumber = lanNum,
+                    status = if (isCompleted) "completed" else if (lanResp != null) "in_progress" else "pending",
+                    progress = lanResp?.percentageValue ?: (if (isCompleted) 100 else 0),
+                    employeeName = lanResp?.employeeName,
+                    employeeId = lanResp?.employeeId,
+                    lastResponseTime = lanResp?.submittedAt,
+                    completedAt = if (isCompleted) lanResp?.submittedAt else null,
+                    isOverdue = lanResp?.isLate ?: false
+                )
+            }
+
+            val completedCount = lans.count { it.status == "completed" }
+            val overdueCount = lans.count { it.isOverdue }
+            val pendingCount = lans.count { it.status == "pending" }
+
+            val data = com.example.core.model.TaskOperationsDashboardData(
+                taskId = task.id,
+                title = task.title,
+                taskType = task.taskType.name,
+                importance = task.importance.name,
+                status = task.status,
+                completionPolicy = task.completionPolicy.name,
+                executionTime = task.executionTime,
+                deadlineTime = task.dueAt,
+                currentProgress = task.currentProgress,
+                totalLans = lans.size,
+                completedLans = completedCount,
+                pendingLans = pendingCount,
+                overdueLans = overdueCount,
+                totalParticipants = participantsStore[taskId]?.size ?: 0,
+                acknowledgedCount = acks.size,
+                lanStatuses = lans,
+                recentResponses = responses.take(10)
+            )
+            Result.success(data)
         } catch (e: Exception) {
             Result.failure(e)
         }

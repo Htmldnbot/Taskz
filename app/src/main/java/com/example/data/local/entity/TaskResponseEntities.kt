@@ -5,6 +5,7 @@ import androidx.room.PrimaryKey
 import com.example.core.model.ResponseType
 import com.example.core.model.TaskAcknowledgementRecord
 import com.example.core.model.TaskResponseItem
+import org.json.JSONObject
 
 @Entity(tableName = "cached_task_responses")
 data class TaskResponseEntity(
@@ -20,8 +21,11 @@ data class TaskResponseEntity(
     val numericValue1: Double?,
     val numericValue2: Double?,
     val textValue: String?,
+    val dynamicValuesJson: String = "{}",
     val submittedAt: String,
-    val syncStatus: String = "SYNCED" // "PENDING_SYNC", "SYNCED"
+    val syncStatus: String = "SYNCED", // "PENDING_SYNC", "SYNCED"
+    val isLate: Boolean = false,
+    val delaySeconds: Int = 0
 ) {
     fun toDomain(): TaskResponseItem = TaskResponseItem(
         id = id,
@@ -36,8 +40,11 @@ data class TaskResponseEntity(
         numericValue1 = numericValue1,
         numericValue2 = numericValue2,
         textValue = textValue,
+        dynamicValues = parseDynamicValues(dynamicValuesJson),
         submittedAt = submittedAt,
-        isPendingSync = syncStatus == "PENDING_SYNC"
+        isPendingSync = syncStatus == "PENDING_SYNC",
+        isLate = isLate,
+        delaySeconds = delaySeconds
     )
 
     companion object {
@@ -54,9 +61,25 @@ data class TaskResponseEntity(
             numericValue1 = domain.numericValue1,
             numericValue2 = domain.numericValue2,
             textValue = domain.textValue,
+            dynamicValuesJson = JSONObject(domain.dynamicValues).toString(),
             submittedAt = domain.submittedAt,
-            syncStatus = syncStatus
+            syncStatus = syncStatus,
+            isLate = domain.isLate,
+            delaySeconds = domain.delaySeconds
         )
+
+        private fun parseDynamicValues(json: String): Map<String, String> {
+            return try {
+                val map = mutableMapOf<String, String>()
+                val obj = JSONObject(json)
+                obj.keys().forEach { key ->
+                    map[key] = obj.optString(key, "")
+                }
+                map
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        }
     }
 }
 
@@ -96,9 +119,14 @@ data class TaskAcknowledgementEntity(
     }
 }
 
+/**
+ * Account-specific alarm record.
+ * Alarms belong to the specific authenticated userId.
+ */
 @Entity(tableName = "scheduled_alarm_records")
 data class ScheduledAlarmRecordEntity(
     @PrimaryKey val alarmId: Int,
+    val userId: String = "",
     val taskId: String,
     val taskTitle: String,
     val triggerAtMillis: Long,

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AlarmType
 import com.example.core.model.TaskImportance
 import com.example.core.model.TaskItem
@@ -19,6 +20,7 @@ class TaskAlarmScheduler(private val context: Context) {
 
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val database = TaskzDatabase.getInstance(context)
+    private val userPrefs = UserPreferencesDataStore(context)
 
     companion object {
         private const val TAG = "TaskAlarmScheduler"
@@ -41,8 +43,15 @@ class TaskAlarmScheduler(private val context: Context) {
 
     /**
      * Schedules all advance reminders, main execution alarm, and overdue repeats for a task.
+     * Alarms are tied to the active user's identity.
      */
-    suspend fun scheduleAlarmsForTask(task: TaskItem) = withContext(Dispatchers.IO) {
+    suspend fun scheduleAlarmsForTask(task: TaskItem, userId: String? = null) = withContext(Dispatchers.IO) {
+        val targetUserId = userId ?: userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id ?: ""
+        if (targetUserId.isBlank()) {
+            Log.w(TAG, "Cannot schedule alarm without authenticated user identity")
+            return@withContext
+        }
+
         if (task.status.equals("completed", ignoreCase = true) ||
             task.status.equals("cancelled", ignoreCase = true)
         ) {
@@ -74,6 +83,7 @@ class TaskAlarmScheduler(private val context: Context) {
                 val alarmId = generateAlarmId(task.id, -minutesBefore)
                 val alarmEntity = ScheduledAlarmRecordEntity(
                     alarmId = alarmId,
+                    userId = targetUserId,
                     taskId = task.id,
                     taskTitle = task.title,
                     triggerAtMillis = triggerMillis,
@@ -97,6 +107,7 @@ class TaskAlarmScheduler(private val context: Context) {
                     val alarmId = generateAlarmId(task.id, 1000 + i)
                     val alarmEntity = ScheduledAlarmRecordEntity(
                         alarmId = alarmId,
+                        userId = targetUserId,
                         taskId = task.id,
                         taskTitle = task.title,
                         triggerAtMillis = triggerMillis,
@@ -112,7 +123,7 @@ class TaskAlarmScheduler(private val context: Context) {
 
         if (alarmsToInsert.isNotEmpty()) {
             database.scheduledAlarmDao().insertAlarms(alarmsToInsert)
-            Log.d(TAG, "Successfully scheduled ${alarmsToInsert.size} alarms for task ${task.id}")
+            Log.d(TAG, "Successfully scheduled ${alarmsToInsert.size} alarms for task ${task.id} (user $targetUserId)")
         }
     }
 
@@ -124,12 +135,15 @@ class TaskAlarmScheduler(private val context: Context) {
         taskTitle: String,
         importance: String,
         alarmType: String,
-        snoozeMinutes: Int
+        snoozeMinutes: Int,
+        userId: String? = null
     ) = withContext(Dispatchers.IO) {
+        val targetUserId = userId ?: userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id ?: ""
         val triggerMillis = System.currentTimeMillis() + (snoozeMinutes * 60 * 1000L)
         val alarmId = generateAlarmId(taskId, 5000 + snoozeMinutes)
         val alarmEntity = ScheduledAlarmRecordEntity(
             alarmId = alarmId,
+            userId = targetUserId,
             taskId = taskId,
             taskTitle = taskTitle,
             triggerAtMillis = triggerMillis,
@@ -184,12 +198,44 @@ class TaskAlarmScheduler(private val context: Context) {
     }
 
     /**
-     * Reschedules all active upcoming alarms from local database (e.g. after device reboot).
+     * Account-specific alarm cancel on user logout / account switch.
+     */
+    suspend fun cancelAllAlarmsForUser(userId: String) = withContext(Dispatchers.IO) {
+        val alarms = database.scheduledAlarmDao().getActiveAlarmsFlow().let {
+            database.scheduledAlarmDao().getUpcomingActiveAlarms(0L).filter { it.userId == userId }
+        }
+        for (record in alarms) {
+            val intent = Intent(context, TaskAlarmReceiver::class.java).apply {
+                action = ACTION_ALARM_TRIGGER
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                record.alarmId,
+                intent,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            )
+            if (pendingIntent != null) {
+                alarmManager.cancel(pendingIntent)
+                pendingIntent.cancel()
+            }
+        }
+        database.scheduledAlarmDao().cancelAllAlarmsForUser(userId)
+        Log.d(TAG, "Cancelled all alarms for user $userId")
+    }
+
+    /**
+     * Reschedules all active upcoming alarms from local database for the currently logged in account (after reboot).
      */
     suspend fun restoreAlarmsAfterReboot() = withContext(Dispatchers.IO) {
+        val currentUserId = userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id
+        if (currentUserId.isNullOrBlank()) {
+            Log.d(TAG, "No logged in user found after reboot. Skipping alarm restore.")
+            return@withContext
+        }
+
         val now = System.currentTimeMillis()
-        val upcomingAlarms = database.scheduledAlarmDao().getUpcomingActiveAlarms(now)
-        Log.d(TAG, "Restoring ${upcomingAlarms.size} active alarms after reboot")
+        val upcomingAlarms = database.scheduledAlarmDao().getUpcomingActiveAlarmsForUser(currentUserId, now)
+        Log.d(TAG, "Restoring ${upcomingAlarms.size} active alarms after reboot for user $currentUserId")
         for (alarm in upcomingAlarms) {
             val taskEntity = database.taskDao().getTaskById(alarm.taskId)
             val task = taskEntity?.toDomain()

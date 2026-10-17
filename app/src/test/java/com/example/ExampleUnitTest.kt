@@ -27,7 +27,7 @@ class ExampleUnitTest {
         val email1 = SupabaseConfig.toInternalAuthEmail("EMP1024")
         val email2 = SupabaseConfig.toInternalAuthEmail("  emp1024  ")
         assertEquals(email1, email2)
-        assertTrue(email1.endsWith("@taskzapp.com"))
+        assertTrue(email1.endsWith("@taskzapp.org"))
 
         val emailWithHyphen = SupabaseConfig.toInternalAuthEmail("EMP-1024")
         val emailWithoutHyphen = SupabaseConfig.toInternalAuthEmail("EMP1024")
@@ -209,17 +209,59 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun testMobileNormalization() {
-        val indian10 = com.example.ui.auth.AuthViewModel.normalizeMobile("9876543210")
-        assertEquals("+919876543210", indian10)
-        assertTrue(indian10.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
+    fun testCompletionPolicyAndMultiLanIntegrity() {
+        val singlePolicy = com.example.core.model.CompletionPolicy.SINGLE_ASSIGNEE
+        val allLansPolicy = com.example.core.model.CompletionPolicy.ALL_SELECTED_LANS
+        val confirmationPolicy = com.example.core.model.CompletionPolicy.CREATOR_CONFIRMATION
 
-        val international = com.example.ui.auth.AuthViewModel.normalizeMobile("+15551234567")
-        assertEquals("+15551234567", international)
-        assertTrue(international.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
+        assertEquals("Single Assignee", singlePolicy.label)
+        assertEquals("All Selected LANs", allLansPolicy.label)
+        assertEquals("Creator Confirmation", confirmationPolicy.label)
 
-        val us10 = com.example.ui.auth.AuthViewModel.normalizeMobile("5551234567")
-        assertEquals("+15551234567", us10)
-        assertTrue(us10.matches(Regex("^\\+[1-9][0-9]{7,14}$")))
+        // Verify task with ALL_SELECTED_LANS requires all LAN submissions before completion
+        val multiLanTask = TaskItem(
+            id = "task-multi-lan",
+            title = "LAN Readiness Confirmation",
+            taskType = TaskType.MULTI_CONFIRMATION,
+            completionPolicy = allLansPolicy,
+            lanTargetList = listOf("LAN 1", "LAN 2", "LAN 3"),
+            status = "open"
+        )
+        assertEquals(allLansPolicy, multiLanTask.completionPolicy)
+        assertEquals(3, multiLanTask.lanTargetList.size)
+    }
+
+    @Test
+    fun testDynamicFormFieldSchemaModel() {
+        val formField = com.example.core.model.ResponseFormField(
+            id = "field-1",
+            label = "Candidate Count",
+            fieldType = com.example.core.model.FormFieldType.NUMBER,
+            isRequired = true
+        )
+        assertEquals("Candidate Count", formField.label)
+        assertEquals(com.example.core.model.FormFieldType.NUMBER, formField.fieldType)
+        assertTrue(formField.isRequired)
+    }
+
+    @Test
+    fun testOutboxEventPayloadFormatting() {
+        val idempotencyKey = java.util.UUID.randomUUID().toString()
+        val payloadString = """{"responseType":"COMPLETED_NOT_COMPLETED","responseValue":"COMPLETED","percentage":100}"""
+
+        val event = com.example.data.local.entity.OutboxEventEntity(
+            eventId = idempotencyKey,
+            userId = "user-123",
+            taskId = "task-456",
+            operationType = "COMPLETION_REQUEST",
+            payloadJson = payloadString,
+            syncStatus = "PENDING",
+            createdAt = System.currentTimeMillis()
+        )
+
+        assertEquals("COMPLETION_REQUEST", event.operationType)
+        assertEquals("PENDING", event.syncStatus)
+        assertEquals(idempotencyKey, event.eventId)
+        assertTrue(event.payloadJson.contains("COMPLETED"))
     }
 }

@@ -51,7 +51,9 @@ data class TaskEntity(
     val currentProgress: Int = 0,
     val lastProgressUpdate: String? = null,
     val isAcknowledged: Boolean = false,
-    val acknowledgedAt: String? = null
+    val acknowledgedAt: String? = null,
+    val completionPolicy: String = "SINGLE_ASSIGNEE",
+    val responseFormSchemaJson: String? = null
 ) {
     fun toDomain(): TaskItem = TaskItem(
         id = id,
@@ -92,7 +94,9 @@ data class TaskEntity(
         currentProgress = currentProgress,
         lastProgressUpdate = lastProgressUpdate,
         isAcknowledged = isAcknowledged,
-        acknowledgedAt = acknowledgedAt
+        acknowledgedAt = acknowledgedAt,
+        completionPolicy = runCatching { com.example.core.model.CompletionPolicy.valueOf(completionPolicy) }.getOrDefault(com.example.core.model.CompletionPolicy.SINGLE_ASSIGNEE),
+        responseFormSchemaJson = responseFormSchemaJson
     )
 
     companion object {
@@ -135,7 +139,9 @@ data class TaskEntity(
             currentProgress = domain.currentProgress,
             lastProgressUpdate = domain.lastProgressUpdate,
             isAcknowledged = domain.isAcknowledged,
-            acknowledgedAt = domain.acknowledgedAt
+            acknowledgedAt = domain.acknowledgedAt,
+            completionPolicy = domain.completionPolicy.name,
+            responseFormSchemaJson = domain.responseFormSchemaJson
         )
 
         private fun parseCsvToIntList(csv: String): List<Int> {

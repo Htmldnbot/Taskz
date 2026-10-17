@@ -17,8 +17,14 @@ interface TaskResponseDao {
     @Query("SELECT * FROM cached_task_responses WHERE taskId = :taskId ORDER BY submittedAt DESC")
     suspend fun getResponsesForTask(taskId: String): List<TaskResponseEntity>
 
+    @Query("SELECT * FROM cached_task_responses WHERE taskId = :taskId AND userId = :userId ORDER BY submittedAt DESC")
+    suspend fun getResponsesForTaskAndUser(taskId: String, userId: String): List<TaskResponseEntity>
+
     @Query("SELECT * FROM cached_task_responses WHERE syncStatus = 'PENDING_SYNC'")
     suspend fun getPendingSyncResponses(): List<TaskResponseEntity>
+
+    @Query("SELECT * FROM cached_task_responses WHERE userId = :userId AND syncStatus = 'PENDING_SYNC'")
+    suspend fun getPendingSyncResponsesForUser(userId: String): List<TaskResponseEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertResponse(response: TaskResponseEntity)
@@ -33,11 +39,14 @@ interface TaskResponseDao {
     @Query("SELECT * FROM cached_task_acknowledgements WHERE taskId = :taskId")
     fun getAcknowledgementsForTaskFlow(taskId: String): Flow<List<TaskAcknowledgementEntity>>
 
-    @Query("SELECT * FROM cached_task_acknowledgements WHERE taskId = :taskId AND employeeId = :employeeId LIMIT 1")
-    suspend fun getAcknowledgement(taskId: String, employeeId: String): TaskAcknowledgementEntity?
+    @Query("SELECT * FROM cached_task_acknowledgements WHERE taskId = :taskId AND (employeeId = :employeeId OR userId = :userId) LIMIT 1")
+    suspend fun getAcknowledgement(taskId: String, employeeId: String, userId: String = ""): TaskAcknowledgementEntity?
 
     @Query("SELECT * FROM cached_task_acknowledgements WHERE syncStatus = 'PENDING_SYNC'")
     suspend fun getPendingSyncAcknowledgements(): List<TaskAcknowledgementEntity>
+
+    @Query("SELECT * FROM cached_task_acknowledgements WHERE userId = :userId AND syncStatus = 'PENDING_SYNC'")
+    suspend fun getPendingSyncAcknowledgementsForUser(userId: String): List<TaskAcknowledgementEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAcknowledgement(ack: TaskAcknowledgementEntity)

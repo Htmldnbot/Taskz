@@ -42,6 +42,14 @@ enum class ResponseType(val label: String) {
     MULTI_CONFIRMATION("Multiple Employee Confirmation")
 }
 
+enum class CompletionPolicy(val label: String, val description: String) {
+    SINGLE_ASSIGNEE("Single Assignee", "Completes when assigned employee submits completion"),
+    ALL_SELECTED_LANS("All Selected LANs", "Each selected LAN must independently confirm completion (100%)"),
+    ALL_REQUIRED_PARTICIPANTS("All Required Participants", "All participants must individually submit completion"),
+    CREATOR_CONFIRMATION("Creator Confirmation", "Requires creator manual approval before completing"),
+    CUSTOM_REQUIRED_COUNT("Custom Required Count", "Completes when required number of confirmations is achieved")
+}
+
 enum class TaskStatus(val label: String) {
     SCHEDULED("Scheduled"),
     UPCOMING("Upcoming"),
@@ -102,7 +110,9 @@ data class TaskItem(
     val currentProgress: Int = 0,
     val lastProgressUpdate: String? = null,
     val isAcknowledged: Boolean = false,
-    val acknowledgedAt: String? = null
+    val acknowledgedAt: String? = null,
+    val completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
+    val responseFormSchemaJson: String? = null
 ) {
     val isAssignedToMe: Boolean
         get() = currentUserParticipantStatus == "active"

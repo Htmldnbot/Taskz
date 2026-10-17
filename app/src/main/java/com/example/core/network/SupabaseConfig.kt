@@ -42,23 +42,22 @@ object SupabaseConfig {
 
     /**
      * Deterministic, collision-free synthetic email mapping:
-     *
-     * Why this design:
-     * 1. Employees log in exclusively with Employee ID + Password (no email UI).
-     * 2. Supabase Auth requires an email format by default.
-     * 3. Naive character stripping causes collisions (e.g. "EMP-1024" vs "EMP1024", or IDs with punctuation).
-     * 4. This mapping computes the uppercase-normalized Employee ID, extracts an alphanumeric prefix for readability,
-     *    and appends a SHA-256 cryptographic digest of the exact normalized ID.
-     *    Because SHA-256 is collision-resistant, IDs that differ in any character (including punctuation)
-     *    will NEVER map to the same Auth identifier.
-     * 5. The total local-part length is strictly under 64 characters (RFC compliant).
-     *
-     * IMPORTANT SUPABASE CONFIGURATION:
-     * Because internal synthetic emails (@taskz.internal) do not receive inbox emails,
-     * "Confirm email" MUST be toggled OFF in the Supabase Dashboard
-     * (Authentication -> Providers -> Email -> "Confirm email" = disabled).
+     * Format: emp<hash24>@taskzapp.org
+     * Clean alphanumeric local part to strictly conform to GoTrue and RFC 5322.
      */
     fun toInternalAuthEmail(employeeId: String): String {
+        val normalized = normalizeEmployeeId(employeeId)
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(normalized.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(24)
+        return "emp$hash@taskzapp.org"
+    }
+
+    /**
+     * Legacy format to ensure backward compatibility for previously registered employees.
+     */
+    fun toLegacyAuthEmail(employeeId: String): String {
         val normalized = normalizeEmployeeId(employeeId)
         val readable = normalized.lowercase().filter { it in 'a'..'z' || it in '0'..'9' }.take(16)
         val hash = MessageDigest.getInstance("SHA-256")

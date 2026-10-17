@@ -134,48 +134,55 @@ class SupabaseClient(
     ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val internalEmail = SupabaseConfig.toInternalAuthEmail(employeeId)
-            val jsonBody = JSONObject().apply {
-                put("email", internalEmail)
-                put("password", password)
-            }
-
-            val request = Request.Builder()
-                .url("${baseUrl()}/auth/v1/token?grant_type=password")
-                .addHeader("apikey", anonKey())
-                .addHeader("Content-Type", "application/json")
-                .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
-                .build()
-
-            val response = okHttpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            if (!response.isSuccessful) {
-                val errorMsg = parseErrorMessage(responseBody, "Login failed")
-                if (response.code == 400 || errorMsg.contains("invalid", ignoreCase = true) ||
-                    errorMsg.contains("credentials", ignoreCase = true)
-                ) {
-                    return@withContext Result.failure(IOException("Invalid Employee ID or password."))
-                }
-                return@withContext Result.failure(IOException(errorMsg))
-            }
-
-            val json = JSONObject(responseBody)
-            val accessToken = json.getString("access_token")
-            val refreshToken = json.optString("refresh_token")
-            val userObj = json.getJSONObject("user")
-            val userId = userObj.getString("id")
-
-            Result.success(
-                AuthSessionResponse(
-                    accessToken = accessToken,
-                    refreshToken = refreshToken.takeIf { it.isNotBlank() },
-                    userId = userId,
-                    employeeId = employeeId.trim()
-                )
+            val candidateEmails = listOf(
+                SupabaseConfig.toInternalAuthEmail(employeeId),
+                SupabaseConfig.toLegacyAuthEmail(employeeId)
             )
+
+            var lastErrorMsg = "Login failed"
+            for (email in candidateEmails) {
+                val jsonBody = JSONObject().apply {
+                    put("email", email)
+                    put("password", password)
+                }
+
+                val request = Request.Builder()
+                    .url("${baseUrl()}/auth/v1/token?grant_type=password")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Content-Type", "application/json")
+                    .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                val response = okHttpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+
+                if (response.isSuccessful) {
+                    val json = JSONObject(responseBody)
+                    val accessToken = json.getString("access_token")
+                    val refreshToken = json.optString("refresh_token")
+                    val userObj = json.getJSONObject("user")
+                    val userId = userObj.getString("id")
+
+                    return@withContext Result.success(
+                        AuthSessionResponse(
+                            accessToken = accessToken,
+                            refreshToken = refreshToken.takeIf { it.isNotBlank() },
+                            userId = userId,
+                            employeeId = employeeId.trim()
+                        )
+                    )
+                } else {
+                    lastErrorMsg = parseErrorMessage(responseBody, "Login failed")
+                }
+            }
+
+            if (lastErrorMsg.contains("invalid", ignoreCase = true) ||
+                lastErrorMsg.contains("credentials", ignoreCase = true)
+            ) {
+                return@withContext Result.failure(IOException("Invalid Employee ID or password."))
+            }
+            Result.failure(IOException(lastErrorMsg))
         } catch (e: Exception) {
-            Log.e(TAG, "Error during login", e)
             Result.failure(e)
         }
     }
@@ -682,6 +689,9 @@ class SupabaseClient(
     /**
      * Submit task response via RPC function: public.submit_task_response()
      */
+    /**
+     * Submit task response via RPC function: public.submit_task_response()
+     */
     suspend fun submitTaskResponse(
         accessToken: String,
         taskId: String,
@@ -692,8 +702,10 @@ class SupabaseClient(
         numeric2: Double? = null,
         text: String? = null,
         lanNumber: String? = null,
-        idempotencyKey: String? = null
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+        idempotencyKey: String? = null,
+        deviceTimestamp: String? = null,
+        dynamicValues: Map<String, String>? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
             val body = JSONObject().apply {
@@ -706,6 +718,10 @@ class SupabaseClient(
                 if (text != null) put("p_text", text)
                 if (lanNumber != null) put("p_lan_number", lanNumber)
                 if (idempotencyKey != null) put("p_idempotency_key", idempotencyKey)
+                if (deviceTimestamp != null) put("p_device_timestamp", deviceTimestamp)
+                if (dynamicValues != null && dynamicValues.isNotEmpty()) {
+                    put("p_dynamic_values", JSONObject(dynamicValues))
+                }
             }
 
             val request = Request.Builder()
@@ -720,7 +736,7 @@ class SupabaseClient(
             if (!response.isSuccessful) {
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Submit response failed (${response.code})")))
             }
-            Result.success(Unit)
+            Result.success(JSONObject(responseBody))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -732,14 +748,15 @@ class SupabaseClient(
     suspend fun acknowledgeTaskAlarm(
         accessToken: String,
         taskId: String,
-        eventId: String
+        eventId: String,
+        deviceTimestamp: String = java.time.Instant.now().toString()
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
             val body = JSONObject().apply {
                 put("p_task_id", taskId)
                 put("p_event_id", eventId)
-                put("p_device_timestamp", java.time.Instant.now().toString())
+                put("p_device_timestamp", deviceTimestamp)
             }
 
             val request = Request.Builder()
@@ -755,6 +772,130 @@ class SupabaseClient(
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Acknowledge alarm failed (${response.code})")))
             }
             Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Batch Sync Offline Outbox Events via RPC function: public.sync_offline_events()
+     */
+    suspend fun batchSyncOfflineEvents(
+        accessToken: String,
+        eventsArray: JSONArray
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_events", eventsArray)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/sync_offline_events")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Batch sync failed (${response.code})")))
+            }
+            Result.success(JSONObject(responseBody))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get Real-time Operations Dashboard data via RPC function: public.get_task_operations_dashboard()
+     */
+    suspend fun getTaskOperationsDashboard(
+        accessToken: String,
+        taskId: String
+    ): Result<com.example.core.model.TaskOperationsDashboardData> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task_id", taskId)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/get_task_operations_dashboard")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to load operations dashboard (${response.code})")))
+            }
+
+            val json = JSONObject(responseBody)
+            val lansArray = json.optJSONArray("lan_statuses") ?: JSONArray()
+            val lanList = mutableListOf<com.example.core.model.LanStatusItem>()
+            for (i in 0 until lansArray.length()) {
+                val item = lansArray.getJSONObject(i)
+                lanList.add(
+                    com.example.core.model.LanStatusItem(
+                        lanNumber = item.optString("lan_number"),
+                        status = item.optString("status", "pending"),
+                        progress = item.optInt("progress", 0),
+                        employeeName = item.optString("employee_name").takeIf { it.isNotBlank() },
+                        employeeId = item.optString("employee_id").takeIf { it.isNotBlank() },
+                        lastResponseTime = item.optString("last_response_time").takeIf { it.isNotBlank() },
+                        completedAt = item.optString("completed_at").takeIf { it.isNotBlank() },
+                        isOverdue = item.optBoolean("is_overdue", false)
+                    )
+                )
+            }
+
+            val respsArray = json.optJSONArray("recent_responses") ?: JSONArray()
+            val respList = mutableListOf<com.example.core.model.TaskResponseItem>()
+            for (i in 0 until respsArray.length()) {
+                val r = respsArray.getJSONObject(i)
+                respList.add(
+                    com.example.core.model.TaskResponseItem(
+                        id = r.optString("id"),
+                        taskId = taskId,
+                        userId = "",
+                        employeeId = r.optString("employee_id"),
+                        employeeName = r.optString("employee_name").takeIf { it.isNotBlank() },
+                        lanNumber = r.optString("lan_number").takeIf { it.isNotBlank() },
+                        responseType = runCatching { com.example.core.model.ResponseType.valueOf(r.optString("response_type")) }.getOrDefault(com.example.core.model.ResponseType.COMPLETED_NOT_COMPLETED),
+                        responseValue = r.optString("response_value").takeIf { it.isNotBlank() },
+                        percentageValue = if (r.has("percentage") && !r.isNull("percentage")) r.getInt("percentage") else null,
+                        submittedAt = r.optString("submitted_at"),
+                        isPendingSync = false,
+                        isLate = r.optBoolean("is_late", false),
+                        delaySeconds = r.optInt("delay_seconds", 0)
+                    )
+                )
+            }
+
+            val data = com.example.core.model.TaskOperationsDashboardData(
+                taskId = json.optString("task_id", taskId),
+                title = json.optString("title", ""),
+                taskType = json.optString("task_type", "SIMPLE"),
+                importance = json.optString("importance", "NORMAL"),
+                status = json.optString("status", "open"),
+                completionPolicy = json.optString("completion_policy", "SINGLE_ASSIGNEE"),
+                executionTime = json.optString("execution_time").takeIf { it.isNotBlank() },
+                deadlineTime = json.optString("deadline_time").takeIf { it.isNotBlank() },
+                currentProgress = json.optInt("current_progress", 0),
+                totalLans = json.optInt("total_lans", 0),
+                completedLans = json.optInt("completed_lans", 0),
+                pendingLans = json.optInt("pending_lans", 0),
+                overdueLans = json.optInt("overdue_lans", 0),
+                totalParticipants = json.optInt("total_participants", 0),
+                acknowledgedCount = json.optInt("acknowledged_count", 0),
+                lanStatuses = lanList,
+                recentResponses = respList
+            )
+            Result.success(data)
         } catch (e: Exception) {
             Result.failure(e)
         }

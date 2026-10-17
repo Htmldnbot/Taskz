@@ -14,10 +14,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AlarmType
 import com.example.core.model.TaskImportance
 import com.example.data.local.TaskzDatabase
 import com.example.data.local.entity.TaskAcknowledgementEntity
+import com.example.data.local.entity.TaskResponseEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -264,16 +266,17 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = TaskzDatabase.getInstance(context)
-                val currentProfile = db.profileDao().getCachedProfile()
-                val empId = currentProfile?.employeeId ?: "EMP_UNKNOWN"
-                val userId = currentProfile?.id ?: UUID.randomUUID().toString()
+                val userPrefs = UserPreferencesDataStore(context)
+                val profile = db.profileDao().getCachedProfile()
+                val activeUserId = userPrefs.getUserSession().userId ?: profile?.id ?: return@launch
+                val empId = profile?.employeeId ?: userPrefs.getUserSession().employeeId ?: "EMP_UNKNOWN"
                 val eventId = UUID.randomUUID().toString()
                 val nowIso = java.time.Instant.now().toString()
 
                 val ackEntity = TaskAcknowledgementEntity(
                     id = UUID.randomUUID().toString(),
                     taskId = taskId,
-                    userId = userId,
+                    userId = activeUserId,
                     employeeId = empId,
                     eventId = eventId,
                     deviceTimestamp = System.currentTimeMillis(),
@@ -282,9 +285,26 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 )
                 db.taskResponseDao().insertAcknowledgement(ackEntity)
 
+                // Enqueue in outbox and trigger sync
+                val payload = org.json.JSONObject().apply {
+                    put("deviceTimestamp", nowIso)
+                }
+                db.outboxDao().enqueueEvent(
+                    com.example.data.local.entity.OutboxEventEntity(
+                        eventId = eventId,
+                        userId = activeUserId,
+                        taskId = taskId,
+                        operationType = "TASK_ACKNOWLEDGEMENT",
+                        payloadJson = payload.toString(),
+                        syncStatus = "PENDING",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+
                 // Update task isAcknowledged locally
                 db.taskDao().markTaskAcknowledged(taskId, true, nowIso)
-                Log.d(TAG, "Task $taskId acknowledged by $empId")
+                com.example.sync.SyncWorker.enqueueSync(context)
+                Log.d(TAG, "Task $taskId acknowledged by $empId (enqueued in outbox)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to record acknowledgement: ${e.message}")
             }
@@ -319,11 +339,59 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = TaskzDatabase.getInstance(context)
-                val scheduler = TaskAlarmScheduler(context)
-                scheduler.cancelAlarmsForTask(taskId)
-                db.taskDao().updateTaskStatus(taskId, "completed")
+                val userPrefs = com.example.core.datastore.UserPreferencesDataStore(context)
+                val profile = db.profileDao().getCachedProfile()
+                val activeUserId = userPrefs.getUserSession().userId ?: profile?.id ?: return@launch
+                val empId = profile?.employeeId ?: ""
+                val empName = profile?.fullName ?: empId
+                val nowIso = java.time.Instant.now().toString()
+                val eventId = UUID.randomUUID().toString()
+
+                // Save response locally as PENDING_SYNC
+                val responseEntity = TaskResponseEntity(
+                    id = eventId,
+                    taskId = taskId,
+                    userId = activeUserId,
+                    employeeId = empId,
+                    employeeName = empName,
+                    lanNumber = null,
+                    responseType = com.example.core.model.ResponseType.COMPLETED_NOT_COMPLETED.name,
+                    responseValue = "COMPLETED",
+                    percentageValue = 100,
+                    numericValue1 = null,
+                    numericValue2 = null,
+                    textValue = "Notification complete action",
+                    dynamicValuesJson = "{}",
+                    submittedAt = nowIso,
+                    syncStatus = "PENDING_SYNC"
+                )
+                db.taskResponseDao().insertResponse(responseEntity)
+
+                // Enqueue in Outbox
+                val payload = org.json.JSONObject().apply {
+                    put("responseType", com.example.core.model.ResponseType.COMPLETED_NOT_COMPLETED.name)
+                    put("responseValue", "COMPLETED")
+                    put("percentage", 100)
+                    put("textValue", "Notification complete action")
+                    put("deviceTimestamp", nowIso)
+                }
+                db.outboxDao().enqueueEvent(
+                    com.example.data.local.entity.OutboxEventEntity(
+                        eventId = eventId,
+                        userId = activeUserId,
+                        taskId = taskId,
+                        operationType = "COMPLETION_REQUEST",
+                        payloadJson = payload.toString(),
+                        syncStatus = "PENDING",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+
+                // Trigger background sync
+                com.example.sync.SyncWorker.enqueueSync(context)
+                Log.d(TAG, "Completion request for $taskId recorded in outbox by $empId (awaiting server confirmation)")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to mark task completed: ${e.message}")
+                Log.e(TAG, "Failed to queue completion request: ${e.message}")
             }
         }
     }
