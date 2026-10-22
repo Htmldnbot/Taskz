@@ -34,10 +34,11 @@ object SupabaseConfig {
 
     /**
      * Normalizes an Employee ID matching the database function:
-     * public.normalize_employee_id(p_value text) -> upper(trim(coalesce(p_value, '')))
+     * public.normalize_employee_id(p_value text) -> upper(trim(split_part(coalesce(p_value, ''), '@', 1)))
      */
     fun normalizeEmployeeId(employeeId: String): String {
-        return employeeId.trim().uppercase()
+        val beforeAt = employeeId.trim().substringBefore("@")
+        return beforeAt.trim().uppercase()
     }
 
     /**

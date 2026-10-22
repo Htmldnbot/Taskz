@@ -684,20 +684,22 @@ class TaskRepository(
         val parts = participantsStore[task.id] ?: emptyList()
         val activeParts = parts.filter { it.status == "active" }
 
+        val isCreator = (userId != null && task.createdBy == userId)
         val myParticipant = activeParts.find { it.userId == userId }
         val myPendingJoin = taskJoinRequestsStore[task.id]?.find { it.userId == userId && it.status == "pending" }
         val isPendingCompletion = completionRequestsStore[task.id]?.any { it.status == "pending" } == true
 
         var totalReq = 0
         for (r in reqs) totalReq += r.requiredCount
-        val totalAssigned = activeParts.size
+        val totalAssigned = if (activeParts.isEmpty() && isCreator) 1 else activeParts.size
+        val effectiveParticipantStatus = myParticipant?.status ?: if (isCreator) "active" else null
 
         return task.copy(
             totalRequired = totalReq,
             totalAssigned = totalAssigned,
             totalVacant = maxOf(0, totalReq - totalAssigned),
-            currentUserRoleName = myParticipant?.roleName,
-            currentUserParticipantStatus = myParticipant?.status,
+            currentUserRoleName = myParticipant?.roleName ?: if (isCreator) "Creator" else null,
+            currentUserParticipantStatus = effectiveParticipantStatus,
             currentUserJoinStatus = myPendingJoin?.status,
             isPendingCompletionConfirmation = isPendingCompletion
         )
@@ -737,7 +739,26 @@ class TaskRepository(
         responseFormSchemaJson: String? = null
     ): Result<TaskItem> = withContext(Dispatchers.IO) {
         try {
-            val group = getGroupById(groupId) ?: return@withContext Result.failure(IOException("Group not found"))
+            var targetGroupId = groupId
+            var group = if (targetGroupId.isNotBlank()) getGroupById(targetGroupId) else null
+            if (group == null) {
+                val allGroups = taskGroupDao.getAllGroupsFlow().firstOrNull() ?: emptyList()
+                if (allGroups.isNotEmpty()) {
+                    group = allGroups.first().toDomain()
+                    targetGroupId = group.id
+                } else {
+                    val defaultGroupRes = createGroup(
+                        title = "General Operations",
+                        code = "GEN-OPS",
+                        description = "Default operations group for standalone tasks",
+                        startDate = null,
+                        endDate = null
+                    )
+                    group = defaultGroupRes.getOrNull()
+                    targetGroupId = group?.id ?: UUID.randomUUID().toString()
+                }
+            }
+
             val shift = shiftId?.let { getShiftById(it) }
             val userId = getActiveUserId() ?: "creator"
             val userName = getActiveUserName()
@@ -745,8 +766,8 @@ class TaskRepository(
             val taskId = UUID.randomUUID().toString()
             val task = TaskItem(
                 id = taskId,
-                groupId = groupId,
-                groupTitle = group.title,
+                groupId = targetGroupId,
+                groupTitle = group?.title ?: "General Operations",
                 shiftId = shiftId,
                 shiftName = shift?.name,
                 title = title.trim(),
@@ -823,6 +844,20 @@ class TaskRepository(
                     eventType = "TASK_CREATED",
                     message = "Task created by $userName ($taskType, $importance priority)",
                     createdAt = nowIso()
+                )
+            )
+
+            // Add creator as active participant so the task is assigned and visible in My Tasks
+            participantsStore.getOrPut(taskId) { mutableListOf() }.add(
+                TaskParticipant(
+                    id = UUID.randomUUID().toString(),
+                    taskId = taskId,
+                    userId = userId,
+                    userName = userName,
+                    userEmployeeId = getActiveUserEmployeeId(),
+                    status = "active",
+                    joinedAt = nowIso(),
+                    assignedBy = userId
                 )
             )
 
@@ -1614,7 +1649,7 @@ class TaskRepository(
         for (taskEntity in allTasks) {
             val domain = taskEntity.toDomain()
             val parts = participantsStore[domain.id]?.filter { it.status == "active" } ?: emptyList()
-            val isMyTask = parts.any { it.userId == userId }
+            val isMyTask = parts.any { it.userId == userId } || (userId != null && domain.createdBy == userId)
             if (isMyTask && domain.status != "completed" && domain.status != "cancelled") {
                 myTasksToday++
                 upcomingTasks++

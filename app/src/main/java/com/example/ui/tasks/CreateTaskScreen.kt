@@ -29,14 +29,18 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +49,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import com.example.core.model.AlarmType
 import com.example.core.model.CompletionPolicy
 import com.example.core.model.ResponseFormField
@@ -80,6 +85,14 @@ fun CreateTaskScreen(
 ) {
     val groups by tasksViewModel.taskGroupsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isLoading by tasksViewModel.isLoading.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        tasksViewModel.actionEvent.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     var currentStep by rememberSaveable { mutableIntStateOf(1) }
     val totalSteps = 9
@@ -144,23 +157,88 @@ fun CreateTaskScreen(
         return lanListText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
 
-    // Validate inputs (PART 23)
+    // Validate inputs
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
         if (title.isBlank()) errors.add("Task Title cannot be empty.")
-        if (taskType != TaskType.IMMEDIATE && executionTime.isBlank() && deadlineTime.isBlank()) {
-            errors.add("Scheduled Execution Time or Deadline is required for scheduled tasks.")
-        }
         if (taskType == TaskType.PROGRESS && (targetPercentage <= 0 || targetPercentage > 100)) {
             errors.add("Target Percentage must be between 1 and 100.")
         }
         if (taskType == TaskType.MULTI_CONFIRMATION && parseLanList().isEmpty()) {
             errors.add("Multi-Confirmation task requires at least one LAN number (e.g. LAN1, LAN2).")
         }
+        if (taskType != TaskType.IMMEDIATE && executionTime.isNotBlank()) {
+            val timingErr = TaskItem.validateExecutionTime(executionTime)
+            if (timingErr != null) {
+                errors.add(timingErr)
+            }
+        }
         return errors
     }
 
+    fun submitTask() {
+        val validationErrors = validate()
+        if (validationErrors.isNotEmpty()) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(validationErrors.first())
+            }
+            return
+        }
+        if (isLoading) return
+
+        // Serialize dynamic form fields
+        val schemaArray = JSONArray()
+        customFormFields.forEach { f ->
+            schemaArray.put(
+                JSONObject().apply {
+                    put("id", f.id)
+                    put("label", f.label)
+                    put("type", f.fieldType.name)
+                    put("required", f.isRequired)
+                }
+            )
+        }
+
+        val effectiveExecTime = executionTime.trim().takeIf { it.isNotBlank() }
+            ?: if (taskType == TaskType.IMMEDIATE) java.time.Instant.now().toString() else null
+
+        val newTask = TaskItem(
+            groupId = selectedGroup?.id ?: "",
+            groupTitle = selectedGroup?.title,
+            shiftId = preselectedShiftId,
+            title = title.trim(),
+            description = description.trim().takeIf { it.isNotBlank() },
+            location = location.trim().takeIf { it.isNotBlank() },
+            startsAt = effectiveExecTime,
+            dueAt = deadlineTime.trim().takeIf { it.isNotBlank() },
+            priority = importance.name.lowercase(),
+            visibility = visibility,
+            allowSelfJoin = allowSelfJoin,
+            joinRequiresApproval = joinRequiresApproval,
+            requiresCompletionConfirmation = requiresCreatorConfirmation,
+            taskType = taskType,
+            importance = importance,
+            urgencyType = urgencyType,
+            executionTime = effectiveExecTime,
+            targetPercentage = targetPercentage,
+            repeatIntervalMinutes = repeatIntervalMinutes,
+            alarmType = alarmType,
+            advanceRemindersMinutes = advanceReminders.toList(),
+            remindUntilCompleted = remindUntilCompleted,
+            overdueReminderIntervalMinutes = overdueIntervalMinutes,
+            responseType = responseType,
+            lanTargetList = parseLanList(),
+            completionPolicy = completionPolicy,
+            responseFormSchemaJson = if (schemaArray.length() > 0) schemaArray.toString() else null
+        )
+
+        tasksViewModel.createTask(newTask) { createdTask ->
+            onSuccess(createdTask)
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Create Task ($currentStep of $totalSteps)", fontWeight = FontWeight.Bold) },
@@ -193,97 +271,86 @@ fun CreateTaskScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (currentStep > 1) {
+                    if (currentStep == 1) {
+                        OutlinedButton(
+                            onClick = { currentStep = 2 },
+                            enabled = title.isNotBlank() && !isLoading,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("btn_next_step")
+                        ) {
+                            Text("Customize")
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+                        }
+                        Button(
+                            onClick = { submitTask() },
+                            enabled = !isLoading,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .testTag("btn_quick_create_task")
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
+                            } else {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Create Task Now", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    } else if (currentStep < totalSteps) {
                         OutlinedButton(
                             onClick = { currentStep -= 1 },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Previous")
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Back")
                         }
-                    }
-
-                    if (currentStep < totalSteps) {
                         Button(
                             onClick = {
-                                if (currentStep == 1 && title.isBlank()) {
-                                    // Block empty title
-                                } else {
-                                    currentStep += 1
+                                if (currentStep == 3 && taskType != TaskType.IMMEDIATE && executionTime.isNotBlank()) {
+                                    val timingErr = TaskItem.validateExecutionTime(executionTime)
+                                    if (timingErr != null) {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(timingErr)
+                                        }
+                                        return@Button
+                                    }
                                 }
+                                currentStep += 1
                             },
-                            enabled = if (currentStep == 1) title.isNotBlank() else true,
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("btn_next_step")
                         ) {
                             Text("Next")
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
                         }
                     } else {
                         // Final step: Create Task
-                        val validationErrors = validate()
+                        OutlinedButton(
+                            onClick = { currentStep -= 1 },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Previous")
+                        }
                         Button(
-                            onClick = {
-                                if (validationErrors.isEmpty()) {
-                                    // Serialize dynamic form fields
-                                    val schemaArray = JSONArray()
-                                    customFormFields.forEach { f ->
-                                        schemaArray.put(
-                                            JSONObject().apply {
-                                                put("id", f.id)
-                                                put("label", f.label)
-                                                put("type", f.fieldType.name)
-                                                put("required", f.isRequired)
-                                            }
-                                        )
-                                    }
-
-                                    val newTask = TaskItem(
-                                        groupId = selectedGroup?.id ?: "",
-                                        groupTitle = selectedGroup?.title,
-                                        shiftId = preselectedShiftId,
-                                        title = title.trim(),
-                                        description = description.trim().takeIf { it.isNotBlank() },
-                                        location = location.trim().takeIf { it.isNotBlank() },
-                                        startsAt = executionTime.trim().takeIf { it.isNotBlank() },
-                                        dueAt = deadlineTime.trim().takeIf { it.isNotBlank() },
-                                        priority = importance.name.lowercase(),
-                                        visibility = visibility,
-                                        allowSelfJoin = allowSelfJoin,
-                                        joinRequiresApproval = joinRequiresApproval,
-                                        requiresCompletionConfirmation = requiresCreatorConfirmation,
-                                        taskType = taskType,
-                                        importance = importance,
-                                        urgencyType = urgencyType,
-                                        executionTime = executionTime.trim().takeIf { it.isNotBlank() },
-                                        targetPercentage = targetPercentage,
-                                        repeatIntervalMinutes = repeatIntervalMinutes,
-                                        alarmType = alarmType,
-                                        advanceRemindersMinutes = advanceReminders.toList(),
-                                        remindUntilCompleted = remindUntilCompleted,
-                                        overdueReminderIntervalMinutes = overdueIntervalMinutes,
-                                        responseType = responseType,
-                                        lanTargetList = parseLanList(),
-                                        completionPolicy = completionPolicy,
-                                        responseFormSchemaJson = if (schemaArray.length() > 0) schemaArray.toString() else null
-                                    )
-
-                                    tasksViewModel.createTask(newTask) { createdTask ->
-                                        onSuccess(createdTask)
-                                    }
-                                }
-                            },
-                            enabled = validationErrors.isEmpty() && !isLoading,
+                            onClick = { submitTask() },
+                            enabled = !isLoading,
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
-                                .weight(1f)
+                                .weight(1.4f)
                                 .testTag("btn_submit_create_task")
                         ) {
                             if (isLoading) {
@@ -328,13 +395,35 @@ fun CreateTaskScreen(
                 3 -> StepTiming(
                     taskType = taskType,
                     urgencyType = urgencyType,
-                    onUrgencySelected = { urgencyType = it },
+                    onUrgencySelected = {
+                        if (taskType == TaskType.IMMEDIATE) {
+                            taskType = TaskType.SIMPLE
+                        }
+                        urgencyType = it
+                    },
                     executionTime = executionTime,
-                    onExecutionTimeChange = { executionTime = it },
+                    onExecutionTimeChange = { newTime ->
+                        if (taskType == TaskType.IMMEDIATE && newTime.isNotBlank()) {
+                            taskType = TaskType.SIMPLE
+                        }
+                        executionTime = newTime
+                    },
                     deadlineTime = deadlineTime,
                     onDeadlineTimeChange = { deadlineTime = it },
                     repeatIntervalMinutes = repeatIntervalMinutes,
-                    onRepeatIntervalChange = { repeatIntervalMinutes = it }
+                    onRepeatIntervalChange = { repeatIntervalMinutes = it },
+                    timingErrorMessage = if (taskType == TaskType.IMMEDIATE) null else TaskItem.validateExecutionTime(executionTime),
+                    onExecuteNowSelected = {
+                        taskType = TaskType.IMMEDIATE
+                        urgencyType = TimeUrgency.IMMEDIATELY
+                        executionTime = ""
+                    },
+                    onScheduleForLaterSelected = {
+                        if (taskType == TaskType.IMMEDIATE) {
+                            taskType = TaskType.SIMPLE
+                            urgencyType = TimeUrgency.BEFORE_DEADLINE
+                        }
+                    }
                 )
                 4 -> StepImportance(
                     selectedImportance = importance,
@@ -386,7 +475,8 @@ fun CreateTaskScreen(
                     completionPolicy = completionPolicy,
                     alarmType = alarmType,
                     advanceReminders = advanceReminders,
-                    validationErrors = validate()
+                    validationErrors = validate(),
+                    onNavigateToScheduling = { currentStep = 3 }
                 )
             }
         }

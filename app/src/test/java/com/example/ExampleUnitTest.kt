@@ -264,4 +264,96 @@ class ExampleUnitTest {
         assertEquals(idempotencyKey, event.eventId)
         assertTrue(event.payloadJson.contains("COMPLETED"))
     }
+
+    @Test
+    fun testExecutionTimeValidationPastPresentFuture() {
+        val now = 1770000000000L // arbitrary fixed epoch millis
+        val pastIso = java.time.Instant.ofEpochMilli(now - 60_000L).toString()
+        val presentIso = java.time.Instant.ofEpochMilli(now).toString()
+        val futureIso = java.time.Instant.ofEpochMilli(now + 60_000L).toString()
+
+        val pastError = TaskItem.validateExecutionTime(pastIso, nowMillis = now)
+        assertEquals(TaskItem.PAST_TIME_ERROR_MESSAGE, pastError)
+        assertEquals(
+            "Selected execution time has already passed. Please choose a future date and time.",
+            pastError
+        )
+
+        val presentError = TaskItem.validateExecutionTime(presentIso, nowMillis = now)
+        assertEquals(null, presentError)
+
+        val futureError = TaskItem.validateExecutionTime(futureIso, nowMillis = now)
+        assertEquals(null, futureError)
+
+        val blankError = TaskItem.validateExecutionTime("", nowMillis = now)
+        assertEquals(null, blankError)
+    }
+
+    @Test
+    fun testExecutionTimeDateChangesAndMidnightBoundaries() {
+        // Assume now is 11:55 PM on Oct 19, 2026 UTC
+        val nowInstant = java.time.Instant.parse("2026-10-19T23:55:00Z")
+        val nowMillis = nowInstant.toEpochMilli()
+
+        // 12:05 AM on Oct 20, 2026 UTC (tomorrow, across midnight boundary)
+        val midnightFutureIso = "2026-10-20T00:05:00Z"
+        val midnightFutureError = TaskItem.validateExecutionTime(midnightFutureIso, nowMillis = nowMillis)
+        assertEquals(null, midnightFutureError)
+
+        // 11:50 PM on Oct 19, 2026 UTC (5 minutes ago today)
+        val pastTodayIso = "2026-10-19T23:50:00Z"
+        val pastTodayError = TaskItem.validateExecutionTime(pastTodayIso, nowMillis = nowMillis)
+        assertEquals(TaskItem.PAST_TIME_ERROR_MESSAGE, pastTodayError)
+
+        // 12:05 AM on Oct 19, 2026 UTC (earlier today, across previous midnight)
+        val pastEarlierTodayIso = "2026-10-19T00:05:00Z"
+        val pastEarlierTodayError = TaskItem.validateExecutionTime(pastEarlierTodayIso, nowMillis = nowMillis)
+        assertEquals(TaskItem.PAST_TIME_ERROR_MESSAGE, pastEarlierTodayError)
+
+        // Next month boundary: Oct 31 11:59 PM -> Nov 1 12:01 AM
+        val oct31Millis = java.time.Instant.parse("2026-10-31T23:59:00Z").toEpochMilli()
+        val nov1Iso = "2026-11-01T00:01:00Z"
+        assertEquals(null, TaskItem.validateExecutionTime(nov1Iso, nowMillis = oct31Millis))
+
+        // Previous date: Oct 18 11:55 PM
+        val yesterdayIso = "2026-10-18T23:55:00Z"
+        assertEquals(TaskItem.PAST_TIME_ERROR_MESSAGE, TaskItem.validateExecutionTime(yesterdayIso, nowMillis = nowMillis))
+    }
+
+    @Test
+    fun testExecutionTimeFullDateTimeComparisonNotClockOnly() {
+        // If comparing clock-only:
+        // Clock 00:15 is numerically less than clock 23:45, but Oct 20 00:15 is in the FUTURE when now is Oct 19 23:45.
+        val nowInstant = java.time.Instant.parse("2026-10-19T23:45:00Z")
+        val nowMillis = nowInstant.toEpochMilli()
+
+        val nextDayAfterMidnight = "2026-10-20T00:15:00Z"
+        val nextDayError = TaskItem.validateExecutionTime(nextDayAfterMidnight, nowMillis = nowMillis)
+        assertEquals("Next day after midnight must be valid future time", null, nextDayError)
+
+        // Conversely, yesterday at 23:59 has clock 23:59 > now clock 08:00, but is in the PAST.
+        val nowMorningMillis = java.time.Instant.parse("2026-10-20T08:00:00Z").toEpochMilli()
+        val yesterdayLateNight = "2026-10-19T23:59:00Z"
+        val yesterdayError = TaskItem.validateExecutionTime(yesterdayLateNight, nowMillis = nowMorningMillis)
+        assertEquals(
+            "Yesterday night must be detected as past even if clock hour is greater",
+            TaskItem.PAST_TIME_ERROR_MESSAGE,
+            yesterdayError
+        )
+    }
+
+    @Test
+    fun testExecutionTimeFormatParsingAndDisplay() {
+        val iso = "2026-10-20T10:00:00Z"
+        val millis = TaskItem.parseIsoToMillis(iso)
+        assertNotNull(millis)
+        assertEquals(java.time.Instant.parse(iso).toEpochMilli(), millis)
+
+        val display = TaskItem.formatForDisplay(iso)
+        assertNotNull(display)
+        assertTrue(display!!.contains("2026"))
+
+        val invalidError = TaskItem.validateExecutionTime("not-a-valid-date")
+        assertTrue(invalidError != null && invalidError.contains("Invalid execution date/time format"))
+    }
 }

@@ -104,7 +104,9 @@ class TasksViewModel(
     ) { tasks, tab, subFilter, query ->
         val currentUserId = taskRepository.getActiveUserId()
         val baseFiltered = when (tab) {
-            TaskTabFilter.MY_TASKS -> tasks.filter { it.isAssignedToMe || it.currentUserParticipantStatus == "active" }
+            TaskTabFilter.MY_TASKS -> tasks.filter {
+                it.isAssignedToMe || it.currentUserParticipantStatus == "active" || (currentUserId != null && it.createdBy == currentUserId)
+            }
             TaskTabFilter.AVAILABLE -> tasks.filter {
                 it.status == "open" && it.allowSelfJoin && !it.isAssignedToMe && it.createdBy != currentUserId
             }

@@ -24,7 +24,10 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HourglassTop
@@ -50,9 +53,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -277,8 +283,55 @@ fun StepTiming(
     onDeadlineTimeChange: (String) -> Unit,
     repeatIntervalMinutes: Int?,
     onRepeatIntervalChange: (Int?) -> Unit,
+    timingErrorMessage: String? = null,
+    onExecuteNowSelected: () -> Unit = {},
+    onScheduleForLaterSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val currentParsedMillis = remember(executionTime) { com.example.core.model.TaskItem.parseIsoToMillis(executionTime) }
+    val displayPreview = remember(executionTime) { com.example.core.model.TaskItem.formatForDisplay(executionTime) }
+
+    fun showDateTimePicker() {
+        onScheduleForLaterSelected()
+        val initialCal = java.util.Calendar.getInstance()
+        if (currentParsedMillis != null && currentParsedMillis > 0) {
+            initialCal.timeInMillis = currentParsedMillis
+        }
+        val datePicker = android.app.DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                val timePicker = android.app.TimePickerDialog(
+                    context,
+                    { _, hourOfDay, minute ->
+                        val chosenCal = java.util.Calendar.getInstance().apply {
+                            set(java.util.Calendar.YEAR, year)
+                            set(java.util.Calendar.MONTH, month)
+                            set(java.util.Calendar.DAY_OF_MONTH, dayOfMonth)
+                            set(java.util.Calendar.HOUR_OF_DAY, hourOfDay)
+                            set(java.util.Calendar.MINUTE, minute)
+                            set(java.util.Calendar.SECOND, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        val isoString = java.time.Instant.ofEpochMilli(chosenCal.timeInMillis).toString()
+                        onExecutionTimeChange(isoString)
+                        if (deadlineTime.isBlank()) {
+                            onDeadlineTimeChange(java.time.Instant.ofEpochMilli(chosenCal.timeInMillis + 3600000L).toString())
+                        }
+                    },
+                    initialCal.get(java.util.Calendar.HOUR_OF_DAY),
+                    initialCal.get(java.util.Calendar.MINUTE),
+                    false
+                )
+                timePicker.show()
+            },
+            initialCal.get(java.util.Calendar.YEAR),
+            initialCal.get(java.util.Calendar.MONTH),
+            initialCal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+        datePicker.show()
+    }
+
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
             text = "Step 3: When does this task need action?",
@@ -286,23 +339,123 @@ fun StepTiming(
             fontWeight = FontWeight.Bold
         )
 
-        if (taskType == TaskType.IMMEDIATE) {
+        // Highlight error banner if validation detected a past or invalid time
+        if (timingErrorMessage != null) {
             Card(
-                colors = CardDefaults.cardColors(containerColor = TaskzError.copy(alpha = 0.15f)),
-                shape = RoundedCornerShape(12.dp)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("alert_timing_error")
             ) {
                 Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.FlashOn, contentDescription = null, tint = TaskzError)
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Immediate / Urgent Task: No future scheduling needed. Alarms and notifications trigger immediately upon creation.",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = TaskzError
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = timingErrorMessage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Choose 'Execute Now' or pick a future date and time below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
                 }
             }
-        } else {
+        }
+
+        // Option A: Explicit Execute Now option
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (taskType == TaskType.IMMEDIATE) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExecuteNowSelected() }
+                .testTag("card_execute_now")
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FlashOn,
+                    contentDescription = null,
+                    tint = if (taskType == TaskType.IMMEDIATE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "⚡ Execute Now (Immediate Task)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (taskType == TaskType.IMMEDIATE) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Dispatches immediately with instant alarm. No future date/time needed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (taskType == TaskType.IMMEDIATE) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                RadioButton(
+                    selected = taskType == TaskType.IMMEDIATE,
+                    onClick = { onExecuteNowSelected() },
+                    modifier = Modifier.testTag("radio_execute_now")
+                )
+            }
+        }
+
+        // Option B: Schedule for Later
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (taskType != TaskType.IMMEDIATE) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onScheduleForLaterSelected() }
+                .testTag("card_schedule_later")
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = if (taskType != TaskType.IMMEDIATE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "📅 Schedule for Later",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (taskType != TaskType.IMMEDIATE) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Choose a specific future date and time, urgency level, or presets.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (taskType != TaskType.IMMEDIATE) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                RadioButton(
+                    selected = taskType != TaskType.IMMEDIATE,
+                    onClick = { onScheduleForLaterSelected() },
+                    modifier = Modifier.testTag("radio_schedule_later")
+                )
+            }
+        }
+
+        if (taskType != TaskType.IMMEDIATE) {
+            Text(
+                text = "Or Schedule For Later:",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+
             TimeUrgency.entries.forEach { urgency ->
                 val isSelected = urgencyType == urgency
                 Surface(
@@ -312,7 +465,7 @@ fun StepTiming(
                         .fillMaxWidth()
                         .clickable { onUrgencySelected(urgency) }
                 ) {
-                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Schedule,
                             contentDescription = null,
@@ -324,19 +477,141 @@ fun StepTiming(
                 }
             }
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Quick Future Presets:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                OutlinedButton(
+                    onClick = { showDateTimePicker() },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("btn_pick_date_time")
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Pick Date & Time")
+                }
+            }
+
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        val t = java.time.Instant.now().plusSeconds(15 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
+                        onExecutionTimeChange(t)
+                        onDeadlineTimeChange(java.time.Instant.now().plusSeconds(75 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString())
+                    },
+                    label = { Text("+15 Min") },
+                    modifier = Modifier.testTag("chip_preset_15min")
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        val t = java.time.Instant.now().plusSeconds(60 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
+                        onExecutionTimeChange(t)
+                        onDeadlineTimeChange(java.time.Instant.now().plusSeconds(120 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString())
+                    },
+                    label = { Text("+1 Hour") },
+                    modifier = Modifier.testTag("chip_preset_1hour")
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        val t = java.time.Instant.now().plusSeconds(3 * 60 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString()
+                        onExecutionTimeChange(t)
+                        onDeadlineTimeChange(java.time.Instant.now().plusSeconds(4 * 60 * 60).truncatedTo(java.time.temporal.ChronoUnit.MINUTES).toString())
+                    },
+                    label = { Text("+3 Hours") }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        val cal = java.util.Calendar.getInstance().apply {
+                            set(java.util.Calendar.HOUR_OF_DAY, 18)
+                            set(java.util.Calendar.MINUTE, 0)
+                            set(java.util.Calendar.SECOND, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                            if (timeInMillis <= System.currentTimeMillis() + 60_000L) {
+                                add(java.util.Calendar.DAY_OF_YEAR, 1)
+                            }
+                        }
+                        val t = java.time.Instant.ofEpochMilli(cal.timeInMillis).toString()
+                        onExecutionTimeChange(t)
+                        onDeadlineTimeChange(java.time.Instant.ofEpochMilli(cal.timeInMillis + 3600000L).toString())
+                    },
+                    label = { Text("6:00 PM Today/Tomorrow") }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = {
+                        val cal = java.util.Calendar.getInstance().apply {
+                            add(java.util.Calendar.DAY_OF_YEAR, 1)
+                            set(java.util.Calendar.HOUR_OF_DAY, 9)
+                            set(java.util.Calendar.MINUTE, 0)
+                            set(java.util.Calendar.SECOND, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        val t = java.time.Instant.ofEpochMilli(cal.timeInMillis).toString()
+                        onExecutionTimeChange(t)
+                        onDeadlineTimeChange(java.time.Instant.ofEpochMilli(cal.timeInMillis + 7200000L).toString())
+                    },
+                    label = { Text("Tomorrow 9:00 AM") },
+                    modifier = Modifier.testTag("chip_preset_tomorrow")
+                )
+                FilterChip(
+                    selected = executionTime.isBlank() && deadlineTime.isBlank(),
+                    onClick = {
+                        onExecutionTimeChange("")
+                        onDeadlineTimeChange("")
+                    },
+                    label = { Text("Flexible / No Time") }
+                )
+            }
+
             OutlinedTextField(
                 value = executionTime,
                 onValueChange = onExecutionTimeChange,
-                label = { Text("Scheduled Execution Time (e.g. 06:00 AM or ISO)") },
-                placeholder = { Text("2026-10-17T06:00:00Z") },
-                modifier = Modifier.fillMaxWidth()
+                isError = timingErrorMessage != null,
+                label = { Text("Scheduled Execution Time") },
+                placeholder = { Text("e.g. 2026-10-19T10:00:00Z or select preset above") },
+                supportingText = {
+                    if (timingErrorMessage != null) {
+                        Text(timingErrorMessage, color = MaterialTheme.colorScheme.error)
+                    } else if (displayPreview != null) {
+                        Text("Device Time: $displayPreview", color = MaterialTheme.colorScheme.primary)
+                    } else {
+                        Text("Compare complete date-time in device timezone. Leave blank for flexible.")
+                    }
+                },
+                trailingIcon = {
+                    if (timingErrorMessage != null) {
+                        Icon(Icons.Default.ErrorOutline, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
+                    } else {
+                        IconButton(onClick = { showDateTimePicker() }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Select Date & Time")
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("input_execution_time")
             )
 
             OutlinedTextField(
                 value = deadlineTime,
                 onValueChange = onDeadlineTimeChange,
                 label = { Text("Deadline / Cutoff Time (Optional)") },
-                placeholder = { Text("2026-10-17T07:00:00Z") },
+                placeholder = { Text("e.g. 2026-10-19T11:00:00Z") },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -808,8 +1083,13 @@ fun StepReviewCreate(
     alarmType: AlarmType,
     advanceReminders: List<Int>,
     validationErrors: List<String>,
+    onNavigateToScheduling: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val hasTimingError = validationErrors.any {
+        it.contains("execution time", ignoreCase = true) || it.contains("deadline", ignoreCase = true) || it.contains("passed", ignoreCase = true)
+    }
+
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
             text = "Step 9: Review & Create",
@@ -821,7 +1101,7 @@ fun StepReviewCreate(
             Card(
                 colors = CardDefaults.cardColors(containerColor = TaskzError.copy(alpha = 0.15f)),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("card_review_validation_errors")
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -832,6 +1112,20 @@ fun StepReviewCreate(
                     Spacer(modifier = Modifier.height(6.dp))
                     validationErrors.forEach { err ->
                         Text("• $err", style = MaterialTheme.typography.bodySmall, color = TaskzError)
+                    }
+
+                    if (hasTimingError) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onNavigateToScheduling,
+                            colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("btn_return_to_scheduling")
+                        ) {
+                            Icon(Icons.Default.Schedule, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Change Scheduling (Step 3)", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -846,7 +1140,12 @@ fun StepReviewCreate(
                 ReviewRow("Task Title", title)
                 ReviewRow("Task Type", taskType.label)
                 ReviewRow("Importance", importance.label)
-                ReviewRow("Execution Time", if (taskType == TaskType.IMMEDIATE) "Immediate" else executionTime.ifBlank { "Not set" })
+                ReviewRow(
+                    label = "Execution Time",
+                    value = if (taskType == TaskType.IMMEDIATE) "⚡ Immediate (Now)" else executionTime.ifBlank { "Flexible / Not set" },
+                    isHighlightedError = hasTimingError,
+                    onEditClick = if (taskType != TaskType.IMMEDIATE) onNavigateToScheduling else null
+                )
                 ReviewRow("Deadline", deadlineTime.ifBlank { "None" })
                 ReviewRow("Response Type", responseType.label)
                 ReviewRow("LAN Scope", if (lanList.isEmpty()) "Single Assignee / All" else lanList.joinToString(", "))
@@ -859,12 +1158,67 @@ fun StepReviewCreate(
 }
 
 @Composable
-fun ReviewRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+fun ReviewRow(
+    label: String,
+    value: String,
+    isHighlightedError: Boolean = false,
+    onEditClick: (() -> Unit)? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (isHighlightedError) TaskzError.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (isHighlightedError) Modifier.testTag("row_highlighted_error") else Modifier)
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(if (isHighlightedError) 8.dp else 0.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isHighlightedError) {
+                    Icon(
+                        Icons.Default.ErrorOutline,
+                        contentDescription = "Error",
+                        tint = TaskzError,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isHighlightedError) TaskzError else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (isHighlightedError) FontWeight.SemiBold else FontWeight.Normal
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isHighlightedError) TaskzError else MaterialTheme.colorScheme.onSurface
+                )
+                if (onEditClick != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    IconButton(
+                        onClick = onEditClick,
+                        modifier = Modifier
+                            .size(24.dp)
+                            .testTag("btn_edit_${label.replace(" ", "_").lowercase()}")
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit $label",
+                            modifier = Modifier.size(16.dp),
+                            tint = if (isHighlightedError) TaskzError else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
     }
 }

@@ -56,12 +56,13 @@ class SupabaseClient(
     ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val internalEmail = SupabaseConfig.toInternalAuthEmail(employeeId)
+            val normalized = SupabaseConfig.normalizeEmployeeId(employeeId)
+            val internalEmail = SupabaseConfig.toInternalAuthEmail(normalized)
             val jsonBody = JSONObject().apply {
                 put("email", internalEmail)
                 put("password", password)
                 put("data", JSONObject().apply {
-                    put("employee_id", employeeId.trim())
+                    put("employee_id", normalized)
                     put("full_name", fullName.trim())
                     put("mobile", mobile.trim())
                 })
@@ -79,12 +80,17 @@ class SupabaseClient(
 
             if (!response.isSuccessful) {
                 val errorMsg = parseErrorMessage(responseBody, "Sign up failed (${response.code})")
-                if (response.code == 429 || errorMsg.contains("rate limit", ignoreCase = true) || errorMsg.contains("over_email_send_rate_limit", ignoreCase = true)) {
+                if (response.code == 429 ||
+                    errorMsg.contains("rate limit", ignoreCase = true) ||
+                    errorMsg.contains("over_email_send_rate_limit", ignoreCase = true) ||
+                    errorMsg.contains("email_address_invalid", ignoreCase = true) ||
+                    (errorMsg.contains("invalid", ignoreCase = true) && errorMsg.contains("email", ignoreCase = true))
+                ) {
                     return@withContext Result.failure(
                         IOException(
-                            "SUPABASE_EMAIL_RATE_LIMIT: Supabase email rate limit exceeded. " +
-                            "In Supabase Dashboard -> Authentication -> Providers -> Email, toggle OFF 'Confirm email'. " +
-                            "Since Taskz uses Employee ID login, email confirmation is not needed."
+                            "Email confirmation is enabled in your Supabase project. " +
+                            "In Supabase Dashboard -> Authentication -> Providers -> Email, please toggle OFF 'Confirm email'. " +
+                            "Since Taskz uses Employee ID + Password login, email confirmation must be disabled."
                         )
                     )
                 }
@@ -134,9 +140,13 @@ class SupabaseClient(
     ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
+            val normalized = SupabaseConfig.normalizeEmployeeId(employeeId)
             val candidateEmails = listOf(
-                SupabaseConfig.toInternalAuthEmail(employeeId),
-                SupabaseConfig.toLegacyAuthEmail(employeeId)
+                SupabaseConfig.toInternalAuthEmail(normalized),
+                SupabaseConfig.toLegacyAuthEmail(normalized),
+                "emp_${normalized.lowercase()}@taskzapp.org",
+                "${normalized.lowercase()}@taskzapp.org",
+                "${normalized.lowercase()}@taskzapp.com"
             )
 
             var lastErrorMsg = "Login failed"
@@ -298,7 +308,7 @@ class SupabaseClient(
             checkConfig()
             val body = JSONObject().apply {
                 put("id", profile.id)
-                put("employee_id", profile.employeeId.trim())
+                put("employee_id", SupabaseConfig.normalizeEmployeeId(profile.employeeId))
                 put("full_name", profile.fullName.trim())
                 put("mobile", profile.mobile.trim())
                 if (!profile.profilePhotoPath.isNullOrBlank()) {

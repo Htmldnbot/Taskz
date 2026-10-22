@@ -45,8 +45,8 @@ class AuthViewModel(
     val resetRequestState: StateFlow<ResetRequestUiState> = _resetRequestState.asStateFlow()
 
     fun login(employeeId: String, password: String) {
-        val trimmedEmpId = employeeId.trim()
-        if (trimmedEmpId.isBlank()) {
+        val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
+        if (normalizedEmpId.isBlank()) {
             _loginState.value = AuthUiState.Error("Please enter your Employee ID.")
             return
         }
@@ -57,7 +57,7 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
-            val result = authRepository.login(trimmedEmpId, password)
+            val result = authRepository.login(normalizedEmpId, password)
             result.fold(
                 onSuccess = { profile ->
                     _loginState.value = AuthUiState.Success(profile)
@@ -83,17 +83,21 @@ class AuthViewModel(
         confirmPassword: String,
         selectedPhotoUri: Uri?
     ) {
-        val trimmedEmpId = employeeId.trim()
+        val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
         val trimmedName = fullName.trim()
         val trimmedMobile = mobile.trim()
 
         // Validation
-        if (trimmedEmpId.length < 3) {
-            _signUpState.value = AuthUiState.Error("Employee ID must be at least 3 characters.")
+        if (normalizedEmpId.length < 2 || normalizedEmpId.length > 40) {
+            _signUpState.value = AuthUiState.Error("Employee ID must be between 2 and 40 characters.")
             return
         }
-        if (trimmedName.isBlank()) {
-            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+        if (!normalizedEmpId.matches(Regex("^[A-Z0-9._-]+$"))) {
+            _signUpState.value = AuthUiState.Error("Employee ID may only contain letters, numbers, dots, underscores, or hyphens.")
+            return
+        }
+        if (trimmedName.length < 2) {
+            _signUpState.value = AuthUiState.Error("Please enter your full name (at least 2 characters).")
             return
         }
         val normalizedMobile = normalizeMobile(trimmedMobile)
@@ -123,7 +127,7 @@ class AuthViewModel(
             }
 
             val result = authRepository.signUp(
-                employeeId = trimmedEmpId,
+                employeeId = normalizedEmpId,
                 password = password,
                 fullName = trimmedName,
                 mobile = normalizedMobile,

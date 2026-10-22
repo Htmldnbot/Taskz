@@ -147,12 +147,98 @@ data class TaskItem(
         }
 
     companion object {
-        fun parseIsoToMillis(isoString: String): Long? {
+        const val PAST_TIME_ERROR_MESSAGE = "Selected execution time has already passed. Please choose a future date and time."
+
+        fun validateExecutionTime(executionTimeStr: String, nowMillis: Long = System.currentTimeMillis()): String? {
+            if (executionTimeStr.isBlank()) return null
+            val parsedMillis = parseIsoToMillis(executionTimeStr)
+                ?: return "Invalid execution date/time format. Please choose a valid date and time."
+            if (parsedMillis < nowMillis) {
+                return PAST_TIME_ERROR_MESSAGE
+            }
+            return null
+        }
+
+        fun formatForDisplay(isoOrDateString: String): String? {
+            val millis = parseIsoToMillis(isoOrDateString) ?: return null
             return try {
-                java.time.Instant.parse(isoString).toEpochMilli()
-            } catch (e: Exception) {
+                val zdt = java.time.Instant.ofEpochMilli(millis).atZone(java.time.ZoneId.systemDefault())
+                val formatter = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy, hh:mm a (z)")
+                zdt.format(formatter)
+            } catch (_: Exception) {
                 null
             }
+        }
+
+        fun parseIsoToMillis(isoString: String): Long? {
+            if (isoString.isBlank()) return null
+            val trimmed = isoString.trim()
+            val defaultTz = java.util.TimeZone.getDefault()
+            val defaultZoneId = java.time.ZoneId.systemDefault()
+
+            // 1. Try standard Instant (e.g. 2026-10-19T10:00:00Z)
+            try {
+                return java.time.Instant.parse(trimmed).toEpochMilli()
+            } catch (_: Exception) {}
+
+            // 2. Try OffsetDateTime (e.g. 2026-10-19T10:00:00+05:30)
+            try {
+                return java.time.OffsetDateTime.parse(trimmed).toInstant().toEpochMilli()
+            } catch (_: Exception) {}
+
+            // 3. Try ZonedDateTime
+            try {
+                return java.time.ZonedDateTime.parse(trimmed).toInstant().toEpochMilli()
+            } catch (_: Exception) {}
+
+            // 4. Try LocalDateTime at device zone
+            try {
+                return java.time.LocalDateTime.parse(trimmed).atZone(defaultZoneId).toInstant().toEpochMilli()
+            } catch (_: Exception) {}
+
+            // 5. Try standard date & time patterns using device timezone
+            val patterns = listOf(
+                "yyyy-MM-dd HH:mm:ss",
+                "yyyy-MM-dd HH:mm",
+                "yyyy-MM-dd'T'HH:mm",
+                "yyyy-MM-dd hh:mm a",
+                "MMM d, yyyy, hh:mm a",
+                "MMM d, yyyy, HH:mm",
+                "yyyy-MM-dd"
+            )
+            for (pattern in patterns) {
+                try {
+                    val sdf = java.text.SimpleDateFormat(pattern, java.util.Locale.US).apply {
+                        timeZone = defaultTz
+                    }
+                    val parsed = sdf.parse(trimmed)
+                    if (parsed != null) {
+                        return parsed.time
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // 6. Time only fallback (hh:mm a or HH:mm) on today's date in device timezone
+            try {
+                val cal = java.util.Calendar.getInstance(defaultTz)
+                val timeSdf = if (trimmed.contains("AM", ignoreCase = true) || trimmed.contains("PM", ignoreCase = true)) {
+                    java.text.SimpleDateFormat("hh:mm a", java.util.Locale.US)
+                } else {
+                    java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+                }
+                timeSdf.timeZone = defaultTz
+                val parsedTime = timeSdf.parse(trimmed)
+                if (parsedTime != null) {
+                    val timeCal = java.util.Calendar.getInstance(defaultTz).apply { time = parsedTime }
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, timeCal.get(java.util.Calendar.HOUR_OF_DAY))
+                    cal.set(java.util.Calendar.MINUTE, timeCal.get(java.util.Calendar.MINUTE))
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                    return cal.timeInMillis
+                }
+            } catch (_: Exception) {}
+
+            return null
         }
     }
 }

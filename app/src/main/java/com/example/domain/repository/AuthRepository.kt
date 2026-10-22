@@ -35,7 +35,7 @@ class AuthRepository(
         photoBytes: ByteArray? = null,
         photoFilename: String? = null
     ): Result<UserProfile> {
-        val trimmedEmpId = employeeId.trim().uppercase()
+        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
         val authResult = supabaseClient.signUp(
             employeeId = trimmedEmpId,
             password = password,
@@ -125,7 +125,7 @@ class AuthRepository(
      * 4. Cache in Room & DataStore.
      */
     suspend fun login(employeeId: String, password: String): Result<UserProfile> {
-        val trimmedEmpId = employeeId.trim().uppercase()
+        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
         val loginResult = supabaseClient.login(trimmedEmpId, password)
         val session = loginResult.getOrElse { networkErr ->
             val cached = profileDao.getCachedProfile()?.toDomain()
