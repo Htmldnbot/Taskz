@@ -1060,6 +1060,59 @@ class SupabaseClient(
     }
 
     /**
+     * Resolves an employeeId string (e.g. "EMP1024") to their actual profiles.id UUID.
+     */
+    suspend fun resolveEmployeeToUuid(accessToken: String, idOrEmployeeId: String): Result<String> = withContext(Dispatchers.IO) {
+        val trimmed = idOrEmployeeId.trim()
+        if (trimmed.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Employee ID cannot be blank"))
+        }
+        val isUuid = try {
+            java.util.UUID.fromString(trimmed)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (isUuid) {
+            return@withContext Result.success(trimmed)
+        }
+
+        try {
+            checkConfig()
+            val encodedEmpId = java.net.URLEncoder.encode(trimmed, "UTF-8")
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/profiles?employee_id=eq.$encodedEmpId&select=id,is_active&limit=1")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException("Failed to query employee profile: ${response.code}"))
+            }
+
+            val array = JSONArray(body)
+            if (array.length() == 0) {
+                return@withContext Result.failure(NoSuchElementException("No employee profile found for: $trimmed"))
+            }
+
+            val obj = array.getJSONObject(0)
+            val uuid = obj.getString("id")
+            val isActive = obj.optBoolean("is_active", true)
+            if (!isActive) {
+                return@withContext Result.failure(IllegalStateException("Employee $trimmed is inactive"))
+            }
+
+            Result.success(uuid)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+
+    /**
      * Fetch groups from Supabase.
      */
     suspend fun fetchGroups(accessToken: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {

@@ -27,6 +27,9 @@ interface ProfileDao {
     @Query("SELECT * FROM cached_profile WHERE fullName LIKE '%' || :query || '%' OR employeeId LIKE '%' || :query || '%'")
     suspend fun searchProfiles(query: String): List<ProfileEntity>
 
+    @Query("SELECT * FROM cached_profile WHERE id = :idOrEmpId OR employeeId = :idOrEmpId LIMIT 1")
+    suspend fun findProfileByIdOrEmployeeId(idOrEmpId: String): ProfileEntity?
+
     @Query("DELETE FROM cached_profile")
     suspend fun clearProfile()
 }

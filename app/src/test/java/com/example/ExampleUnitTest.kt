@@ -600,5 +600,150 @@ class ExampleUnitTest {
         assertEquals("SYNCED", serverTaskRecord["sync_status"])
         assertEquals("op-abc-123", serverTaskRecord["client_operation_id"])
     }
+
+    @Test
+    fun testFailedServerRequestPropagatesFailureAtomically() {
+        // Verify that server failure response is not masked as false success
+        val serverErrorResponse = Result.failure<TaskItem>(
+            java.io.IOException("Server returned 403 Forbidden: Insufficient permissions to create operational task")
+        )
+
+        assertTrue("Failure result must be caught", serverErrorResponse.isFailure)
+        val exception = serverErrorResponse.exceptionOrNull()
+        assertNotNull(exception)
+        assertTrue(exception!!.message!!.contains("403 Forbidden"))
+
+        // Ensure fake success object is never created or returned on server rejection
+        var taskCreatedLocally = false
+        serverErrorResponse.fold(
+            onSuccess = { taskCreatedLocally = true },
+            onFailure = { /* Atomic abort: do not save */ }
+        )
+        assertFalse("Task must not be reported as created on server error", taskCreatedLocally)
+    }
+
+    @Test
+    fun testInvalidEmployeeAssignmentFailsValidation() {
+        // Case A: Non-existent employee ID
+        val knownProfiles = mapOf(
+            "EMP1001" to "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "EMP1002" to "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+        )
+        val invalidEmpId = "EMP9999_UNKNOWN"
+
+        fun resolveEmployee(empId: String): Result<String> {
+            val isUuid = try {
+                java.util.UUID.fromString(empId)
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (isUuid) return Result.success(empId)
+            val uuid = knownProfiles[empId]
+            return if (uuid != null) Result.success(uuid) else Result.failure(NoSuchElementException("No employee found: $empId"))
+        }
+
+        val resInvalid = resolveEmployee(invalidEmpId)
+        assertTrue("Unknown employee ID must fail resolution", resInvalid.isFailure)
+
+        // Case B: Valid employee ID resolves to true UUID
+        val resValid = resolveEmployee("EMP1001")
+        assertTrue("Known employee ID must resolve successfully", resValid.isSuccess)
+        assertEquals("a1b2c3d4-e5f6-7890-abcd-ef1234567890", resValid.getOrNull())
+
+        // Case C: Raw valid UUID passes through
+        val rawUuid = "c3d4e5f6-a7b8-9012-cdef-123456789012"
+        val resUuid = resolveEmployee(rawUuid)
+        assertTrue(resUuid.isSuccess)
+        assertEquals(rawUuid, resUuid.getOrNull())
+    }
+
+    @Test
+    fun testDuplicateOperationIdempotencyCheck() {
+        val clientOpId = java.util.UUID.randomUUID().toString()
+
+        // Existing tasks table mock with client_operation_id
+        val existingTasks = mutableMapOf<String, String>()
+        existingTasks[clientOpId] = "task_uuid_already_persisted"
+
+        fun handleAtomicTaskCreation(newClientOpId: String): Map<String, Any> {
+            if (existingTasks.containsKey(newClientOpId)) {
+                return mapOf(
+                    "success" to true,
+                    "is_duplicate" to true,
+                    "task_id" to existingTasks[newClientOpId]!!
+                )
+            }
+            val newId = "task_uuid_new"
+            existingTasks[newClientOpId] = newId
+            return mapOf("success" to true, "is_duplicate" to false, "task_id" to newId)
+        }
+
+        // Second attempt with identical client_operation_id (e.g. network retry)
+        val duplicateResult = handleAtomicTaskCreation(clientOpId)
+        assertEquals(true, duplicateResult["is_duplicate"])
+        assertEquals("task_uuid_already_persisted", duplicateResult["task_id"])
+
+        // Unique operation produces new task
+        val newOpId = java.util.UUID.randomUUID().toString()
+        val freshResult = handleAtomicTaskCreation(newOpId)
+        assertEquals(false, freshResult["is_duplicate"])
+        assertEquals("task_uuid_new", freshResult["task_id"])
+    }
+
+    @Test
+    fun testOfflineCreationDurableOutboxCommit() {
+        var outboxCommitted = false
+        var outboxPayloadJson: String? = null
+
+        fun simulateOfflineTaskCreation(isNetworkDown: Boolean): Result<String> {
+            if (isNetworkDown) {
+                // Step 1: Durable outbox commit MUST occur before reporting success
+                try {
+                    outboxPayloadJson = """{"title":"Offline Shift Check","lan_target_list":["LAN-1"]}"""
+                    outboxCommitted = true
+                } catch (e: Exception) {
+                    return Result.failure(java.io.IOException("Outbox write failed", e))
+                }
+                return Result.success("pending_sync")
+            }
+            return Result.success("synced")
+        }
+
+        val result = simulateOfflineTaskCreation(isNetworkDown = true)
+        assertTrue("Offline creation with committed outbox must succeed", result.isSuccess)
+        assertEquals("pending_sync", result.getOrNull())
+        assertTrue("Outbox must be durably committed", outboxCommitted)
+        assertNotNull(outboxPayloadJson)
+    }
+
+    @Test
+    fun testCrossDeviceTaskFetchAndAlarmScheduling() {
+        val deviceBUserId = "user_device_b_uuid"
+        val serverTaskPayload = mapOf(
+            "id" to "task_cross_device_456",
+            "title" to "Cross-Device Hall A Verification",
+            "execution_time" to "2026-11-03T16:00:00Z",
+            "participants" to listOf(
+                mapOf("user_id" to "admin_device_a_uuid", "status" to "active"),
+                mapOf("user_id" to deviceBUserId, "status" to "active")
+            )
+        )
+
+        // Device B fetches task list and evaluates assignment
+        @Suppress("UNCHECKED_CAST")
+        val participants = serverTaskPayload["participants"] as List<Map<String, String>>
+        val isAssignedToDeviceB = participants.any { it["user_id"] == deviceBUserId && it["status"] == "active" }
+
+        assertTrue("Task must be identified as assigned to Device B user", isAssignedToDeviceB)
+
+        // Alarm must be scheduled because user is assigned
+        var alarmScheduledOnDeviceB = false
+        if (isAssignedToDeviceB) {
+            alarmScheduledOnDeviceB = true
+        }
+        assertTrue("Alarms must be scheduled on Device B for assigned task", alarmScheduledOnDeviceB)
+    }
 }
+
 

@@ -243,10 +243,71 @@ class TaskRepository(
         maxMembers: Int? = null
     ): Result<TaskGroup> = withContext(Dispatchers.IO) {
         try {
-            val userId = getActiveUserId() ?: "local_creator"
+            val userId = getActiveUserId()
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required: No active user session found."))
+            }
             val userName = getActiveUserName()
             val userEmpId = getActiveUserEmployeeId()
             val groupId = UUID.randomUUID().toString()
+
+            val groupPayload = JSONObject().apply {
+                put("id", groupId)
+                put("title", title.trim())
+                if (!code.isNullOrBlank()) put("code", code.trim().uppercase())
+                if (!description.isNullOrBlank()) put("description", description.trim())
+                if (!startDate.isNullOrBlank()) put("start_date", startDate)
+                if (!endDate.isNullOrBlank()) put("end_date", endDate)
+                put("status", "active")
+                put("visibility", visibility)
+                put("allow_self_join", allowSelfJoin)
+                put("join_requires_approval", joinRequiresApproval)
+                put("notify_creator_on_join", notifyCreatorOnJoin)
+                if (maxMembers != null) put("max_members", maxMembers)
+                put("created_by", userId)
+            }
+
+            val token = getActiveAccessToken()
+            var finalStatus = "active"
+
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.createGroup(token, groupPayload)
+                if (remoteRes.isFailure) {
+                    val err = remoteRes.exceptionOrNull()
+                    val errMsg = err?.message ?: "Failed to create group on server"
+                    val isNetworkError = err is java.net.UnknownHostException ||
+                            err is java.net.ConnectException ||
+                            err is java.net.SocketTimeoutException ||
+                            errMsg.contains("offline", ignoreCase = true) ||
+                            errMsg.contains("Unable to resolve host", ignoreCase = true)
+
+                    if (isNetworkError) {
+                        try {
+                            TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
+                                com.example.data.local.entity.OutboxEventEntity(
+                                    eventId = groupId,
+                                    userId = userId,
+                                    taskId = groupId,
+                                    operationType = "GROUP_CREATION",
+                                    payloadJson = groupPayload.toString(),
+                                    syncStatus = "PENDING",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            com.example.sync.SyncWorker.enqueueSync(context)
+                            finalStatus = "pending_sync"
+                        } catch (oe: Exception) {
+                            return@withContext Result.failure(IOException("Failed to commit durable offline group operation: ${oe.message}", oe))
+                        }
+                    } else {
+                        // Server rejected (unauthorized, duplicate code, validation error) -> FAIL ATOMICALLY
+                        return@withContext Result.failure(IOException(errMsg, err))
+                    }
+                }
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+            }
+
             val group = TaskGroup(
                 id = groupId,
                 title = title.trim(),
@@ -254,7 +315,7 @@ class TaskRepository(
                 description = description?.trim()?.takeIf { it.isNotBlank() },
                 startDate = startDate,
                 endDate = endDate,
-                status = "active",
+                status = finalStatus,
                 visibility = visibility,
                 allowSelfJoin = allowSelfJoin,
                 joinRequiresApproval = joinRequiresApproval,
@@ -283,30 +344,6 @@ class TaskRepository(
                 joinedAt = nowIso()
             )
             groupMembersStore.getOrPut(groupId) { mutableListOf() }.add(creatorMember)
-
-            // Persist to Supabase if session active
-            val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                val groupPayload = JSONObject().apply {
-                    put("id", groupId)
-                    put("title", title.trim())
-                    if (!code.isNullOrBlank()) put("code", code.trim().uppercase())
-                    if (!description.isNullOrBlank()) put("description", description.trim())
-                    if (!startDate.isNullOrBlank()) put("start_date", startDate)
-                    if (!endDate.isNullOrBlank()) put("end_date", endDate)
-                    put("status", "active")
-                    put("visibility", visibility)
-                    put("allow_self_join", allowSelfJoin)
-                    put("join_requires_approval", joinRequiresApproval)
-                    put("notify_creator_on_join", notifyCreatorOnJoin)
-                    if (maxMembers != null) put("max_members", maxMembers)
-                    put("created_by", userId)
-                }
-                val remoteRes = supabaseClient.createGroup(token, groupPayload)
-                if (remoteRes.isFailure) {
-                    Log.w(tag, "Remote group creation note: ${remoteRes.exceptionOrNull()?.message}")
-                }
-            }
 
             Result.success(group)
         } catch (e: Exception) {
@@ -521,8 +558,65 @@ class TaskRepository(
                 return@withContext Result.failure(IOException("Shift end time must be after start time"))
             }
 
-            val userId = getActiveUserId() ?: "creator"
+            val userId = getActiveUserId()
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required: No active user session found."))
+            }
             val shiftId = UUID.randomUUID().toString()
+
+            val shiftPayload = JSONObject().apply {
+                put("id", shiftId)
+                put("group_id", groupId)
+                put("name", name.trim())
+                if (shiftNumber != null) put("shift_number", shiftNumber)
+                put("starts_at", startsAt)
+                put("ends_at", endsAt)
+                if (!notes.isNullOrBlank()) put("notes", notes.trim())
+                put("status", status)
+                put("created_by", userId)
+            }
+
+            val token = getActiveAccessToken()
+            var finalStatus = status
+
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.createShift(token, shiftPayload)
+                if (remoteRes.isFailure) {
+                    val err = remoteRes.exceptionOrNull()
+                    val errMsg = err?.message ?: "Failed to create shift on server"
+                    val isNetworkError = err is java.net.UnknownHostException ||
+                            err is java.net.ConnectException ||
+                            err is java.net.SocketTimeoutException ||
+                            errMsg.contains("offline", ignoreCase = true) ||
+                            errMsg.contains("Unable to resolve host", ignoreCase = true)
+
+                    if (isNetworkError) {
+                        try {
+                            TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
+                                com.example.data.local.entity.OutboxEventEntity(
+                                    eventId = shiftId,
+                                    userId = userId,
+                                    taskId = shiftId,
+                                    operationType = "SHIFT_CREATION",
+                                    payloadJson = shiftPayload.toString(),
+                                    syncStatus = "PENDING",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            com.example.sync.SyncWorker.enqueueSync(context)
+                            finalStatus = "pending_sync"
+                        } catch (oe: Exception) {
+                            return@withContext Result.failure(IOException("Failed to commit durable offline shift operation: ${oe.message}", oe))
+                        }
+                    } else {
+                        // Server rejected -> FAIL ATOMICALLY
+                        return@withContext Result.failure(IOException(errMsg, err))
+                    }
+                }
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+            }
+
             val shift = Shift(
                 id = shiftId,
                 groupId = groupId,
@@ -531,27 +625,11 @@ class TaskRepository(
                 startsAt = startsAt,
                 endsAt = endsAt,
                 notes = notes?.trim()?.takeIf { it.isNotBlank() },
-                status = status,
+                status = finalStatus,
                 createdBy = userId
             )
 
             shiftDao.insertShift(ShiftEntity.fromDomain(shift))
-
-            val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                val shiftPayload = JSONObject().apply {
-                    put("id", shiftId)
-                    put("group_id", groupId)
-                    put("name", name.trim())
-                    if (shiftNumber != null) put("shift_number", shiftNumber)
-                    put("starts_at", startsAt)
-                    put("ends_at", endsAt)
-                    if (!notes.isNullOrBlank()) put("notes", notes.trim())
-                    put("status", status)
-                    put("created_by", userId)
-                }
-                supabaseClient.createShift(token, shiftPayload)
-            }
 
             Result.success(shift)
         } catch (e: Exception) {
@@ -630,7 +708,10 @@ class TaskRepository(
             val newEndsAt = formatMillisToDateTime(newEndMillis)
 
             val newShiftId = UUID.randomUUID().toString()
-            val userId = getActiveUserId() ?: "creator"
+            val userId = getActiveUserId()
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required: No active user session found."))
+            }
 
             val newShift = Shift(
                 id = newShiftId,
@@ -660,7 +741,21 @@ class TaskRepository(
                     syncTasksFromServer(token)
                     val syncedShift = getShiftById(newShiftId) ?: newShift
                     return@withContext Result.success(syncedShift)
+                } else {
+                    val err = remoteRes.exceptionOrNull()
+                    val errMsg = err?.message ?: "Shift copy failed on server"
+                    val isNetworkError = err is java.net.UnknownHostException ||
+                            err is java.net.ConnectException ||
+                            err is java.net.SocketTimeoutException ||
+                            errMsg.contains("offline", ignoreCase = true) ||
+                            errMsg.contains("Unable to resolve host", ignoreCase = true)
+
+                    if (!isNetworkError) {
+                        return@withContext Result.failure(IOException(errMsg, err))
+                    }
                 }
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
             }
 
             shiftDao.insertShift(ShiftEntity.fromDomain(newShift))
@@ -802,6 +897,44 @@ class TaskRepository(
         )
     }
 
+    /**
+     * Resolves an employee identifier (which could be an employeeId or UUID) to their profiles.id UUID.
+     */
+    suspend fun resolveToProfileUuid(idOrEmpId: String): Result<String> = withContext(Dispatchers.IO) {
+        val trimmed = idOrEmpId.trim()
+        if (trimmed.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Employee ID cannot be blank"))
+        }
+
+        // 1. If already valid UUID format, return immediately
+        val isUuid = try {
+            UUID.fromString(trimmed)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (isUuid) {
+            return@withContext Result.success(trimmed)
+        }
+
+        // 2. Check local ProfileDao cache
+        val localProfile = profileDao.findProfileByIdOrEmployeeId(trimmed)
+        if (localProfile != null) {
+            return@withContext Result.success(localProfile.id)
+        }
+
+        // 3. Query remote Supabase profiles if token is available
+        val token = getActiveAccessToken()
+        if (!token.isNullOrBlank()) {
+            val remoteRes = supabaseClient.resolveEmployeeToUuid(token, trimmed)
+            if (remoteRes.isSuccess) {
+                return@withContext remoteRes
+            }
+        }
+
+        Result.failure(NoSuchElementException("Employee '$trimmed' could not be resolved to a valid user account."))
+    }
+
     suspend fun createTask(
         groupId: String,
         shiftId: String?,
@@ -861,11 +994,27 @@ class TaskRepository(
             }
 
             val shift = shiftId?.let { getShiftById(it) }
-            val userId = getActiveUserId() ?: "creator"
+            val userId = getActiveUserId()
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required: No active user session found."))
+            }
             val userName = getActiveUserName()
             val userEmpId = getActiveUserEmployeeId()
             val taskId = UUID.randomUUID().toString()
             val clientOperationId = UUID.randomUUID().toString()
+
+            // Resolve all selected employee identifiers to real profiles.id UUIDs
+            val resolvedEmployeeUuids = mutableListOf<String>()
+            for (empId in selectedEmployeeIds) {
+                val resolveRes = resolveToProfileUuid(empId)
+                if (resolveRes.isFailure) {
+                    val err = resolveRes.exceptionOrNull()
+                    return@withContext Result.failure(
+                        err ?: IllegalArgumentException("Employee '$empId' could not be resolved to a valid profile UUID.")
+                    )
+                }
+                resolvedEmployeeUuids.add(resolveRes.getOrThrow())
+            }
 
             val task = TaskItem(
                 id = taskId,
@@ -944,7 +1093,7 @@ class TaskRepository(
                         put("response_form_schema", JSONArray(responseFormSchemaJson))
                     } catch (_: Exception) {}
                 }
-                put("assigned_user_ids", JSONArray(selectedEmployeeIds))
+                put("assigned_user_ids", JSONArray(resolvedEmployeeUuids))
                 val reqsArr = JSONArray()
                 for ((rId, cnt) in requirements) {
                     reqsArr.put(JSONObject().apply {
@@ -987,29 +1136,18 @@ class TaskRepository(
                                 )
                             )
                             com.example.sync.SyncWorker.enqueueSync(context)
+                            serverSavedTask = task.copy(status = "pending_sync")
                         } catch (oe: Exception) {
-                            Log.w(tag, "Failed to enqueue offline task creation: ${oe.message}")
+                            // Must not report success if durable outbox commit failed!
+                            return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
                         }
                     } else {
-                        return@withContext Result.failure(IOException(errMsg))
+                        // Real server failure (validation error, inactive user, etc.) -> FAIL ATOMICALLY
+                        return@withContext Result.failure(IOException(errMsg, error))
                     }
                 }
             } else {
-                try {
-                    TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
-                        com.example.data.local.entity.OutboxEventEntity(
-                            eventId = clientOperationId,
-                            userId = userId,
-                            taskId = taskId,
-                            operationType = "TASK_CREATION",
-                            payloadJson = taskPayload.toString(),
-                            syncStatus = "PENDING",
-                            createdAt = System.currentTimeMillis()
-                        )
-                    )
-                } catch (oe: Exception) {
-                    Log.w(tag, "Failed to enqueue outbox event: ${oe.message}")
-                }
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
             }
 
             // Save to Room cache
@@ -1900,16 +2038,28 @@ class TaskRepository(
     // Manual Employee Assignment by Creator/Admin
     suspend fun assignEmployee(taskId: String, userId: String, roleId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val task = getTaskById(taskId) ?: return@withContext Result.failure(IOException("Task not found"))
-            val targetProfile = profileDao.searchProfiles("").find { it.id == userId }
-                ?: return@withContext Result.failure(IOException("Employee profile not found"))
+            val assignerId = getActiveUserId()
+            if (assignerId.isNullOrBlank()) {
+                return@withContext Result.failure(IllegalStateException("Authentication required: No active user session found."))
+            }
 
-            if (!targetProfile.isActive) {
+            // Resolve employee identifier (empId or UUID) to profiles.id UUID
+            val resolvedRes = resolveToProfileUuid(userId)
+            if (resolvedRes.isFailure) {
+                return@withContext Result.failure(resolvedRes.exceptionOrNull() ?: IllegalArgumentException("Employee could not be resolved to a profile UUID"))
+            }
+            val resolvedUserUuid = resolvedRes.getOrThrow()
+
+            val task = getTaskById(taskId) ?: return@withContext Result.failure(IOException("Task not found"))
+            val targetProfile = profileDao.findProfileByIdOrEmployeeId(resolvedUserUuid)
+                ?: profileDao.searchProfiles("").find { it.id == resolvedUserUuid }
+
+            if (targetProfile != null && !targetProfile.isActive) {
                 return@withContext Result.failure(IOException("Employee account is inactive"))
             }
 
             val parts = participantsStore[taskId] ?: emptyList()
-            if (parts.any { it.userId == userId && it.status == "active" }) {
+            if (parts.any { it.userId == resolvedUserUuid && it.status == "active" }) {
                 return@withContext Result.failure(IOException("Employee is already an active participant in this task"))
             }
 
@@ -1922,17 +2072,29 @@ class TaskRepository(
                 return@withContext Result.failure(IOException("Role ${role.name} has no available vacancies"))
             }
 
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.assignUserToTask(token, taskId, resolvedUserUuid, roleId)
+                if (remoteRes.isFailure) {
+                    val err = remoteRes.exceptionOrNull()
+                    return@withContext Result.failure(IOException(err?.message ?: "Failed to assign user on server", err))
+                }
+                syncTasksFromServer(token)
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+            }
+
             val participant = TaskParticipant(
                 id = UUID.randomUUID().toString(),
                 taskId = taskId,
-                userId = userId,
+                userId = resolvedUserUuid,
                 roleId = roleId,
                 roleName = role.name,
                 source = "assigned",
                 status = "active",
-                assignedBy = getActiveUserId(),
-                userName = targetProfile.fullName,
-                userEmployeeId = targetProfile.employeeId,
+                assignedBy = assignerId,
+                userName = targetProfile?.fullName ?: "Assigned Employee",
+                userEmployeeId = targetProfile?.employeeId ?: "",
                 joinedAt = nowIso()
             )
 
@@ -1945,18 +2107,10 @@ class TaskRepository(
                     taskId = taskId,
                     actorName = assignerName,
                     eventType = "USER_ASSIGNED",
-                    message = "$assignerName assigned ${targetProfile.fullName} as ${role.name}",
+                    message = "$assignerName assigned ${targetProfile?.fullName ?: "employee"} as ${role.name}",
                     createdAt = nowIso()
                 )
             )
-
-            val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                val remoteRes = supabaseClient.assignUserToTask(token, taskId, userId, roleId)
-                if (remoteRes.isSuccess) {
-                    syncTasksFromServer(token)
-                }
-            }
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1967,19 +2121,31 @@ class TaskRepository(
     // Leave Task
     suspend fun leaveTask(taskId: String, reason: String?): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val userId = getActiveUserId() ?: return@withContext Result.failure(IOException("Not signed in"))
+            val userId = getActiveUserId() ?: return@withContext Result.failure(IllegalStateException("Authentication required: Not signed in"))
             val userName = getActiveUserName()
 
-            val parts = participantsStore[taskId] ?: return@withContext Result.failure(IOException("No participants found"))
-            val myPart = parts.find { it.userId == userId && it.status == "active" }
-                ?: return@withContext Result.failure(IOException("You are not an active participant of this task"))
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.leaveTask(token, taskId, reason)
+                if (remoteRes.isFailure) {
+                    val err = remoteRes.exceptionOrNull()
+                    return@withContext Result.failure(IOException(err?.message ?: "Failed to leave task on server", err))
+                }
+                syncTasksFromServer(token)
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+            }
 
-            val index = parts.indexOf(myPart)
-            parts[index] = myPart.copy(
-                status = "left",
-                leftAt = nowIso(),
-                leftReason = reason?.trim()?.takeIf { it.isNotBlank() }
-            )
+            val parts = participantsStore[taskId]
+            val myPart = parts?.find { it.userId == userId && it.status == "active" }
+            if (myPart != null) {
+                val index = parts.indexOf(myPart)
+                parts[index] = myPart.copy(
+                    status = "left",
+                    leftAt = nowIso(),
+                    leftReason = reason?.trim()?.takeIf { it.isNotBlank() }
+                )
+            }
 
             activityLogStore.getOrPut(taskId) { mutableListOf() }.add(
                 TaskActivityLog(
@@ -1991,12 +2157,6 @@ class TaskRepository(
                     createdAt = nowIso()
                 )
             )
-
-            val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                supabaseClient.leaveTask(token, taskId, reason)
-                syncTasksFromServer(token)
-            }
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -2023,6 +2183,18 @@ class TaskRepository(
                 return@withContext Result.failure(IOException("Active participant record not found"))
             }
 
+            val tokenRem = getActiveAccessToken()
+            if (!tokenRem.isNullOrBlank()) {
+                val remoteRes = supabaseClient.removeParticipant(tokenRem, participantId, reason)
+                if (remoteRes.isFailure) {
+                    val err = remoteRes.exceptionOrNull()
+                    return@withContext Result.failure(IOException(err?.message ?: "Failed to remove participant on server", err))
+                }
+                syncTasksFromServer(tokenRem)
+            } else {
+                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+            }
+
             val adminName = getActiveUserName()
             val list = participantsStore[targetTaskId]!!
             val index = list.indexOfFirst { it.id == participantId }
@@ -2043,12 +2215,6 @@ class TaskRepository(
                 )
             )
 
-            val tokenRem = getActiveAccessToken()
-            if (!tokenRem.isNullOrBlank()) {
-                supabaseClient.removeParticipant(tokenRem, participantId, reason)
-                syncTasksFromServer(tokenRem)
-            }
-
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -2059,13 +2225,14 @@ class TaskRepository(
     suspend fun completeTask(taskId: String, note: String?): Result<String> = withContext(Dispatchers.IO) {
         try {
             val task = getTaskById(taskId) ?: return@withContext Result.failure(IOException("Task not found"))
+            val userId = getActiveUserId() ?: return@withContext Result.failure(IllegalStateException("Authentication required: Not signed in"))
             val userName = getActiveUserName()
 
             if (task.requiresCompletionConfirmation) {
                 val req = TaskCompletionRequest(
                     id = UUID.randomUUID().toString(),
                     taskId = taskId,
-                    requestedBy = getActiveUserId() ?: "user",
+                    requestedBy = userId,
                     requesterName = userName,
                     note = note?.trim()?.takeIf { it.isNotBlank() },
                     status = "pending",

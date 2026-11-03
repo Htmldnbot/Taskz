@@ -92,6 +92,41 @@ class SyncWorker(
                         }
                     }
 
+                    "GROUP_CREATION" -> {
+                        val payload = JSONObject(event.payloadJson)
+                        val res = supabaseClient.createGroup(token, payload)
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val serverGroupId = serverObj.optString("id", event.taskId)
+                            outboxDao.markEventSynced(event.id, serverGroupId, System.currentTimeMillis())
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Group creation sync error"
+                            val isPermanent = err.contains("duplicate", ignoreCase = true) ||
+                                    err.contains("unauthorized", ignoreCase = true)
+                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
+                        }
+                    }
+
+                    "SHIFT_CREATION" -> {
+                        val payload = JSONObject(event.payloadJson)
+                        val res = supabaseClient.createShift(token, payload)
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val serverShiftId = serverObj.optString("id", event.taskId)
+                            outboxDao.markEventSynced(event.id, serverShiftId, System.currentTimeMillis())
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Shift creation sync error"
+                            val isPermanent = err.contains("duplicate", ignoreCase = true) ||
+                                    err.contains("unauthorized", ignoreCase = true)
+                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
+                        }
+                    }
+
+
                     "TASK_RESPONSE", "PROGRESS_UPDATE", "LAN_CONFIRMATION", "COMPLETION_REQUEST" -> {
                         val payload = JSONObject(event.payloadJson)
                         val res = supabaseClient.submitTaskResponse(
