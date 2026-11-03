@@ -19,6 +19,7 @@ import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.AuthViewModel
 import com.example.ui.groups.GroupsViewModel
 import com.example.ui.home.HomeViewModel
+import com.example.ui.incidents.SystemIncidentViewModel
 import com.example.ui.main.MainShell
 import com.example.ui.profile.ProfileViewModel
 import com.example.ui.shifts.ShiftsViewModel
@@ -88,6 +89,7 @@ fun TaskzAppNavigation() {
             val groupsViewModel: GroupsViewModel = viewModel(factory = viewModelFactory)
             val shiftsViewModel: ShiftsViewModel = viewModel(factory = viewModelFactory)
             val workRolesViewModel: WorkRolesViewModel = viewModel(factory = viewModelFactory)
+            val systemIncidentViewModel: SystemIncidentViewModel = viewModel(factory = viewModelFactory)
 
             MainShell(
                 homeViewModel = homeViewModel,
@@ -97,6 +99,7 @@ fun TaskzAppNavigation() {
                 groupsViewModel = groupsViewModel,
                 shiftsViewModel = shiftsViewModel,
                 workRolesViewModel = workRolesViewModel,
+                systemIncidentViewModel = systemIncidentViewModel,
                 onLogoutSuccess = {
                     navController.navigate("auth") {
                         popUpTo("main") { inclusive = true }

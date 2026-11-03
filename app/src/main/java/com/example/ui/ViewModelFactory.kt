@@ -8,6 +8,7 @@ import com.example.ui.admin.WorkRolesViewModel
 import com.example.ui.auth.AuthViewModel
 import com.example.ui.groups.GroupsViewModel
 import com.example.ui.home.HomeViewModel
+import com.example.ui.incidents.SystemIncidentViewModel
 import com.example.ui.profile.ProfileViewModel
 import com.example.ui.shifts.ShiftsViewModel
 import com.example.ui.splash.SplashViewModel
@@ -46,6 +47,9 @@ class TaskzViewModelFactory(
             }
             modelClass.isAssignableFrom(WorkRolesViewModel::class.java) -> {
                 WorkRolesViewModel(app.taskRepository) as T
+            }
+            modelClass.isAssignableFrom(SystemIncidentViewModel::class.java) -> {
+                SystemIncidentViewModel(app.systemIncidentRepository) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

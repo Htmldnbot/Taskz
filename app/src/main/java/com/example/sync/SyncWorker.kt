@@ -134,6 +134,27 @@ class SyncWorker(
                         }
                     }
 
+                    "SYSTEM_INCIDENT_SUBMISSION" -> {
+                        val localIncident = db.systemIncidentDao().getIncidentBySubmissionId(event.eventId)
+                        if (localIncident != null) {
+                            val res = supabaseClient.submitSystemIncident(
+                                accessToken = token,
+                                incident = localIncident.toDomain()
+                            )
+                            if (res.isSuccess) {
+                                outboxDao.markEventSynced(event.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                                db.systemIncidentDao().updateSyncStatus(localIncident.id, "SYNCED", null)
+                            } else {
+                                val err = res.exceptionOrNull()?.message ?: "Unknown incident sync error"
+                                outboxDao.markEventFailed(event.id, err, "FAILED_RETRYABLE", System.currentTimeMillis())
+                                db.systemIncidentDao().updateSyncStatus(localIncident.id, "ERROR", err)
+                                hasRetryableFailure = true
+                            }
+                        } else {
+                            outboxDao.markEventSynced(event.id, "RECORD_REMOVED", System.currentTimeMillis())
+                        }
+                    }
+
                     else -> {
                         outboxDao.markEventFailed(
                             event.id,

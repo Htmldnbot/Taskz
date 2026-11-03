@@ -2,6 +2,8 @@ package com.example.data.remote
 
 import android.util.Log
 import com.example.core.model.PasswordResetRequest
+import com.example.core.model.SystemIncident
+import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.UserProfile
 import com.example.core.network.SupabaseConfig
 import kotlinx.coroutines.Dispatchers
@@ -951,5 +953,149 @@ class SupabaseClient(
         } catch (_: Exception) {
             fallback
         }
+    }
+
+    // ==========================================
+    // SYSTEM INCIDENT REGISTER API
+    // ==========================================
+
+    suspend fun submitSystemIncident(
+        accessToken: String,
+        incident: SystemIncident
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val payload = JSONObject().apply {
+                put("id", incident.id)
+                put("submission_id", incident.submissionId)
+                if (!incident.centreId.isNullOrBlank()) put("centre_id", incident.centreId)
+                if (!incident.examSessionId.isNullOrBlank()) put("exam_session_id", incident.examSessionId)
+                put("state_name", incident.stateName)
+                put("district_name", incident.districtName)
+                put("centre_code", incident.centreCode)
+                put("centre_name", incident.centreName)
+                put("exam_date", incident.examDate)
+                put("exam_name", incident.examName)
+                put("shift_name", incident.shiftName)
+                put("lan_name", incident.lanName)
+                put("mac_address", incident.macAddress)
+                put("ip_address", incident.ipAddress)
+                put("locked_system_number", incident.lockedSystemNumber)
+                if (incident.candidateShifted && !incident.newlyAllocatedSystemNumber.isNullOrBlank()) {
+                    put("newly_allocated_system_number", incident.newlyAllocatedSystemNumber)
+                } else {
+                    put("newly_allocated_system_number", JSONObject.NULL)
+                }
+                put("candidate_shifted", incident.candidateShifted)
+                put("incident_time", java.time.Instant.ofEpochMilli(incident.incidentTimestampMillis).toString())
+                put("reason", incident.reason)
+                put("it_manager_name", incident.itManagerName)
+                put("created_by", incident.createdBy)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/system_incidents")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "resolution=merge-duplicates,return=representation")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(responseBody, "Failed to submit system incident (Code: ${response.code})"))
+                )
+            }
+
+            val jsonArray = JSONArray(responseBody)
+            val resultObj = if (jsonArray.length() > 0) jsonArray.getJSONObject(0) else payload
+            Result.success(resultObj)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchSystemIncidents(
+        accessToken: String,
+        centreId: String? = null
+    ): Result<List<SystemIncident>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val urlBuilder = StringBuilder("${baseUrl()}/rest/v1/system_incidents?select=*&order=created_at.desc")
+            if (!centreId.isNullOrBlank()) {
+                urlBuilder.append("&centre_id=eq.$centreId")
+            }
+
+            val request = Request.Builder()
+                .url(urlBuilder.toString())
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(responseBody, "Failed to fetch incidents"))
+                )
+            }
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<SystemIncident>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(parseSystemIncidentJson(obj))
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun parseSystemIncidentJson(json: JSONObject): SystemIncident {
+        val incidentTimeRaw = json.optString("incident_time")
+        val timestampMillis = try {
+            java.time.Instant.parse(incidentTimeRaw).toEpochMilli()
+        } catch (_: Exception) {
+            System.currentTimeMillis()
+        }
+        val displayTime = try {
+            val zdt = java.time.Instant.ofEpochMilli(timestampMillis).atZone(java.time.ZoneId.systemDefault())
+            zdt.format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"))
+        } catch (_: Exception) {
+            "10:00 AM"
+        }
+
+        return SystemIncident(
+            id = json.optString("id"),
+            submissionId = json.optString("submission_id"),
+            centreId = json.optString("centre_id").takeIf { it.isNotBlank() },
+            examSessionId = json.optString("exam_session_id").takeIf { it.isNotBlank() },
+            stateName = json.optString("state_name"),
+            districtName = json.optString("district_name"),
+            centreCode = json.optString("centre_code"),
+            centreName = json.optString("centre_name"),
+            examDate = json.optString("exam_date"),
+            examName = json.optString("exam_name"),
+            shiftName = json.optString("shift_name"),
+            lanName = json.optString("lan_name"),
+            macAddress = json.optString("mac_address"),
+            ipAddress = json.optString("ip_address"),
+            lockedSystemNumber = json.optString("locked_system_number"),
+            newlyAllocatedSystemNumber = json.optString("newly_allocated_system_number").takeIf { it.isNotBlank() && it != "null" },
+            candidateShifted = json.optBoolean("candidate_shifted", false),
+            incidentTime = displayTime,
+            incidentTimestampMillis = timestampMillis,
+            reason = json.optString("reason"),
+            itManagerName = json.optString("it_manager_name"),
+            createdBy = json.optString("created_by"),
+            syncStatus = "SYNCED"
+        )
     }
 }

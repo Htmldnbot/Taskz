@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HourglassTop
@@ -58,6 +59,7 @@ fun HomeScreen(
     onNavigateToGroups: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToAdmin: () -> Unit,
+    onNavigateToIncidents: () -> Unit = {},
     onSignedOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -278,6 +280,17 @@ fun HomeScreen(
             tag = "Events",
             onClick = onNavigateToGroups,
             testTag = "home_module_groups"
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        ModuleTile(
+            title = "System Incident Register",
+            subtitle = "Record computer system failures, candidate shifts, and technical exam logs",
+            icon = Icons.Default.DesktopWindows,
+            tag = "Technical",
+            onClick = onNavigateToIncidents,
+            testTag = "home_module_incidents"
         )
 
         Spacer(modifier = Modifier.height(10.dp))

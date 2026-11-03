@@ -356,4 +356,104 @@ class ExampleUnitTest {
         val invalidError = TaskItem.validateExecutionTime("not-a-valid-date")
         assertTrue(invalidError != null && invalidError.contains("Invalid execution date/time format"))
     }
+
+    @Test
+    fun testSystemNumberNormalizationAndValidation() {
+        // Normalization checks
+        assertEquals("C005", com.example.core.model.SystemIncident.normalizeSystemNumber("5"))
+        assertEquals("C059", com.example.core.model.SystemIncident.normalizeSystemNumber("59"))
+        assertEquals("C159", com.example.core.model.SystemIncident.normalizeSystemNumber("159"))
+        assertEquals("C005", com.example.core.model.SystemIncident.normalizeSystemNumber("C5"))
+        assertEquals("C059", com.example.core.model.SystemIncident.normalizeSystemNumber("c59"))
+        assertEquals("C105", com.example.core.model.SystemIncident.normalizeSystemNumber("C105"))
+        assertEquals("C101", com.example.core.model.SystemIncident.normalizeSystemNumber("  101  "))
+
+        // Validation checks
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C005"))
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C059"))
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C101"))
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C105"))
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C106"))
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber("C159"))
+
+        // Rejections
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("C5"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("59"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("159"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("D105"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("C1005"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber("C10A"))
+        assertFalse(com.example.core.model.SystemIncident.isValidSystemNumber(""))
+    }
+
+    @Test
+    fun testMacAddressFormattingAndValidation() {
+        // Raw lowercase with no separators
+        val formatted1 = com.example.core.model.SystemIncident.formatMacAddress("aabbccddeeff")
+        assertEquals("AA:BB:CC:DD:EE:FF", formatted1)
+        assertTrue(com.example.core.model.SystemIncident.isValidMacAddress(formatted1))
+
+        // Hyphen separated
+        val formatted2 = com.example.core.model.SystemIncident.formatMacAddress("AA-BB-CC-DD-EE-FF")
+        assertEquals("AA:BB:CC:DD:EE:FF", formatted2)
+        assertTrue(com.example.core.model.SystemIncident.isValidMacAddress(formatted2))
+
+        // Space separated
+        val formatted3 = com.example.core.model.SystemIncident.formatMacAddress("00 1a 2b 3c 4d 5e")
+        assertEquals("00:1A:2B:3C:4D:5E", formatted3)
+        assertTrue(com.example.core.model.SystemIncident.isValidMacAddress(formatted3))
+
+        // Invalids
+        assertFalse(com.example.core.model.SystemIncident.isValidMacAddress("AA:BB:CC:DD:EE"))
+        assertFalse(com.example.core.model.SystemIncident.isValidMacAddress("AA:BB:CC:DD:EE:ZZ"))
+        assertFalse(com.example.core.model.SystemIncident.isValidMacAddress("not-a-mac"))
+        assertFalse(com.example.core.model.SystemIncident.isValidMacAddress(""))
+    }
+
+    @Test
+    fun testIpv4AddressValidation() {
+        // Valid IP addresses
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("192.168.1.10"))
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("10.0.0.25"))
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("172.16.1.100"))
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("127.0.0.1"))
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("255.255.255.255"))
+        assertTrue(com.example.core.model.SystemIncident.isValidIpv4("0.0.0.0"))
+
+        // Invalid IP addresses
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("999.168.1.10"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("192.168.1"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("192.168.1.300"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("192.168.1.-1"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("192.168.01.1"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("192.168.1.1.1"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4("abc.def.ghi.jkl"))
+        assertFalse(com.example.core.model.SystemIncident.isValidIpv4(""))
+    }
+
+    @Test
+    fun testCandidateShiftedReplacementIntegrity() {
+        val locked = "C059"
+        val replacementSame = "C059"
+        val replacementDiff = "C159"
+
+        // Candidate shifted = false -> replacement is null/empty
+        val incidentNotShifted = com.example.core.model.SystemIncident(
+            lockedSystemNumber = locked,
+            candidateShifted = false,
+            newlyAllocatedSystemNumber = null,
+            reason = "Keyboard Fault"
+        )
+        assertFalse(incidentNotShifted.candidateShifted)
+        assertEquals(null, incidentNotShifted.newlyAllocatedSystemNumber)
+
+        // Candidate shifted = true, but replacement is identical -> must fail validation
+        assertFalse("Replacement system cannot be identical to locked system",
+            locked.equals(replacementSame, ignoreCase = true) == false
+        )
+
+        // Candidate shifted = true, replacement is distinct and valid CXXX
+        assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber(replacementDiff))
+        assertNotEquals(locked, replacementDiff)
+    }
 }

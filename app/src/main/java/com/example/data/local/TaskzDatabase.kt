@@ -22,6 +22,9 @@ import com.example.data.local.entity.ProfileEntity
 import com.example.data.local.entity.ScheduledAlarmRecordEntity
 import com.example.data.local.entity.ShiftEntity
 import com.example.data.local.entity.SyncMetadataEntity
+import com.example.data.local.dao.SystemIncidentDao
+import com.example.data.local.entity.SystemIncidentAuditEntity
+import com.example.data.local.entity.SystemIncidentEntity
 import com.example.data.local.entity.TaskAcknowledgementEntity
 import com.example.data.local.entity.TaskEntity
 import com.example.data.local.entity.TaskGroupEntity
@@ -40,9 +43,11 @@ import com.example.data.local.entity.WorkRoleEntity
         NotificationEntity::class,
         TaskResponseEntity::class,
         TaskAcknowledgementEntity::class,
-        ScheduledAlarmRecordEntity::class
+        ScheduledAlarmRecordEntity::class,
+        SystemIncidentEntity::class,
+        SystemIncidentAuditEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class TaskzDatabase : RoomDatabase() {
@@ -56,6 +61,7 @@ abstract class TaskzDatabase : RoomDatabase() {
     abstract fun notificationDao(): NotificationDao
     abstract fun taskResponseDao(): TaskResponseDao
     abstract fun scheduledAlarmDao(): ScheduledAlarmDao
+    abstract fun systemIncidentDao(): SystemIncidentDao
 
     companion object {
         @Volatile
@@ -161,6 +167,67 @@ abstract class TaskzDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS system_incidents (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        submissionId TEXT NOT NULL,
+                        centreId TEXT,
+                        examSessionId TEXT,
+                        stateName TEXT NOT NULL,
+                        districtName TEXT NOT NULL,
+                        centreCode TEXT NOT NULL,
+                        centreName TEXT NOT NULL,
+                        examDate TEXT NOT NULL,
+                        examName TEXT NOT NULL,
+                        shiftName TEXT NOT NULL,
+                        lanName TEXT NOT NULL,
+                        macAddress TEXT NOT NULL,
+                        ipAddress TEXT NOT NULL,
+                        lockedSystemNumber TEXT NOT NULL,
+                        newlyAllocatedSystemNumber TEXT,
+                        candidateShifted INTEGER NOT NULL,
+                        incidentTime TEXT NOT NULL,
+                        incidentTimestampMillis INTEGER NOT NULL,
+                        reason TEXT NOT NULL,
+                        itManagerName TEXT NOT NULL,
+                        createdBy TEXT NOT NULL,
+                        creatorName TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        updatedBy TEXT,
+                        syncStatus TEXT NOT NULL DEFAULT 'PENDING',
+                        lastSyncError TEXT
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_system_incidents_submissionId ON system_incidents (submissionId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_centreId ON system_incidents (centreId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_centreCode ON system_incidents (centreCode)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_examDate ON system_incidents (examDate)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_lanName ON system_incidents (lanName)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_syncStatus ON system_incidents (syncStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incidents_createdAt ON system_incidents (createdAt)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS system_incident_audits (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        incidentId TEXT NOT NULL,
+                        changedBy TEXT NOT NULL,
+                        changedByName TEXT,
+                        changedAt INTEGER NOT NULL,
+                        action TEXT NOT NULL,
+                        previousValues TEXT,
+                        newValues TEXT
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incident_audits_incidentId ON system_incident_audits (incidentId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_system_incident_audits_changedAt ON system_incident_audits (changedAt)")
+            }
+        }
+
         fun getInstance(context: Context): TaskzDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -168,7 +235,7 @@ abstract class TaskzDatabase : RoomDatabase() {
                     TaskzDatabase::class.java,
                     "taskz_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration(dropAllTables = false)
                     .build()
                 INSTANCE = instance

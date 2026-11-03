@@ -10,6 +10,7 @@ import com.example.domain.repository.AdminRepository
 import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ProfileRepository
 import com.example.domain.repository.SyncRepository
+import com.example.domain.repository.SystemIncidentRepository
 import com.example.domain.repository.TaskRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +44,9 @@ class TaskzApplication : Application() {
         private set
 
     lateinit var taskRepository: TaskRepository
+        private set
+
+    lateinit var systemIncidentRepository: SystemIncidentRepository
         private set
 
     private val applicationScope = CoroutineScope(Dispatchers.IO)
@@ -98,6 +102,17 @@ class TaskzApplication : Application() {
             scheduledAlarmDao = database.scheduledAlarmDao(),
             supabaseClient = supabaseClient,
             userPrefs = userPreferences,
+            context = this
+        )
+
+        systemIncidentRepository = SystemIncidentRepository(
+            systemIncidentDao = database.systemIncidentDao(),
+            taskGroupDao = database.taskGroupDao(),
+            shiftDao = database.shiftDao(),
+            outboxDao = database.outboxDao(),
+            supabaseClient = supabaseClient,
+            userPrefs = userPreferences,
+            networkMonitor = networkMonitor,
             context = this
         )
 

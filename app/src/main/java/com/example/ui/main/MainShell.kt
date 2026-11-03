@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,6 +62,8 @@ import com.example.ui.groups.GroupsScreen
 import com.example.ui.groups.GroupsViewModel
 import com.example.ui.home.HomeScreen
 import com.example.ui.home.HomeViewModel
+import com.example.ui.incidents.SystemIncidentRegisterScreen
+import com.example.ui.incidents.SystemIncidentViewModel
 import com.example.ui.profile.ProfileScreen
 import com.example.ui.profile.ProfileViewModel
 import com.example.ui.shifts.CopyShiftScreen
@@ -82,6 +86,7 @@ enum class MainTab(
 ) {
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_tab_home"),
     TASKS("Tasks", Icons.Filled.Assignment, Icons.Outlined.Assignment, "nav_tab_tasks"),
+    INCIDENTS("Incident Register", Icons.Filled.DesktopWindows, Icons.Outlined.DesktopWindows, "nav_tab_incidents"),
     PROFILE("Profile", Icons.Filled.Person, Icons.Outlined.Person, "nav_tab_profile"),
     ADMIN("Admin", Icons.Filled.AdminPanelSettings, Icons.Outlined.AdminPanelSettings, "nav_tab_admin")
 }
@@ -116,6 +121,7 @@ fun MainShell(
     groupsViewModel: GroupsViewModel,
     shiftsViewModel: ShiftsViewModel,
     workRolesViewModel: WorkRolesViewModel,
+    systemIncidentViewModel: SystemIncidentViewModel,
     onLogoutSuccess: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -136,9 +142,9 @@ fun MainShell(
 
     val visibleTabs = rememberSaveable(profile?.isAdmin) {
         if (profile?.isAdmin == true) {
-            listOf(MainTab.HOME, MainTab.TASKS, MainTab.PROFILE, MainTab.ADMIN)
+            listOf(MainTab.HOME, MainTab.TASKS, MainTab.INCIDENTS, MainTab.PROFILE, MainTab.ADMIN)
         } else {
-            listOf(MainTab.HOME, MainTab.TASKS, MainTab.PROFILE)
+            listOf(MainTab.HOME, MainTab.TASKS, MainTab.INCIDENTS, MainTab.PROFILE)
         }
     }
 
@@ -156,7 +162,7 @@ fun MainShell(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = if (currentTab == MainTab.HOME) "Taskz" else currentTab.title,
+                                text = if (currentTab == MainTab.HOME) "Taskz" else if (currentTab == MainTab.INCIDENTS) "System Incident Register" else currentTab.title,
                                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                             )
                         }
@@ -346,6 +352,7 @@ fun MainShell(
                             onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
                             onNavigateToProfile = { currentTab = MainTab.PROFILE },
                             onNavigateToAdmin = { currentTab = MainTab.ADMIN },
+                            onNavigateToIncidents = { currentTab = MainTab.INCIDENTS },
                             onSignedOut = onLogoutSuccess
                         )
                         MainTab.TASKS -> TasksScreen(
@@ -353,6 +360,9 @@ fun MainShell(
                             onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
                             onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
                             onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) }
+                        )
+                        MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
+                            viewModel = systemIncidentViewModel
                         )
                         MainTab.PROFILE -> ProfileScreen(
                             viewModel = profileViewModel,
