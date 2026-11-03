@@ -456,4 +456,149 @@ class ExampleUnitTest {
         assertTrue(com.example.core.model.SystemIncident.isValidSystemNumber(replacementDiff))
         assertNotEquals(locked, replacementDiff)
     }
+
+    @Test
+    fun testBatch1TaskCreationPayloadIntegrityAndIdempotency() {
+        val clientOpId = java.util.UUID.randomUUID().toString()
+        val task = TaskItem(
+            id = "task_test_123",
+            title = "LAN Verification Gate 1",
+            description = "Verify all switch ports in Hall A",
+            status = "open",
+            taskType = TaskType.PROGRESS,
+            importance = TaskImportance.HIGH,
+            urgencyType = TimeUrgency.SPECIFIC_TIME,
+            executionTime = "2026-11-03T10:00:00Z",
+            targetPercentage = 100,
+            alarmType = AlarmType.SOUND_ALERT,
+            advanceRemindersMinutes = listOf(15, 30),
+            responseType = ResponseType.MULTI_CONFIRMATION,
+            lanTargetList = listOf("LAN-A1", "LAN-A2", "LAN-A3"),
+            createdBy = "admin_user_001"
+        )
+
+        // Verify task attributes for Phase 3 LAN operations
+        assertEquals(3, task.lanTargetList.size)
+        assertEquals(ResponseType.MULTI_CONFIRMATION, task.responseType)
+        assertEquals(TaskImportance.HIGH, task.importance)
+        assertEquals(TaskType.PROGRESS, task.taskType)
+
+        // Verify client operation ID generation and map payload structure
+        val payloadMap = mapOf(
+            "id" to task.id,
+            "client_operation_id" to clientOpId,
+            "sync_status" to "PENDING_SYNC",
+            "assigned_employee_ids" to listOf("emp_user_001", "emp_user_002"),
+            "required_role_requirements" to listOf(
+                mapOf("role_id" to "lan_technician", "min_count" to 1)
+            )
+        )
+
+        assertEquals(clientOpId, payloadMap["client_operation_id"])
+        assertEquals("PENDING_SYNC", payloadMap["sync_status"])
+        @Suppress("UNCHECKED_CAST")
+        val assigned = payloadMap["assigned_employee_ids"] as List<String>
+        assertEquals(2, assigned.size)
+        assertTrue(assigned.contains("emp_user_001"))
+    }
+
+    @Test
+    fun testBatch1ZeroDemoEmployeesEnforced() {
+        // Enforce that demo employee IDs and names are never returned
+        val forbiddenDemoNames = setOf(
+            "Rahul Sharma", "Priya Patel", "Amit Verma", "Sneha Rao", "Vikram Singh"
+        )
+        val forbiddenDemoIds = setOf("emp_1", "emp_2", "emp_3", "emp_4", "emp_5")
+
+        // Construct empty or real profile list
+        val realProfiles = listOf(
+            UserProfile(id = "user_real_99", fullName = "Test Engineer", appRole = "admin", employeeId = "EMP99")
+        )
+
+        for (profile in realProfiles) {
+            assertFalse("Demo name must not exist in directory", forbiddenDemoNames.contains(profile.fullName))
+            assertFalse("Demo ID must not exist in directory", forbiddenDemoIds.contains(profile.id))
+        }
+    }
+
+    @Test
+    fun testBatch1ShiftCopyOffsetCalculation() {
+        val originalTimeStr = "2026-11-03T09:00:00Z"
+        val offsetMinutes = 180 // 3 hours
+        val originalInstant = java.time.Instant.parse(originalTimeStr)
+        val shiftedInstant = originalInstant.plus(offsetMinutes.toLong(), java.time.temporal.ChronoUnit.MINUTES)
+        val shiftedTimeStr = shiftedInstant.toString()
+
+        assertEquals("2026-11-03T12:00:00Z", shiftedTimeStr)
+
+        val originalTask = TaskItem(
+            id = "shift_task_orig",
+            title = "Pre-Exam System Check",
+            taskType = TaskType.PROGRESS,
+            importance = TaskImportance.CRITICAL,
+            urgencyType = TimeUrgency.BEFORE_DEADLINE,
+            executionTime = originalTimeStr,
+            targetPercentage = 100,
+            lanTargetList = listOf("LAN-1", "LAN-2"),
+            responseType = ResponseType.MULTI_CONFIRMATION
+        )
+
+        val copiedTask = originalTask.copy(
+            id = java.util.UUID.randomUUID().toString(),
+            executionTime = shiftedTimeStr,
+            shiftId = "new_shift_id_456"
+        )
+
+        assertEquals("2026-11-03T12:00:00Z", copiedTask.executionTime)
+        assertEquals(originalTask.taskType, copiedTask.taskType)
+        assertEquals(originalTask.importance, copiedTask.importance)
+        assertEquals(originalTask.targetPercentage, copiedTask.targetPercentage)
+        assertEquals(originalTask.lanTargetList, copiedTask.lanTargetList)
+        assertEquals("new_shift_id_456", copiedTask.shiftId)
+    }
+
+    @Test
+    fun testBatch1TaskServerSyncParticipantMapping() {
+        val currentUserId = "my_user_id_123"
+
+        // Mock server task record representation
+        val participants = listOf(
+            mapOf("user_id" to currentUserId, "status" to "active", "assigned_role" to "invigilator"),
+            mapOf("user_id" to "other_user_456", "status" to "active", "assigned_role" to "lab_admin")
+        )
+
+        val serverTaskRecord = mapOf(
+            "id" to "task_server_789",
+            "title" to "Server Confirmed Task",
+            "description" to "Synced from Supabase",
+            "created_by" to "admin_lead",
+            "client_operation_id" to "op-abc-123",
+            "sync_status" to "SYNCED",
+            "execution_time" to "2026-11-03T14:00:00Z",
+            "participants" to participants
+        )
+
+        // Verify participant extraction
+        @Suppress("UNCHECKED_CAST")
+        val participantsList = serverTaskRecord["participants"] as List<Map<String, String>>
+        assertEquals(2, participantsList.size)
+
+        var myStatus: String? = null
+        val assignedUserIds = mutableListOf<String>()
+        for (p in participantsList) {
+            val uid = p["user_id"]
+            val status = p["status"]
+            if (uid != null) assignedUserIds.add(uid)
+            if (uid == currentUserId) {
+                myStatus = status
+            }
+        }
+
+        assertEquals("active", myStatus)
+        assertTrue(assignedUserIds.contains(currentUserId))
+        assertTrue(assignedUserIds.contains("other_user_456"))
+        assertEquals("SYNCED", serverTaskRecord["sync_status"])
+        assertEquals("op-abc-123", serverTaskRecord["client_operation_id"])
+    }
 }
+

@@ -95,6 +95,18 @@ class TasksViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    init {
+        refreshTasks()
+    }
+
+    fun refreshTasks() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            taskRepository.syncTasks()
+            _isLoading.value = false
+        }
+    }
+
     // Filtered tasks state derived from tab, sub-filter, query, and tasks flow
     val filteredTasks: StateFlow<List<TaskItem>> = combine(
         allTasksFlow,

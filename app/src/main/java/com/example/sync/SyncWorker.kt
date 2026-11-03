@@ -75,6 +75,23 @@ class SyncWorker(
 
             try {
                 when (event.operationType) {
+                    "TASK_CREATION" -> {
+                        val payload = JSONObject(event.payloadJson)
+                        val res = supabaseClient.createTaskAtomic(token, payload)
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val serverTaskId = serverObj.optString("task_id", event.taskId)
+                            outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
+                            val isPermanent = err.contains("not authorized", ignoreCase = true) ||
+                                    err.contains("inactive", ignoreCase = true)
+                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
+                        }
+                    }
+
                     "TASK_RESPONSE", "PROGRESS_UPDATE", "LAN_CONFIRMATION", "COMPLETION_REQUEST" -> {
                         val payload = JSONObject(event.payloadJson)
                         val res = supabaseClient.submitTaskResponse(

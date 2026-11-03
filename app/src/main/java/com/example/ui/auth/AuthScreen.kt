@@ -599,10 +599,16 @@ private fun SignUpForm(
             val isEmailRateLimit = errorMsg.contains("rate limit", ignoreCase = true) ||
                     errorMsg.contains("SUPABASE_EMAIL") ||
                     errorMsg.contains("Confirm email", ignoreCase = true)
+            val isNetworkIssue = errorMsg.contains("resolve host", ignoreCase = true) ||
+                    errorMsg.contains("failed to connect", ignoreCase = true) ||
+                    errorMsg.contains("timeout", ignoreCase = true) ||
+                    errorMsg.contains("unreachable", ignoreCase = true) ||
+                    errorMsg.contains("network", ignoreCase = true) ||
+                    errorMsg.contains("Server is unreachable", ignoreCase = true)
 
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isEmailRateLimit) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.errorContainer
+                    containerColor = if (isEmailRateLimit || isNetworkIssue) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.errorContainer
                 ),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
@@ -651,6 +657,37 @@ private fun SignUpForm(
                             ) {
                                 Text("Continue Offline", maxLines = 1)
                             }
+                        }
+                    } else if (isNetworkIssue) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Server Offline / Unreachable",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Backend server is currently unreachable. You can continue with full functionality in offline mode.",
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                onSignUpOffline(employeeId, fullName, mobile)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Continue in Offline Mode")
                         }
                     } else {
                         Text(

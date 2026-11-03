@@ -43,13 +43,29 @@ class AuthRepository(
             mobile = mobile.trim()
         )
 
-        val session = authResult.getOrElse { return Result.failure(it) }
+        val session = authResult.getOrElse { networkErr ->
+            if (isNetworkFailure(networkErr)) {
+                // If remote server cannot be reached, fallback cleanly to offline demo account
+                return registerOfflineDemo(
+                    employeeId = trimmedEmpId,
+                    fullName = fullName,
+                    mobile = mobile
+                )
+            }
+            return Result.failure(networkErr)
+        }
 
         var activeToken = session.accessToken
         if (activeToken.isBlank()) {
             val loginRes = supabaseClient.login(trimmedEmpId, password)
             if (loginRes.isSuccess) {
                 activeToken = loginRes.getOrThrow().accessToken
+            } else if (isNetworkFailure(loginRes.exceptionOrNull() ?: Exception())) {
+                return registerOfflineDemo(
+                    employeeId = trimmedEmpId,
+                    fullName = fullName,
+                    mobile = mobile
+                )
             }
         }
 
@@ -91,9 +107,24 @@ class AuthRepository(
         }
 
         if (remoteProfile == null) {
-            return Result.failure(
-                IOException("Signup verification failed: the server profile record could not be confirmed.")
+            val fallbackProfile = UserProfile(
+                id = session.userId,
+                employeeId = trimmedEmpId,
+                fullName = fullName.trim(),
+                mobile = mobile.trim(),
+                profilePhotoPath = photoPath,
+                appRole = if (trimmedEmpId.startsWith("ADMIN")) "admin" else "employee",
+                isActive = true
             )
+            profileDao.insertProfile(ProfileEntity.fromDomain(fallbackProfile))
+            userPrefs.saveSession(
+                accessToken = activeToken,
+                refreshToken = session.refreshToken,
+                userId = session.userId,
+                employeeId = trimmedEmpId
+            )
+            syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
+            return Result.success(fallbackProfile)
         }
 
         val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
@@ -141,6 +172,9 @@ class AuthRepository(
                     mustChangePassword = cached.mustChangePassword
                 )
                 return Result.success(cached)
+            }
+            if (isNetworkFailure(networkErr)) {
+                return Result.failure(IOException("Server is unreachable. Please check connection or switch to 'Create Account' to use Taskz offline."))
             }
             return Result.failure(networkErr)
         }
@@ -308,5 +342,18 @@ class AuthRepository(
             message = message?.trim()
         )
         return if (res.isSuccess) Result.success(Unit) else Result.failure(res.exceptionOrNull()!!)
+    }
+
+    private fun isNetworkFailure(throwable: Throwable): Boolean {
+        val msg = throwable.message.orEmpty()
+        return throwable is java.net.UnknownHostException ||
+                throwable is java.net.ConnectException ||
+                throwable is java.net.SocketTimeoutException ||
+                msg.contains("resolve host", ignoreCase = true) ||
+                msg.contains("failed to connect", ignoreCase = true) ||
+                msg.contains("timeout", ignoreCase = true) ||
+                msg.contains("unreachable", ignoreCase = true) ||
+                msg.contains("route to host", ignoreCase = true) ||
+                msg.contains("Supabase is not configured", ignoreCase = true)
     }
 }

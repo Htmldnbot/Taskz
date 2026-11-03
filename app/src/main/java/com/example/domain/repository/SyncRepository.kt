@@ -132,6 +132,14 @@ class SyncRepository(
         }
         profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile.copy(avatarSignedUrl = signedUrl)))
 
+        // Synchronize server tasks, groups, and shifts
+        try {
+            val taskRepo = com.example.TaskzApplication.instance.taskRepository
+            taskRepo.syncGroupsFromServer(token)
+            taskRepo.syncShiftsFromServer(token)
+            taskRepo.syncTasksFromServer(token)
+        } catch (_: Exception) {}
+
         // 2. Trigger WorkManager to flush outbox events for this active user
         SyncWorker.enqueueSync(context)
 

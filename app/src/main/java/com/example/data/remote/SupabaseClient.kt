@@ -73,6 +73,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/auth/v1/signup")
                 .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
                 .addHeader("Content-Type", "application/json")
                 .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -128,7 +129,7 @@ class SupabaseClient(
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Error during signUp", e)
+            Log.w(TAG, "Sign up request error: ${e.message}")
             Result.failure(e)
         }
     }
@@ -161,6 +162,7 @@ class SupabaseClient(
                 val request = Request.Builder()
                     .url("${baseUrl()}/auth/v1/token?grant_type=password")
                     .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer ${anonKey()}")
                     .addHeader("Content-Type", "application/json")
                     .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                     .build()
@@ -212,6 +214,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/auth/v1/token?grant_type=refresh_token")
                 .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
                 .addHeader("Content-Type", "application/json")
                 .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -294,7 +297,7 @@ class SupabaseClient(
             val item = jsonArray.getJSONObject(0)
             Result.success(parseProfileJson(item))
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching profile", e)
+            Log.w(TAG, "Notice fetching profile: ${e.message}")
             Result.failure(e)
         }
     }
@@ -545,6 +548,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/submit_password_reset_request")
                 .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -908,6 +912,559 @@ class SupabaseClient(
                 recentResponses = respList
             )
             Result.success(data)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ==========================================
+    // BATCH 1: SERVER-BACKED TASKS, GROUPS, SHIFTS & MULTI-USER API
+    // ==========================================
+
+    /**
+     * Atomically creates task on Supabase with idempotency via client_operation_id.
+     */
+    suspend fun createTaskAtomic(
+        accessToken: String,
+        taskPayload: JSONObject
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val requestBody = JSONObject().apply {
+                put("p_task", taskPayload)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/create_task_atomic")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(requestBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to create task on server (${response.code})")))
+            }
+
+            val json = JSONObject(responseBody)
+            Result.success(json)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch all tasks visible to current user (creator, assigned, or group member) from Supabase.
+     */
+    suspend fun fetchTasks(accessToken: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val url = "${baseUrl()}/rest/v1/tasks?select=*,task_participants(*),task_role_requirements(*),task_groups(id,title),shifts(id,name)&order=created_at.desc"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to fetch tasks (${response.code})")))
+            }
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<JSONObject>()
+            for (i in 0 until array.length()) {
+                list.add(array.getJSONObject(i))
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Search employee directory via Supabase RPC search_employee_directory.
+     * Returns real profiles matching query.
+     */
+    suspend fun searchEmployeeDirectory(
+        accessToken: String,
+        query: String
+    ): Result<List<UserProfile>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_query", query.trim())
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/search_employee_directory")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                // If RPC not found, fallback to direct profiles query
+                val fallbackReq = Request.Builder()
+                    .url("${baseUrl()}/rest/v1/profiles?select=*&is_active=eq.true&order=full_name.asc&limit=100")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .get()
+                    .build()
+                val fallbackResp = okHttpClient.newCall(fallbackReq).execute()
+                val fbBody = fallbackResp.body?.string() ?: ""
+                if (fallbackResp.isSuccessful) {
+                    val arr = JSONArray(fbBody)
+                    val res = mutableListOf<UserProfile>()
+                    for (i in 0 until arr.length()) {
+                        val p = parseProfileJson(arr.getJSONObject(i))
+                        if (query.isBlank() || p.fullName.contains(query, ignoreCase = true) || p.employeeId.contains(query, ignoreCase = true)) {
+                            res.add(p)
+                        }
+                    }
+                    return@withContext Result.success(res)
+                }
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Employee search failed")))
+            }
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<UserProfile>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    UserProfile(
+                        id = obj.optString("id"),
+                        employeeId = obj.optString("employee_id"),
+                        fullName = obj.optString("full_name"),
+                        mobile = obj.optString("mobile", ""),
+                        profilePhotoPath = obj.optString("profile_photo_path").takeIf { it.isNotBlank() },
+                        appRole = "employee",
+                        isActive = true
+                    )
+                )
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch groups from Supabase.
+     */
+    suspend fun fetchGroups(accessToken: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_groups?select=*,group_members(*)&order=created_at.desc")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to load groups")))
+            }
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<JSONObject>()
+            for (i in 0 until array.length()) {
+                list.add(array.getJSONObject(i))
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Create Group on Supabase.
+     */
+    suspend fun createGroup(
+        accessToken: String,
+        groupPayload: JSONObject
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_groups")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=representation")
+                .post(groupPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to create group on server")))
+            }
+
+            val array = JSONArray(responseBody)
+            if (array.length() > 0) {
+                Result.success(array.getJSONObject(0))
+            } else {
+                Result.success(groupPayload)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Update Group on Supabase.
+     */
+    suspend fun updateGroup(
+        accessToken: String,
+        groupId: String,
+        groupPayload: JSONObject
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_groups?id=eq.$groupId")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .patch(groupPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to update group on server")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch shifts from Supabase.
+     */
+    suspend fun fetchShifts(accessToken: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/shifts?select=*&order=starts_at.asc")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to load shifts")))
+            }
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<JSONObject>()
+            for (i in 0 until array.length()) {
+                list.add(array.getJSONObject(i))
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Create Shift on Supabase.
+     */
+    suspend fun createShift(
+        accessToken: String,
+        shiftPayload: JSONObject
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/shifts")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=representation")
+                .post(shiftPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to create shift on server")))
+            }
+
+            val array = JSONArray(responseBody)
+            if (array.length() > 0) {
+                Result.success(array.getJSONObject(0))
+            } else {
+                Result.success(shiftPayload)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Update Shift on Supabase.
+     */
+    suspend fun updateShift(
+        accessToken: String,
+        shiftId: String,
+        shiftPayload: JSONObject
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/shifts?id=eq.$shiftId")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .patch(shiftPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to update shift on server")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Copy shift with relative time offsets via Supabase RPC.
+     */
+    suspend fun copyShift(
+        accessToken: String,
+        sourceShiftId: String,
+        newShiftName: String,
+        offsetMinutes: Int,
+        copyManpower: Boolean = true,
+        copyAssignments: Boolean = false
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_source_shift", sourceShiftId)
+                put("p_new_name", newShiftName)
+                put("p_offset_minutes", offsetMinutes)
+                put("p_copy_manpower", copyManpower)
+                put("p_copy_assignments", copyAssignments)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/copy_shift")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string()?.trim('"', ' ', '\n', '\r') ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to copy shift on server")))
+            }
+
+            Result.success(responseBody)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Assign user to task via Supabase RPC.
+     */
+    suspend fun assignUserToTask(
+        accessToken: String,
+        taskId: String,
+        userId: String,
+        roleId: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task", taskId)
+                put("p_user", userId)
+                if (!roleId.isNullOrBlank()) {
+                    put("p_role", roleId)
+                }
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/assign_user_to_task")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to assign user to task")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Request task join via Supabase RPC.
+     */
+    suspend fun requestTaskJoin(
+        accessToken: String,
+        taskId: String,
+        roleId: String? = null,
+        message: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task", taskId)
+                if (!roleId.isNullOrBlank()) put("p_role", roleId)
+                if (!message.isNullOrBlank()) put("p_message", message)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/request_task_join")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: "{}"
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to submit join request")))
+            }
+            Result.success(JSONObject(responseBody))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Review task join request (approve or reject) via Supabase RPC.
+     */
+    suspend fun reviewTaskJoin(
+        accessToken: String,
+        requestId: String,
+        approve: Boolean
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_request", requestId)
+                put("p_approve", approve)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/review_task_join")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to review join request")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Leave task via Supabase RPC.
+     */
+    suspend fun leaveTask(
+        accessToken: String,
+        taskId: String,
+        reason: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_task", taskId)
+                if (!reason.isNullOrBlank()) put("p_reason", reason)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/leave_task")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to leave task")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Remove task participant via Supabase RPC.
+     */
+    suspend fun removeParticipant(
+        accessToken: String,
+        participantId: String,
+        reason: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("p_participant", participantId)
+                if (!reason.isNullOrBlank()) put("p_reason", reason)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/remove_task_participant")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to remove participant")))
+            }
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }

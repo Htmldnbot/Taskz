@@ -105,6 +105,10 @@ class TaskRepository(
         return profileDao.getCachedProfile()?.appRole == "admin"
     }
 
+    suspend fun getActiveAccessToken(): String? {
+        return userPrefs.getUserSession().accessToken?.takeIf { it.isNotBlank() }
+    }
+
     // ============================================================
     // WORK ROLES
     // ============================================================
@@ -280,6 +284,30 @@ class TaskRepository(
             )
             groupMembersStore.getOrPut(groupId) { mutableListOf() }.add(creatorMember)
 
+            // Persist to Supabase if session active
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val groupPayload = JSONObject().apply {
+                    put("id", groupId)
+                    put("title", title.trim())
+                    if (!code.isNullOrBlank()) put("code", code.trim().uppercase())
+                    if (!description.isNullOrBlank()) put("description", description.trim())
+                    if (!startDate.isNullOrBlank()) put("start_date", startDate)
+                    if (!endDate.isNullOrBlank()) put("end_date", endDate)
+                    put("status", "active")
+                    put("visibility", visibility)
+                    put("allow_self_join", allowSelfJoin)
+                    put("join_requires_approval", joinRequiresApproval)
+                    put("notify_creator_on_join", notifyCreatorOnJoin)
+                    if (maxMembers != null) put("max_members", maxMembers)
+                    put("created_by", userId)
+                }
+                val remoteRes = supabaseClient.createGroup(token, groupPayload)
+                if (remoteRes.isFailure) {
+                    Log.w(tag, "Remote group creation note: ${remoteRes.exceptionOrNull()?.message}")
+                }
+            }
+
             Result.success(group)
         } catch (e: Exception) {
             Result.failure(e)
@@ -318,6 +346,25 @@ class TaskRepository(
                 updatedAt = nowIso()
             )
             taskGroupDao.updateGroup(TaskGroupEntity.fromDomain(updated))
+
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val groupPayload = JSONObject().apply {
+                    put("title", title.trim())
+                    if (!code.isNullOrBlank()) put("code", code.trim().uppercase())
+                    if (!description.isNullOrBlank()) put("description", description.trim())
+                    if (!startDate.isNullOrBlank()) put("start_date", startDate)
+                    if (!endDate.isNullOrBlank()) put("end_date", endDate)
+                    put("status", status)
+                    put("visibility", visibility)
+                    put("allow_self_join", allowSelfJoin)
+                    put("join_requires_approval", joinRequiresApproval)
+                    put("notify_creator_on_join", notifyCreatorOnJoin)
+                    if (maxMembers != null) put("max_members", maxMembers)
+                }
+                supabaseClient.updateGroup(token, groupId, groupPayload)
+            }
+
             Result.success(updated)
         } catch (e: Exception) {
             Result.failure(e)
@@ -489,6 +536,23 @@ class TaskRepository(
             )
 
             shiftDao.insertShift(ShiftEntity.fromDomain(shift))
+
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val shiftPayload = JSONObject().apply {
+                    put("id", shiftId)
+                    put("group_id", groupId)
+                    put("name", name.trim())
+                    if (shiftNumber != null) put("shift_number", shiftNumber)
+                    put("starts_at", startsAt)
+                    put("ends_at", endsAt)
+                    if (!notes.isNullOrBlank()) put("notes", notes.trim())
+                    put("status", status)
+                    put("created_by", userId)
+                }
+                supabaseClient.createShift(token, shiftPayload)
+            }
+
             Result.success(shift)
         } catch (e: Exception) {
             Result.failure(e)
@@ -519,6 +583,20 @@ class TaskRepository(
                 status = status
             )
             shiftDao.updateShift(ShiftEntity.fromDomain(updated))
+
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val shiftPayload = JSONObject().apply {
+                    put("name", name.trim())
+                    if (shiftNumber != null) put("shift_number", shiftNumber)
+                    put("starts_at", startsAt)
+                    put("ends_at", endsAt)
+                    if (!notes.isNullOrBlank()) put("notes", notes.trim())
+                    put("status", status)
+                }
+                supabaseClient.updateShift(token, shiftId, shiftPayload)
+            }
+
             Result.success(updated)
         } catch (e: Exception) {
             Result.failure(e)
@@ -565,6 +643,25 @@ class TaskRepository(
                 status = "scheduled",
                 createdBy = userId
             )
+
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val offsetMinutes = (timeOffsetMillis / 60000L).toInt()
+                val remoteRes = supabaseClient.copyShift(
+                    accessToken = token,
+                    sourceShiftId = sourceShiftId,
+                    newShiftName = newShiftName.trim(),
+                    offsetMinutes = offsetMinutes,
+                    copyManpower = copyManpowerRequirements,
+                    copyAssignments = copyAssignedEmployees
+                )
+                if (remoteRes.isSuccess) {
+                    syncShiftsFromServer(token)
+                    syncTasksFromServer(token)
+                    val syncedShift = getShiftById(newShiftId) ?: newShift
+                    return@withContext Result.success(syncedShift)
+                }
+            }
 
             shiftDao.insertShift(ShiftEntity.fromDomain(newShift))
 
@@ -739,6 +836,10 @@ class TaskRepository(
         responseFormSchemaJson: String? = null
     ): Result<TaskItem> = withContext(Dispatchers.IO) {
         try {
+            if (title.trim().isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("Task title cannot be blank"))
+            }
+
             var targetGroupId = groupId
             var group = if (targetGroupId.isNotBlank()) getGroupById(targetGroupId) else null
             if (group == null) {
@@ -762,8 +863,10 @@ class TaskRepository(
             val shift = shiftId?.let { getShiftById(it) }
             val userId = getActiveUserId() ?: "creator"
             val userName = getActiveUserName()
-
+            val userEmpId = getActiveUserEmployeeId()
             val taskId = UUID.randomUUID().toString()
+            val clientOperationId = UUID.randomUUID().toString()
+
             val task = TaskItem(
                 id = taskId,
                 groupId = targetGroupId,
@@ -804,21 +907,127 @@ class TaskRepository(
                 responseFormSchemaJson = responseFormSchemaJson
             )
 
-            taskDao.insertTask(TaskEntity.fromDomain(task))
+            // Build Supabase JSON Payload for atomic persistence
+            val taskPayload = JSONObject().apply {
+                put("id", taskId)
+                put("client_operation_id", clientOperationId)
+                put("group_id", targetGroupId)
+                if (!shiftId.isNullOrBlank()) put("shift_id", shiftId)
+                put("title", title.trim())
+                if (!description.isNullOrBlank()) put("description", description.trim())
+                if (!location.isNullOrBlank()) put("location", location.trim())
+                if (!startsAt.isNullOrBlank()) put("starts_at", startsAt)
+                if (!dueAt.isNullOrBlank()) put("due_at", dueAt)
+                put("priority", priority.lowercase())
+                put("visibility", visibility)
+                put("allow_self_join", allowSelfJoin)
+                put("join_requires_approval", joinRequiresApproval)
+                put("notify_creator_on_join", notifyCreatorOnJoin)
+                put("requires_completion_confirmation", requiresCompletionConfirmation)
+                if (maxParticipants != null) put("max_participants", maxParticipants)
+                put("task_type", taskType.name)
+                put("importance", importance.name)
+                put("urgency_type", urgencyType.name)
+                if (!executionTime.isNullOrBlank()) put("execution_time", executionTime)
+                if (targetPercentage != null) put("target_percentage", targetPercentage)
+                if (repeatIntervalMinutes != null) put("repeat_interval_minutes", repeatIntervalMinutes)
+                put("alarm_type", alarmType.name)
+                put("advance_reminders_minutes", JSONArray(advanceRemindersMinutes))
+                put("remind_until_completed", remindUntilCompleted)
+                if (overdueReminderIntervalMinutes != null) put("overdue_reminder_interval_minutes", overdueReminderIntervalMinutes)
+                if (maxOverdueReminders != null) put("max_overdue_reminders", maxOverdueReminders)
+                put("response_type", responseType.name)
+                put("lan_target_list", JSONArray(lanTargetList))
+                put("completion_policy", completionPolicy.name)
+                if (!responseFormSchemaJson.isNullOrBlank()) {
+                    try {
+                        put("response_form_schema", JSONArray(responseFormSchemaJson))
+                    } catch (_: Exception) {}
+                }
+                put("assigned_user_ids", JSONArray(selectedEmployeeIds))
+                val reqsArr = JSONArray()
+                for ((rId, cnt) in requirements) {
+                    reqsArr.put(JSONObject().apply {
+                        put("role_id", rId)
+                        put("required_count", cnt)
+                    })
+                }
+                put("requirements", reqsArr)
+            }
+
+            val token = getActiveAccessToken()
+            var serverSavedTask = task
+
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.createTaskAtomic(token, taskPayload)
+                if (remoteRes.isSuccess) {
+                    val serverObj = remoteRes.getOrThrow()
+                    val confirmedId = serverObj.optString("task_id", taskId)
+                    serverSavedTask = task.copy(id = confirmedId)
+                } else {
+                    val error = remoteRes.exceptionOrNull()
+                    val errMsg = error?.message ?: "Task creation failed"
+                    val isNetworkError = error is java.net.UnknownHostException ||
+                            error is java.net.ConnectException ||
+                            error is java.net.SocketTimeoutException ||
+                            errMsg.contains("offline", ignoreCase = true) ||
+                            errMsg.contains("Unable to resolve host", ignoreCase = true)
+
+                    if (isNetworkError) {
+                        try {
+                            TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
+                                com.example.data.local.entity.OutboxEventEntity(
+                                    eventId = clientOperationId,
+                                    userId = userId,
+                                    taskId = taskId,
+                                    operationType = "TASK_CREATION",
+                                    payloadJson = taskPayload.toString(),
+                                    syncStatus = "PENDING",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            com.example.sync.SyncWorker.enqueueSync(context)
+                        } catch (oe: Exception) {
+                            Log.w(tag, "Failed to enqueue offline task creation: ${oe.message}")
+                        }
+                    } else {
+                        return@withContext Result.failure(IOException(errMsg))
+                    }
+                }
+            } else {
+                try {
+                    TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
+                        com.example.data.local.entity.OutboxEventEntity(
+                            eventId = clientOperationId,
+                            userId = userId,
+                            taskId = taskId,
+                            operationType = "TASK_CREATION",
+                            payloadJson = taskPayload.toString(),
+                            syncStatus = "PENDING",
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                } catch (oe: Exception) {
+                    Log.w(tag, "Failed to enqueue outbox event: ${oe.message}")
+                }
+            }
+
+            // Save to Room cache
+            taskDao.insertTask(TaskEntity.fromDomain(serverSavedTask))
 
             // Schedule device alarms via AlarmManager
             try {
-                taskAlarmScheduler.scheduleAlarmsForTask(task)
+                taskAlarmScheduler.scheduleAlarmsForTask(serverSavedTask)
             } catch (e: Exception) {
                 Log.e(tag, "Failed to schedule alarm: ${e.message}")
             }
 
             // Store visible users if visibility is restricted
             if (visibility == "restricted") {
-                taskVisibleUsersStore[taskId] = selectedEmployeeIds.toMutableSet()
+                taskVisibleUsersStore[serverSavedTask.id] = selectedEmployeeIds.toMutableSet()
             }
 
-            // Store manpower requirements
+            // Store manpower requirements locally
             val allRoles = workRoleDao.getAllWorkRolesFlow().firstOrNull() ?: emptyList()
             val roleMap = allRoles.associateBy { it.id }
 
@@ -826,20 +1035,20 @@ class TaskRepository(
                 val roleName = roleMap[roleId]?.name ?: "Role"
                 TaskRoleRequirement(
                     id = UUID.randomUUID().toString(),
-                    taskId = taskId,
+                    taskId = serverSavedTask.id,
                     roleId = roleId,
                     requiredCount = count,
                     roleName = roleName,
                     filledCount = 0
                 )
             }.toMutableList()
-            requirementsStore[taskId] = reqList
+            requirementsStore[serverSavedTask.id] = reqList
 
             // Add activity log
-            activityLogStore.getOrPut(taskId) { mutableListOf() }.add(
+            activityLogStore.getOrPut(serverSavedTask.id) { mutableListOf() }.add(
                 TaskActivityLog(
                     id = System.currentTimeMillis(),
-                    taskId = taskId,
+                    taskId = serverSavedTask.id,
                     actorName = userName,
                     eventType = "TASK_CREATED",
                     message = "Task created by $userName ($taskType, $importance priority)",
@@ -847,24 +1056,301 @@ class TaskRepository(
                 )
             )
 
-            // Add creator as active participant so the task is assigned and visible in My Tasks
-            participantsStore.getOrPut(taskId) { mutableListOf() }.add(
+            // Add creator as active participant
+            participantsStore.getOrPut(serverSavedTask.id) { mutableListOf() }.add(
                 TaskParticipant(
                     id = UUID.randomUUID().toString(),
-                    taskId = taskId,
+                    taskId = serverSavedTask.id,
                     userId = userId,
                     userName = userName,
-                    userEmployeeId = getActiveUserEmployeeId(),
+                    userEmployeeId = userEmpId,
                     status = "active",
                     joinedAt = nowIso(),
                     assignedBy = userId
                 )
             )
 
-            Result.success(task)
+            // Add assigned employees locally
+            for (assignedId in selectedEmployeeIds) {
+                participantsStore.getOrPut(serverSavedTask.id) { mutableListOf() }.add(
+                    TaskParticipant(
+                        id = UUID.randomUUID().toString(),
+                        taskId = serverSavedTask.id,
+                        userId = assignedId,
+                        userName = "Assigned Employee",
+                        userEmployeeId = "",
+                        status = "active",
+                        joinedAt = nowIso(),
+                        assignedBy = userId
+                    )
+                )
+            }
+
+            Result.success(serverSavedTask)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * Fetch all authorized tasks from Supabase and synchronize into local Room cache.
+     * Reconciles participants, requirements, and schedules alarms on this device.
+     */
+    suspend fun syncTasksFromServer(token: String): Result<List<TaskItem>> = withContext(Dispatchers.IO) {
+        try {
+            val remoteRes = supabaseClient.fetchTasks(token)
+            if (remoteRes.isFailure) {
+                return@withContext Result.failure(remoteRes.exceptionOrNull()!!)
+            }
+
+            val remoteTasksJson = remoteRes.getOrDefault(emptyList())
+            val currentUserId = getActiveUserId()
+            val entities = mutableListOf<TaskEntity>()
+            val domainTasks = mutableListOf<TaskItem>()
+
+            for (taskJson in remoteTasksJson) {
+                val taskId = taskJson.optString("id")
+                val groupObj = taskJson.optJSONObject("task_groups")
+                val shiftObj = taskJson.optJSONObject("shifts")
+
+                // Parse participants
+                val participantsJson = taskJson.optJSONArray("task_participants")
+                val taskParts = mutableListOf<TaskParticipant>()
+                var myParticipantStatus: String? = null
+                var myRoleName: String? = null
+
+                if (participantsJson != null) {
+                    for (i in 0 until participantsJson.length()) {
+                        val pObj = participantsJson.getJSONObject(i)
+                        val pUserId = pObj.optString("user_id")
+                        val pStatus = pObj.optString("status", "active")
+                        val part = TaskParticipant(
+                            id = pObj.optString("id", UUID.randomUUID().toString()),
+                            taskId = taskId,
+                            userId = pUserId,
+                            userName = pObj.optString("full_name", "Employee"),
+                            userEmployeeId = pObj.optString("employee_id", ""),
+                            roleName = pObj.optString("role_name"),
+                            status = pStatus,
+                            joinedAt = pObj.optString("joined_at", nowIso()),
+                            assignedBy = pObj.optString("assigned_by")
+                        )
+                        taskParts.add(part)
+                        if (pUserId == currentUserId && pStatus == "active") {
+                            myParticipantStatus = "active"
+                            myRoleName = part.roleName
+                        }
+                    }
+                }
+                participantsStore[taskId] = taskParts
+
+                // Parse role requirements
+                val reqsJson = taskJson.optJSONArray("task_role_requirements")
+                val reqsList = mutableListOf<TaskRoleRequirement>()
+                if (reqsJson != null) {
+                    for (i in 0 until reqsJson.length()) {
+                        val rObj = reqsJson.getJSONObject(i)
+                        reqsList.add(
+                            TaskRoleRequirement(
+                                id = rObj.optString("id", UUID.randomUUID().toString()),
+                                taskId = taskId,
+                                roleId = rObj.optString("role_id"),
+                                requiredCount = rObj.optInt("required_count", 1),
+                                roleName = rObj.optString("role_name", "Role"),
+                                filledCount = rObj.optInt("filled_count", 0)
+                            )
+                        )
+                    }
+                }
+                requirementsStore[taskId] = reqsList
+
+                // Parse advance reminders
+                val advCsv = try {
+                    val advArr = taskJson.optJSONArray("advance_reminders_minutes")
+                    if (advArr != null) {
+                        val nums = mutableListOf<Int>()
+                        for (i in 0 until advArr.length()) nums.add(advArr.getInt(i))
+                        nums.joinToString(",")
+                    } else "0,5"
+                } catch (_: Exception) { "0,5" }
+
+                // Parse LAN targets
+                val lanCsv = try {
+                    val lanArr = taskJson.optJSONArray("lan_target_list")
+                    if (lanArr != null) {
+                        val lans = mutableListOf<String>()
+                        for (i in 0 until lanArr.length()) lans.add(lanArr.getString(i))
+                        lans.joinToString(",")
+                    } else ""
+                } catch (_: Exception) { "" }
+
+                val entity = TaskEntity(
+                    id = taskId,
+                    groupId = taskJson.optString("group_id"),
+                    groupTitle = groupObj?.optString("title"),
+                    shiftId = taskJson.optString("shift_id").takeIf { it.isNotBlank() },
+                    shiftName = shiftObj?.optString("name"),
+                    title = taskJson.optString("title", "Untitled Task"),
+                    description = taskJson.optString("description").takeIf { it.isNotBlank() },
+                    location = taskJson.optString("location").takeIf { it.isNotBlank() },
+                    startsAt = taskJson.optString("starts_at").takeIf { it.isNotBlank() },
+                    dueAt = taskJson.optString("due_at").takeIf { it.isNotBlank() },
+                    priority = taskJson.optString("priority", "normal"),
+                    status = taskJson.optString("status", "open"),
+                    visibility = taskJson.optString("visibility", "everyone"),
+                    allowSelfJoin = taskJson.optBoolean("allow_self_join", true),
+                    joinRequiresApproval = taskJson.optBoolean("join_requires_approval", true),
+                    notifyCreatorOnJoin = taskJson.optBoolean("notify_creator_on_join", true),
+                    requiresCompletionConfirmation = taskJson.optBoolean("requires_completion_confirmation", false),
+                    maxParticipants = if (taskJson.has("max_participants") && !taskJson.isNull("max_participants")) taskJson.getInt("max_participants") else null,
+                    createdBy = taskJson.optString("created_by"),
+                    creatorName = taskJson.optString("creator_name").takeIf { it.isNotBlank() },
+                    createdAt = taskJson.optString("created_at", nowIso()),
+                    updatedAt = taskJson.optString("updated_at", nowIso()),
+                    taskType = taskJson.optString("task_type", "SIMPLE"),
+                    importance = taskJson.optString("importance", "NORMAL"),
+                    urgencyType = taskJson.optString("urgency_type", "BEFORE_DEADLINE"),
+                    executionTime = taskJson.optString("execution_time").takeIf { it.isNotBlank() },
+                    targetPercentage = if (taskJson.has("target_percentage") && !taskJson.isNull("target_percentage")) taskJson.getInt("target_percentage") else 100,
+                    repeatIntervalMinutes = if (taskJson.has("repeat_interval_minutes") && !taskJson.isNull("repeat_interval_minutes")) taskJson.getInt("repeat_interval_minutes") else null,
+                    alarmType = taskJson.optString("alarm_type", "SOUND_ALERT"),
+                    advanceRemindersMinutesCsv = advCsv,
+                    remindUntilCompleted = taskJson.optBoolean("remind_until_completed", false),
+                    overdueReminderIntervalMinutes = if (taskJson.has("overdue_reminder_interval_minutes") && !taskJson.isNull("overdue_reminder_interval_minutes")) taskJson.getInt("overdue_reminder_interval_minutes") else 5,
+                    maxOverdueReminders = if (taskJson.has("max_overdue_reminders") && !taskJson.isNull("max_overdue_reminders")) taskJson.getInt("max_overdue_reminders") else 3,
+                    responseType = taskJson.optString("response_type", "COMPLETED_NOT_COMPLETED"),
+                    lanTargetListCsv = lanCsv,
+                    currentProgress = taskJson.optInt("current_progress", 0),
+                    lastProgressUpdate = taskJson.optString("last_progress_update").takeIf { it.isNotBlank() },
+                    isAcknowledged = taskJson.optBoolean("is_acknowledged", false),
+                    acknowledgedAt = taskJson.optString("acknowledged_at").takeIf { it.isNotBlank() },
+                    completionPolicy = taskJson.optString("completion_policy", "SINGLE_ASSIGNEE"),
+                    responseFormSchemaJson = taskJson.optString("response_form_schema").takeIf { it.isNotBlank() && it != "[]" }
+                )
+                entities.add(entity)
+
+                val domain = entity.toDomain().copy(
+                    currentUserParticipantStatus = myParticipantStatus,
+                    currentUserRoleName = myRoleName
+                )
+                domainTasks.add(domain)
+
+                // Schedule alarms if task is active and assigned to current user or created by current user
+                if (domain.isAssignedToMe || domain.createdBy == currentUserId) {
+                    try {
+                        taskAlarmScheduler.scheduleAlarmsForTask(domain)
+                    } catch (e: Exception) {
+                        Log.w(tag, "Failed to schedule alarm for synced task: ${e.message}")
+                    }
+                }
+            }
+
+            taskDao.insertTasks(entities)
+            Result.success(domainTasks)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun syncGroupsFromServer(token: String): Result<List<TaskGroup>> = withContext(Dispatchers.IO) {
+        try {
+            val remoteRes = supabaseClient.fetchGroups(token)
+            if (remoteRes.isFailure) return@withContext Result.failure(remoteRes.exceptionOrNull()!!)
+            val groupsJson = remoteRes.getOrDefault(emptyList())
+            val entities = mutableListOf<TaskGroupEntity>()
+
+            for (gJson in groupsJson) {
+                val gId = gJson.optString("id")
+                val entity = TaskGroupEntity(
+                    id = gId,
+                    title = gJson.optString("title", "Untitled Group"),
+                    code = gJson.optString("code").takeIf { it.isNotBlank() },
+                    description = gJson.optString("description").takeIf { it.isNotBlank() },
+                    startDate = gJson.optString("start_date").takeIf { it.isNotBlank() },
+                    endDate = gJson.optString("end_date").takeIf { it.isNotBlank() },
+                    status = gJson.optString("status", "active"),
+                    visibility = gJson.optString("visibility", "everyone"),
+                    allowSelfJoin = gJson.optBoolean("allow_self_join", true),
+                    joinRequiresApproval = gJson.optBoolean("join_requires_approval", false),
+                    notifyCreatorOnJoin = gJson.optBoolean("notify_creator_on_join", true),
+                    maxMembers = if (gJson.has("max_members") && !gJson.isNull("max_members")) gJson.getInt("max_members") else null,
+                    createdBy = gJson.optString("created_by"),
+                    createdAt = gJson.optString("created_at", nowIso()),
+                    updatedAt = gJson.optString("updated_at", nowIso())
+                )
+                entities.add(entity)
+
+                // Cache members
+                val membersArr = gJson.optJSONArray("group_members")
+                val mList = mutableListOf<GroupMember>()
+                if (membersArr != null) {
+                    for (i in 0 until membersArr.length()) {
+                        val mObj = membersArr.getJSONObject(i)
+                        mList.add(
+                            GroupMember(
+                                id = mObj.optString("id", UUID.randomUUID().toString()),
+                                groupId = gId,
+                                userId = mObj.optString("user_id"),
+                                employeeId = mObj.optString("employee_id", ""),
+                                fullName = mObj.optString("full_name", "Member"),
+                                groupRole = mObj.optString("source", "member"),
+                                joinedAt = mObj.optString("joined_at", nowIso())
+                            )
+                        )
+                    }
+                }
+                groupMembersStore[gId] = mList
+            }
+
+            taskGroupDao.insertGroups(entities)
+            Result.success(entities.map { it.toDomain() })
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun syncShiftsFromServer(token: String): Result<List<Shift>> = withContext(Dispatchers.IO) {
+        try {
+            val remoteRes = supabaseClient.fetchShifts(token)
+            if (remoteRes.isFailure) return@withContext Result.failure(remoteRes.exceptionOrNull()!!)
+            val shiftsJson = remoteRes.getOrDefault(emptyList())
+            val entities = mutableListOf<ShiftEntity>()
+
+            for (sJson in shiftsJson) {
+                val entity = ShiftEntity(
+                    id = sJson.optString("id"),
+                    groupId = sJson.optString("group_id"),
+                    name = sJson.optString("name", "Shift"),
+                    shiftNumber = if (sJson.has("shift_number") && !sJson.isNull("shift_number")) sJson.getInt("shift_number") else null,
+                    startsAt = sJson.optString("starts_at"),
+                    endsAt = sJson.optString("ends_at"),
+                    notes = sJson.optString("notes").takeIf { it.isNotBlank() },
+                    status = sJson.optString("status", "scheduled"),
+                    createdBy = sJson.optString("created_by")
+                )
+                entities.add(entity)
+            }
+
+            shiftDao.insertShifts(entities)
+            Result.success(entities.map { it.toDomain() })
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun syncTasks(): Result<List<TaskItem>> {
+        val token = getActiveAccessToken() ?: return Result.failure(IOException("No active session"))
+        return syncTasksFromServer(token)
+    }
+
+    suspend fun syncGroups(): Result<List<TaskGroup>> {
+        val token = getActiveAccessToken() ?: return Result.failure(IOException("No active session"))
+        return syncGroupsFromServer(token)
+    }
+
+    suspend fun syncShifts(): Result<List<Shift>> {
+        val token = getActiveAccessToken() ?: return Result.failure(IOException("No active session"))
+        return syncShiftsFromServer(token)
     }
 
     suspend fun updateTask(
@@ -1266,6 +1752,21 @@ class TaskRepository(
 
             val roleName = req?.roleName ?: workRoleDao.getWorkRoleById(roleId)?.name ?: "Role"
 
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.requestTaskJoin(token, taskId, roleId, message)
+                if (remoteRes.isSuccess) {
+                    val serverObj = remoteRes.getOrNull()
+                    val status = serverObj?.optString("status", if (task.joinRequiresApproval) "pending" else "active")
+                    if (status == "active") {
+                        syncTasksFromServer(token)
+                        return@withContext Result.success("Joined Task Successfully")
+                    } else {
+                        return@withContext Result.success("Approval Pending")
+                    }
+                }
+            }
+
             if (task.joinRequiresApproval) {
                 val request = TaskJoinRequest(
                     id = UUID.randomUUID().toString(),
@@ -1384,6 +1885,12 @@ class TaskRepository(
                 )
             )
 
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                supabaseClient.reviewTaskJoin(token, requestId, approved)
+                syncTasksFromServer(token)
+            }
+
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -1443,6 +1950,14 @@ class TaskRepository(
                 )
             )
 
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.assignUserToTask(token, taskId, userId, roleId)
+                if (remoteRes.isSuccess) {
+                    syncTasksFromServer(token)
+                }
+            }
+
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -1476,6 +1991,12 @@ class TaskRepository(
                     createdAt = nowIso()
                 )
             )
+
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                supabaseClient.leaveTask(token, taskId, reason)
+                syncTasksFromServer(token)
+            }
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1521,6 +2042,12 @@ class TaskRepository(
                     createdAt = nowIso()
                 )
             )
+
+            val tokenRem = getActiveAccessToken()
+            if (!tokenRem.isNullOrBlank()) {
+                supabaseClient.removeParticipant(tokenRem, participantId, reason)
+                syncTasksFromServer(tokenRem)
+            }
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1678,20 +2205,21 @@ class TaskRepository(
     // Employee Directory Search
     suspend fun searchEmployees(query: String): List<UserProfile> = withContext(Dispatchers.IO) {
         try {
-            val cachedProfiles = profileDao.searchProfiles(query).map { it.toDomain() }
-            if (cachedProfiles.isNotEmpty()) {
-                return@withContext cachedProfiles
+            val token = getActiveAccessToken()
+            if (!token.isNullOrBlank()) {
+                val remoteRes = supabaseClient.searchEmployeeDirectory(token, query)
+                if (remoteRes.isSuccess) {
+                    val remoteProfiles = remoteRes.getOrDefault(emptyList())
+                    if (remoteProfiles.isNotEmpty()) {
+                        for (p in remoteProfiles) {
+                            profileDao.insertProfile(com.example.data.local.entity.ProfileEntity.fromDomain(p))
+                        }
+                        return@withContext remoteProfiles
+                    }
+                }
             }
-            // If empty, return sample demo employees for assignment picker
-            listOf(
-                UserProfile("emp_1", "EMP101", "Rahul Sharma", "+919876543210", null, null, "employee", true),
-                UserProfile("emp_2", "EMP102", "Priya Patel", "+919876543211", null, null, "employee", true),
-                UserProfile("emp_3", "EMP103", "Amit Verma", "+919876543212", null, null, "employee", true),
-                UserProfile("emp_4", "EMP104", "Sneha Rao", "+919876543213", null, null, "employee", true),
-                UserProfile("emp_5", "EMP105", "Vikram Singh", "+919876543214", null, null, "employee", true)
-            ).filter {
-                it.fullName.contains(query, ignoreCase = true) || it.employeeId.contains(query, ignoreCase = true)
-            }
+            // Fallback to local profile cache
+            profileDao.searchProfiles(query).map { it.toDomain() }
         } catch (e: Exception) {
             emptyList()
         }
