@@ -106,7 +106,8 @@ class TaskRepository(
     }
 
     suspend fun getActiveAccessToken(): String? {
-        return userPrefs.getUserSession().accessToken?.takeIf { it.isNotBlank() }
+        val validToken = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+        return validToken ?: userPrefs.getUserSession().accessToken?.takeIf { it.isNotBlank() }
     }
 
     // ============================================================
@@ -1619,9 +1620,10 @@ class TaskRepository(
             com.example.sync.SyncWorker.enqueueSync(context)
 
             // Attempt instant sync if online
-            if (!session.accessToken.isNullOrBlank()) {
+            val activeToken = getActiveAccessToken()
+            if (!activeToken.isNullOrBlank()) {
                 val res = supabaseClient.submitTaskResponse(
-                    accessToken = session.accessToken,
+                    accessToken = activeToken,
                     taskId = taskId,
                     responseType = responseType.name,
                     responseValue = responseValue,
@@ -1712,8 +1714,9 @@ class TaskRepository(
             com.example.sync.SyncWorker.enqueueSync(context)
 
             // Attempt remote acknowledgement
-            if (!session.accessToken.isNullOrBlank()) {
-                val res = supabaseClient.acknowledgeTaskAlarm(session.accessToken, taskId, eventId, nowIso)
+            val activeToken = getActiveAccessToken()
+            if (!activeToken.isNullOrBlank()) {
+                val res = supabaseClient.acknowledgeTaskAlarm(activeToken, taskId, eventId, nowIso)
                 if (res.isSuccess) {
                     taskResponseDao.markAcknowledgementSynced(ack.id)
                     TaskzDatabase.getInstance(context).outboxDao().markEventSynced(outboxId, "ACK_CONFIRMED", System.currentTimeMillis())
@@ -1739,8 +1742,7 @@ class TaskRepository(
 
     suspend fun fetchTaskOperationsDashboard(taskId: String): Result<com.example.core.model.TaskOperationsDashboardData> = withContext(Dispatchers.IO) {
         try {
-            val session = userPrefs.getUserSession()
-            val token = session.accessToken
+            val token = getActiveAccessToken()
             if (!token.isNullOrBlank()) {
                 val res = supabaseClient.getTaskOperationsDashboard(token, taskId)
                 if (res.isSuccess) {

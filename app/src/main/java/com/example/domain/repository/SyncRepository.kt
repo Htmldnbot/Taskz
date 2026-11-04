@@ -80,7 +80,10 @@ class SyncRepository(
         val now = System.currentTimeMillis()
 
         if (!networkMonitor.isCurrentlyConnected()) {
-            syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "No internet connection")
+            syncMetadataDao.updateSyncStatus(
+                SyncStatus.OFFLINE.name,
+                "Offline — Operations will sync automatically when connected"
+            )
             return Result.failure(IOException("You are currently offline. Check your internet connection."))
         }
 
@@ -88,29 +91,76 @@ class SyncRepository(
         syncMetadataDao.updateSyncStatus(SyncStatus.SYNCING.name, "Synchronizing with server...")
 
         val session = userPrefs.getUserSession()
-        val token = session.accessToken
         val userId = session.userId
 
-        if (token.isNullOrBlank() || userId.isNullOrBlank()) {
-            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "No active session")
+        if (userId.isNullOrBlank() || !session.isAuthenticated) {
+            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Authentication required: No active session")
             return Result.failure(IOException("Session not active"))
         }
 
-        // 1. Validate session & profile against Supabase
-        val remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
+        val authRepo = TaskzApplication.instance.authRepository
+
+        // 1. Validate or refresh token before sending server calls
+        val tokenRes = authRepo.getValidAccessToken()
+        if (tokenRes.isFailure) {
+            val err = tokenRes.exceptionOrNull()!!
+            if (authRepo.isNetworkFailure(err)) {
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.OFFLINE.name,
+                    "Offline — Unable to reach server, operations preserved"
+                )
+            } else {
+                // Refresh token invalid or revoked - do NOT delete local unsynced outbox data!
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.ERROR.name,
+                    "Authentication required: Session expired. Please log in again."
+                )
+            }
+            return Result.failure(err)
+        }
+
+        var token = tokenRes.getOrThrow()
+
+        // 2. Validate session & profile against Supabase
+        var remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
+
+        // Handle edge-case: If server returns JWT expired despite client check (e.g. clock drift):
+        if (remoteProfileRes.isFailure && remoteProfileRes.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+            android.util.Log.i("TaskzSync", "Encountered JWT expired during fetchProfileById; triggering force refresh")
+            val forceRes = authRepo.forceRefreshAccessToken()
+            if (forceRes.isSuccess) {
+                token = forceRes.getOrThrow()
+                remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
+            }
+        }
 
         // Always update Last Server Fetch when a request to the server was performed
         syncMetadataDao.updateLastServerFetch(now)
 
         if (remoteProfileRes.isFailure) {
             val ex = remoteProfileRes.exceptionOrNull()!!
-            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, ex.message ?: "Server sync failed")
+            if (authRepo.isNetworkFailure(ex)) {
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.OFFLINE.name,
+                    "Offline — Connection interrupted during sync"
+                )
+            } else if (ex.message?.contains("JWT", ignoreCase = true) == true || ex.message?.contains("auth", ignoreCase = true) == true) {
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.ERROR.name,
+                    "Authentication required: Session expired. Please log in again."
+                )
+            } else {
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.ERROR.name,
+                    "Server error: ${ex.message ?: "Failed to sync"}"
+                )
+            }
             return Result.failure(ex)
         }
 
         val remoteProfile = remoteProfileRes.getOrNull()
         if (remoteProfile == null) {
-            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Account profile not found")
+            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Database error: Profile record not found on server")
             return Result.failure(IOException("Profile record not found"))
         }
 
@@ -122,7 +172,9 @@ class SyncRepository(
         }
 
         // Record fetch in Supabase server sync state via RPC
-        supabaseClient.recordServerFetch(token)
+        try {
+            supabaseClient.recordServerFetch(token)
+        } catch (_: Exception) {}
 
         // Cache fresh profile
         val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
@@ -138,9 +190,11 @@ class SyncRepository(
             taskRepo.syncGroupsFromServer(token)
             taskRepo.syncShiftsFromServer(token)
             taskRepo.syncTasksFromServer(token)
-        } catch (_: Exception) {}
+        } catch (syncEx: Exception) {
+            android.util.Log.w("TaskzSync", "Error during task/group sync: ${syncEx.message}")
+        }
 
-        // 2. Trigger WorkManager to flush outbox events for this active user
+        // 3. Trigger WorkManager to flush outbox events for this active user
         SyncWorker.enqueueSync(context)
 
         val pendingCount = outboxDao.getPendingEventsForUser(userId).size

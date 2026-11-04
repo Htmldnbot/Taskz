@@ -46,6 +46,9 @@ interface OutboxDao {
     @Query("UPDATE outbox_events SET syncStatus = :status, serverAcknowledgement = :ack WHERE transactionId = :transactionId")
     suspend fun updateEventStatus(transactionId: String, status: String, ack: String?)
 
+    @Query("UPDATE outbox_events SET syncStatus = 'PENDING' WHERE userId = :userId AND syncStatus = 'SENDING'")
+    suspend fun resetSendingToPendingForUser(userId: String)
+
     @Query("DELETE FROM outbox_events WHERE userId = :userId AND syncStatus = 'SYNCED'")
     suspend fun clearSyncedEventsForUser(userId: String)
 

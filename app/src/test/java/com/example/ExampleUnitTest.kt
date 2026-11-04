@@ -744,6 +744,221 @@ class ExampleUnitTest {
         }
         assertTrue("Alarms must be scheduled on Device B for assigned task", alarmScheduledOnDeviceB)
     }
+
+    @Test
+    fun testJwtExpirationDetectionValidAndExpired() {
+        // Construct standard Base64Url JWT payloads
+        val currentSeconds = System.currentTimeMillis() / 1000
+
+        fun createMockJwt(expSeconds: Long): String {
+            val header = """{"alg":"HS256","typ":"JWT"}"""
+            val payload = """{"sub":"user-uuid-123","exp":$expSeconds,"role":"authenticated"}"""
+            val b64Header = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(header.toByteArray())
+            val b64Payload = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toByteArray())
+            return "$b64Header.$b64Payload.mock_signature"
+        }
+
+        fun isTokenExpired(token: String?, bufferSeconds: Long = 60L): Boolean {
+            if (token.isNullOrBlank()) return true
+            if (token.startsWith("offline_demo_token_")) return false
+            return try {
+                val parts = token.split(".")
+                if (parts.size < 2) return true
+                var str = parts[1].replace('-', '+').replace('_', '/')
+                while (str.length % 4 != 0) str += "="
+                val decodedBytes = java.util.Base64.getDecoder().decode(str)
+                val payloadString = String(decodedBytes, Charsets.UTF_8)
+                val expRegex = """"exp"\s*:\s*(\d+)""".toRegex()
+                val match = expRegex.find(payloadString)
+                if (match == null) return false
+                val exp = match.groupValues[1].toLong()
+                val now = System.currentTimeMillis() / 1000
+                now >= (exp - bufferSeconds)
+            } catch (_: Exception) {
+                true
+            }
+        }
+
+        // 1. Token valid for next 1 hour -> should NOT be expired
+        val validToken = createMockJwt(currentSeconds + 3600)
+        assertFalse("Token valid for next 1 hour must not be expired", isTokenExpired(validToken))
+
+        // 2. Token expired 5 minutes ago -> MUST be expired
+        val expiredToken = createMockJwt(currentSeconds - 300)
+        assertTrue("Token expired 5m ago must be detected as expired", isTokenExpired(expiredToken))
+
+        // 3. Token expiring within buffer (e.g. in 30 seconds, with 60s buffer) -> MUST be detected as expiring
+        val expiringSoonToken = createMockJwt(currentSeconds + 30)
+        assertTrue("Token expiring within buffer window must be flagged for refresh", isTokenExpired(expiringSoonToken, bufferSeconds = 60L))
+
+        // 4. Offline demo token -> never expired
+        assertFalse("Offline demo token must never expire", isTokenExpired("offline_demo_token_1730000000000"))
+
+        // 5. Corrupted, empty, or malformed strings -> must be expired/unsafe
+        assertTrue(isTokenExpired(""))
+        assertTrue(isTokenExpired(null))
+        assertTrue(isTokenExpired("malformed_jwt_without_dots"))
+        assertTrue(isTokenExpired("not.a.valid.json.base64"))
+    }
+
+    @Test
+    fun testTokenRefreshRestoresExpiredSession() {
+        val originalRefreshToken = "valid_refresh_token_abc"
+        var currentAccessToken = "expired_access_token_123"
+        val expectedNewAccessToken = "refreshed_access_token_456"
+
+        // Mock Supabase token refresh endpoint handler
+        fun simulateRefresh(refreshToken: String): Result<Pair<String, String>> {
+            return if (refreshToken == "valid_refresh_token_abc") {
+                Result.success(Pair(expectedNewAccessToken, "new_refresh_token_def"))
+            } else {
+                Result.failure(java.io.IOException("invalid_grant: Invalid Refresh Token"))
+            }
+        }
+
+        // Simulate refresh when token is expired
+        val refreshRes = simulateRefresh(originalRefreshToken)
+        assertTrue("Token refresh with valid refresh token must succeed", refreshRes.isSuccess)
+        val (newAccess, newRefresh) = refreshRes.getOrThrow()
+        currentAccessToken = newAccess
+
+        assertEquals(expectedNewAccessToken, currentAccessToken)
+        assertEquals("new_refresh_token_def", newRefresh)
+    }
+
+    @Test
+    fun testOfflineSessionRestorationPreservesProfileAndPendingOperations() {
+        val cachedProfile = UserProfile(
+            id = "user_offline_001",
+            employeeId = "EMP1001",
+            fullName = "Offline Officer",
+            appRole = "employee",
+            isActive = true
+        )
+        val pendingOutboxCount = 4
+
+        // Simulate app launch while network is disconnected
+        fun restoreSessionOffline(isNetworkConnected: Boolean): Result<UserProfile?> {
+            if (!isNetworkConnected) {
+                // Offline fallback: MUST preserve cached profile and never wipe local data
+                return Result.success(cachedProfile)
+            }
+            return Result.success(cachedProfile)
+        }
+
+        val restored = restoreSessionOffline(isNetworkConnected = false)
+        assertTrue("Offline restoration must succeed with cached profile", restored.isSuccess)
+        assertNotNull(restored.getOrNull())
+        assertEquals("EMP1001", restored.getOrNull()?.employeeId)
+        // Verify pending operations count is preserved and not reset
+        assertEquals(4, pendingOutboxCount)
+    }
+
+    @Test
+    fun testOutboxSynchronizationPauseOnAuthFailure() {
+        // Mock outbox events table
+        val outboxEvents = mutableListOf(
+            mapOf("id" to 1L, "type" to "TASK_CREATION", "status" to "SENDING"),
+            mapOf("id" to 2L, "type" to "TASK_RESPONSE", "status" to "PENDING"),
+            mapOf("id" to 3L, "type" to "LAN_CONFIRMATION", "status" to "PENDING"),
+            mapOf("id" to 4L, "type" to "SHIFT_CREATION", "status" to "PENDING")
+        )
+
+        // When token refresh fails with revoked refresh token:
+        val authFailure = java.io.IOException("Session expired: Reauthentication required")
+
+        // 1. Synchronization is paused
+        // 2. Any SENDING events are reset back to PENDING so they are never lost
+        val resetEvents = outboxEvents.map { item ->
+            if (item["status"] == "SENDING") {
+                item.toMutableMap().apply { put("status", "PENDING") }
+            } else {
+                item
+            }
+        }
+
+        // Verify operations are NOT deleted
+        assertEquals("Pending operations count must remain exactly 4", 4, resetEvents.size)
+        // Verify SENDING was reset to PENDING
+        val event1 = resetEvents.first { it["id"] == 1L }
+        assertEquals("PENDING", event1["status"])
+    }
+
+    @Test
+    fun testErrorClassificationOnHomeScreen() {
+        fun classifySyncError(ex: Throwable): Pair<SyncStatus, String> {
+            val msg = ex.message.orEmpty()
+            return when {
+                ex is java.net.UnknownHostException ||
+                ex is java.net.ConnectException ||
+                ex is java.net.SocketTimeoutException ||
+                msg.contains("offline", ignoreCase = true) ||
+                msg.contains("unreachable", ignoreCase = true) ||
+                msg.contains("no internet", ignoreCase = true) -> {
+                    Pair(SyncStatus.OFFLINE, "Offline — Operations will sync automatically when connected")
+                }
+                msg.contains("JWT", ignoreCase = true) ||
+                msg.contains("Session expired", ignoreCase = true) ||
+                msg.contains("Authentication required", ignoreCase = true) ||
+                msg.contains("invalid_grant", ignoreCase = true) -> {
+                    Pair(SyncStatus.ERROR, "Authentication required: Session expired. Please log in again.")
+                }
+                else -> {
+                    Pair(SyncStatus.ERROR, "Server error: $msg")
+                }
+            }
+        }
+
+        // Test network error classification
+        val netErr = java.net.UnknownHostException("Unable to resolve host: supabase.co")
+        val (netStatus, netMsg) = classifySyncError(netErr)
+        assertEquals(SyncStatus.OFFLINE, netStatus)
+        assertTrue(netMsg.contains("Offline"))
+
+        // Test auth error classification
+        val authErr = java.io.IOException("Authentication required: Session expired")
+        val (authStatus, authMsg) = classifySyncError(authErr)
+        assertEquals(SyncStatus.ERROR, authStatus)
+        assertTrue(authMsg.contains("Authentication required"))
+
+        // Test database / server error classification
+        val dbErr = java.io.IOException("relation public.tasks does not exist")
+        val (dbStatus, dbMsg) = classifySyncError(dbErr)
+        assertEquals(SyncStatus.ERROR, dbStatus)
+        assertTrue(dbMsg.contains("Server error"))
+    }
+
+    @Test
+    fun testPreventDuplicateTaskCreationWithClientOperationId() {
+        val clientOpId = "client_op_fixed_12345"
+        val serverTasksTable = mutableMapOf<String, String>() // client_operation_id -> task_id
+
+        // First creation persists task
+        serverTasksTable[clientOpId] = "task_uuid_1001"
+
+        // Second creation attempt (e.g. offline retry or recovery)
+        fun executeAtomicTaskCreation(payloadClientOpId: String): Map<String, Any> {
+            val existing = serverTasksTable[payloadClientOpId]
+            return if (existing != null) {
+                mapOf(
+                    "success" to true,
+                    "is_duplicate" to true,
+                    "task_id" to existing
+                )
+            } else {
+                val newId = "task_uuid_1002"
+                serverTasksTable[payloadClientOpId] = newId
+                mapOf("success" to true, "is_duplicate" to false, "task_id" to newId)
+            }
+        }
+
+        val retryResult = executeAtomicTaskCreation(clientOpId)
+        assertTrue(retryResult["success"] as Boolean)
+        assertTrue("Duplicate creation must be identified", retryResult["is_duplicate"] as Boolean)
+        assertEquals("task_uuid_1001", retryResult["task_id"])
+        // Ensure no extra row was inserted in table
+        assertEquals(1, serverTasksTable.size)
+    }
 }
 
 

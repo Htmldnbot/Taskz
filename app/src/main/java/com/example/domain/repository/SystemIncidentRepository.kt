@@ -190,7 +190,7 @@ class SystemIncidentRepository(
             }
 
             val session = userPrefs.getUserSession()
-            val token = session.accessToken
+            val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull() ?: session.accessToken
             val userId = session.userId ?: getActiveUserId()
             val userName = session.employeeId ?: ""
 
@@ -287,7 +287,7 @@ class SystemIncidentRepository(
         if (pending.isEmpty()) return@withContext 0
 
         val session = userPrefs.getUserSession()
-        val token = session.accessToken
+        val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull() ?: session.accessToken
         if (token.isNullOrBlank() || !networkMonitor.isCurrentlyConnected()) {
             return@withContext 0
         }

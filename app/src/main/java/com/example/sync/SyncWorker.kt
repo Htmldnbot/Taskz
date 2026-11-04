@@ -10,7 +10,9 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.example.TaskzApplication
 import com.example.core.datastore.UserPreferencesDataStore
+import com.example.core.model.SyncStatus
 import com.example.data.local.TaskzDatabase
 import com.example.data.remote.SupabaseClient
 import kotlinx.coroutines.Dispatchers
@@ -52,17 +54,44 @@ class SyncWorker(
         val outboxDao = db.outboxDao()
 
         val session = userPrefs.getUserSession()
-        val token = session.accessToken
         val activeUserId = session.userId
 
-        if (token.isNullOrBlank() || activeUserId.isNullOrBlank()) {
+        if (activeUserId.isNullOrBlank() || !session.isAuthenticated) {
             Log.w(TAG, "No active user session found, skipping sync.")
             return@withContext Result.success()
         }
 
+        val authRepo = TaskzApplication.instance.authRepository
+
+        // 1. Validate or refresh token before processing pending operations
+        val tokenRes = authRepo.getValidAccessToken()
+        if (tokenRes.isFailure) {
+            val err = tokenRes.exceptionOrNull()!!
+            if (authRepo.isNetworkFailure(err)) {
+                Log.w(TAG, "Network unavailable for sync; will retry with backoff")
+                return@withContext Result.retry()
+            } else {
+                // Authentication failure: token refresh failed or revoked.
+                // CRITICAL: Pause synchronization without deleting any pending operations!
+                Log.e(TAG, "Authentication failed before processing outbox events: ${err.message}. Pausing synchronization.")
+                outboxDao.resetSendingToPendingForUser(activeUserId)
+                db.syncMetadataDao().updateSyncStatus(
+                    SyncStatus.ERROR.name,
+                    "Authentication required: Please sign in to resume synchronization"
+                )
+                return@withContext Result.retry()
+            }
+        }
+
+        var token = tokenRes.getOrThrow()
+
         // Strictly query pending events for the currently active user to prevent account data leakage
         val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         if (pendingEvents.isEmpty()) {
+            val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
+            if (remaining == 0) {
+                db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+            }
             return@withContext Result.success()
         }
 
@@ -77,15 +106,29 @@ class SyncWorker(
                 when (event.operationType) {
                     "TASK_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
-                        val res = supabaseClient.createTaskAtomic(token, payload)
+                        var res = supabaseClient.createTaskAtomic(token, payload)
+                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.createTaskAtomic(token, payload)
+                            }
+                        }
+
                         if (res.isSuccess) {
                             val serverObj = res.getOrThrow()
+                            val isDuplicate = serverObj.optBoolean("is_duplicate", false)
                             val serverTaskId = serverObj.optString("task_id", event.taskId)
+                            if (isDuplicate) {
+                                Log.i(TAG, "Duplicate task creation detected via client_operation_id; reconciled with server task $serverTaskId")
+                            }
                             outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
+                            db.taskDao().updateTaskStatus(event.taskId, "open")
                         } else {
                             val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
                             val isPermanent = err.contains("not authorized", ignoreCase = true) ||
-                                    err.contains("inactive", ignoreCase = true)
+                                    err.contains("inactive", ignoreCase = true) ||
+                                    err.contains("cannot be blank", ignoreCase = true)
                             val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
                             outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
                             if (!isPermanent) hasRetryableFailure = true
@@ -94,7 +137,15 @@ class SyncWorker(
 
                     "GROUP_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
-                        val res = supabaseClient.createGroup(token, payload)
+                        var res = supabaseClient.createGroup(token, payload)
+                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.createGroup(token, payload)
+                            }
+                        }
+
                         if (res.isSuccess) {
                             val serverObj = res.getOrThrow()
                             val serverGroupId = serverObj.optString("id", event.taskId)
@@ -111,7 +162,15 @@ class SyncWorker(
 
                     "SHIFT_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
-                        val res = supabaseClient.createShift(token, payload)
+                        var res = supabaseClient.createShift(token, payload)
+                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.createShift(token, payload)
+                            }
+                        }
+
                         if (res.isSuccess) {
                             val serverObj = res.getOrThrow()
                             val serverShiftId = serverObj.optString("id", event.taskId)
@@ -126,10 +185,9 @@ class SyncWorker(
                         }
                     }
 
-
                     "TASK_RESPONSE", "PROGRESS_UPDATE", "LAN_CONFIRMATION", "COMPLETION_REQUEST" -> {
                         val payload = JSONObject(event.payloadJson)
-                        val res = supabaseClient.submitTaskResponse(
+                        var res = supabaseClient.submitTaskResponse(
                             accessToken = token,
                             taskId = event.taskId,
                             responseType = payload.optString("responseType", "COMPLETED_NOT_COMPLETED"),
@@ -142,6 +200,26 @@ class SyncWorker(
                             idempotencyKey = event.eventId,
                             deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() }
                         )
+
+                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.submitTaskResponse(
+                                    accessToken = token,
+                                    taskId = event.taskId,
+                                    responseType = payload.optString("responseType", "COMPLETED_NOT_COMPLETED"),
+                                    responseValue = payload.optString("responseValue").takeIf { it.isNotBlank() },
+                                    percentage = if (payload.has("percentage") && !payload.isNull("percentage")) payload.getInt("percentage") else null,
+                                    numeric1 = if (payload.has("numeric1") && !payload.isNull("numeric1")) payload.getDouble("numeric1") else null,
+                                    numeric2 = if (payload.has("numeric2") && !payload.isNull("numeric2")) payload.getDouble("numeric2") else null,
+                                    text = payload.optString("textValue").takeIf { it.isNotBlank() },
+                                    lanNumber = payload.optString("lanNumber").takeIf { it.isNotBlank() },
+                                    idempotencyKey = event.eventId,
+                                    deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() }
+                                )
+                            }
+                        }
 
                         if (res.isSuccess) {
                             val serverObj = res.getOrThrow()
@@ -169,12 +247,25 @@ class SyncWorker(
                     "TASK_ACKNOWLEDGEMENT" -> {
                         val payload = JSONObject(event.payloadJson)
                         val deviceTimestamp = payload.optString("deviceTimestamp", java.time.Instant.now().toString())
-                        val res = supabaseClient.acknowledgeTaskAlarm(
+                        var res = supabaseClient.acknowledgeTaskAlarm(
                             accessToken = token,
                             taskId = event.taskId,
                             eventId = event.eventId,
                             deviceTimestamp = deviceTimestamp
                         )
+
+                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.acknowledgeTaskAlarm(
+                                    accessToken = token,
+                                    taskId = event.taskId,
+                                    eventId = event.eventId,
+                                    deviceTimestamp = deviceTimestamp
+                                )
+                            }
+                        }
 
                         if (res.isSuccess) {
                             outboxDao.markEventSynced(event.id, "ACK_CONFIRMED", System.currentTimeMillis())
@@ -189,10 +280,21 @@ class SyncWorker(
                     "SYSTEM_INCIDENT_SUBMISSION" -> {
                         val localIncident = db.systemIncidentDao().getIncidentBySubmissionId(event.eventId)
                         if (localIncident != null) {
-                            val res = supabaseClient.submitSystemIncident(
+                            var res = supabaseClient.submitSystemIncident(
                                 accessToken = token,
                                 incident = localIncident.toDomain()
                             )
+                            if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                                val forceRes = authRepo.forceRefreshAccessToken()
+                                if (forceRes.isSuccess) {
+                                    token = forceRes.getOrThrow()
+                                    res = supabaseClient.submitSystemIncident(
+                                        accessToken = token,
+                                        incident = localIncident.toDomain()
+                                    )
+                                }
+                            }
+
                             if (res.isSuccess) {
                                 outboxDao.markEventSynced(event.id, "INCIDENT_SYNCED", System.currentTimeMillis())
                                 db.systemIncidentDao().updateSyncStatus(localIncident.id, "SYNCED", null)
@@ -223,7 +325,16 @@ class SyncWorker(
             }
         }
 
-        if (hasRetryableFailure) {
+        val remainingPending = outboxDao.getPendingEventsForUser(activeUserId).size
+        if (!hasRetryableFailure && remainingPending == 0) {
+            db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
+            db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+            Result.success()
+        } else if (hasRetryableFailure) {
+            db.syncMetadataDao().updateSyncStatus(
+                SyncStatus.PENDING.name,
+                "$remainingPending pending operations awaiting sync"
+            )
             Result.retry()
         } else {
             Result.success()

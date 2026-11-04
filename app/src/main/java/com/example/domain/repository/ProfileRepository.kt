@@ -20,7 +20,8 @@ class ProfileRepository(
 
     suspend fun refreshProfile(): Result<UserProfile> {
         val session = userPrefs.getUserSession()
-        val token = session.accessToken
+        val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            ?: session.accessToken
             ?: return Result.failure(IOException("No active user session"))
         val userId = session.userId
             ?: return Result.failure(IOException("No active user ID"))
@@ -60,7 +61,8 @@ class ProfileRepository(
         newPhotoFilename: String? = null
     ): Result<UserProfile> {
         val session = userPrefs.getUserSession()
-        val token = session.accessToken
+        val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            ?: session.accessToken
             ?: return Result.failure(IOException("No active user session"))
         val userId = session.userId
             ?: return Result.failure(IOException("No active user ID"))

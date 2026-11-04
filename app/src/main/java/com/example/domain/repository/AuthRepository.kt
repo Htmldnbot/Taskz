@@ -1,5 +1,6 @@
 package com.example.domain.repository
 
+import android.util.Log
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncStatus
 import com.example.core.model.UserProfile
@@ -9,7 +10,13 @@ import com.example.data.local.entity.ProfileEntity
 import com.example.data.remote.SupabaseClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 import java.io.IOException
+
+class SessionExpiredException(message: String, cause: Throwable? = null) : IOException(message, cause)
+class NetworkUnavailableException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 class AuthRepository(
     private val supabaseClient: SupabaseClient,
@@ -17,6 +24,8 @@ class AuthRepository(
     private val syncMetadataDao: SyncMetadataDao,
     private val userPrefs: UserPreferencesDataStore
 ) {
+    private val tokenRefreshMutex = Mutex()
+
     val currentProfileFlow: Flow<UserProfile?> = profileDao.getCachedProfileFlow().map { it?.toDomain() }
 
     /**
@@ -216,7 +225,118 @@ class AuthRepository(
     }
 
     /**
+     * Checks if a JWT token has expired or will expire within [bufferSeconds].
+     */
+    fun isTokenExpired(token: String?, bufferSeconds: Long = 60L): Boolean {
+        if (token.isNullOrBlank()) return true
+        if (token.startsWith("offline_demo_token_")) return false
+        return try {
+            val parts = token.split(".")
+            if (parts.size < 2) return true
+            val payloadSegment = parts[1]
+            val payloadBytes = decodeBase64Url(payloadSegment)
+            val payloadString = String(payloadBytes, Charsets.UTF_8)
+            val expRegex = """"exp"\s*:\s*(\d+)""".toRegex()
+            val match = expRegex.find(payloadString)
+            if (match == null) return false
+            val expSeconds = match.groupValues[1].toLong()
+            val currentSeconds = System.currentTimeMillis() / 1000
+            currentSeconds >= (expSeconds - bufferSeconds)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    private fun decodeBase64Url(input: String): ByteArray {
+        var str = input.replace('-', '+').replace('_', '/')
+        while (str.length % 4 != 0) {
+            str += "="
+        }
+        return try {
+            android.util.Base64.decode(str, android.util.Base64.DEFAULT)
+        } catch (_: Throwable) {
+            java.util.Base64.getDecoder().decode(str)
+        }
+    }
+
+    /**
+     * Thread-safe access token provider with automatic token refresh.
+     * Guaranteed to return a valid access token or a typed failure.
+     */
+    suspend fun getValidAccessToken(): Result<String> = tokenRefreshMutex.withLock {
+        val session = userPrefs.getUserSession()
+        val currentToken = session.accessToken
+
+        if (currentToken.isNullOrBlank()) {
+            return Result.failure(SessionExpiredException("No active session found"))
+        }
+
+        if (currentToken.startsWith("offline_demo_token_")) {
+            return Result.success(currentToken)
+        }
+
+        // If current access token is not expired (with 60-second safety window), return it
+        if (!isTokenExpired(currentToken, bufferSeconds = 60L)) {
+            return Result.success(currentToken)
+        }
+
+        Log.i("TaskzAuth", "Access token is expired or expiring within 60s. Refreshing via Supabase...")
+
+        val refreshToken = session.refreshToken
+        if (refreshToken.isNullOrBlank()) {
+            Log.w("TaskzAuth", "No refresh token available to refresh expired access token")
+            return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
+        }
+
+        val refreshResult = supabaseClient.refreshSession(refreshToken)
+        if (refreshResult.isSuccess) {
+            val newSession = refreshResult.getOrThrow()
+            userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
+            Log.i("TaskzAuth", "Access token successfully refreshed and stored")
+            Result.success(newSession.accessToken)
+        } else {
+            val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
+            if (isNetworkFailure(err)) {
+                Log.w("TaskzAuth", "Network unavailable during token refresh: ${err.message}")
+                Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", err))
+            } else {
+                val errMsg = err.message.orEmpty()
+                Log.e("TaskzAuth", "Refresh token was rejected or revoked: $errMsg")
+                Result.failure(SessionExpiredException("Authentication required: $errMsg", err))
+            }
+        }
+    }
+
+    /**
+     * Force an immediate token refresh, e.g. after receiving HTTP 401 Unauthorized during an ongoing call.
+     */
+    suspend fun forceRefreshAccessToken(): Result<String> = tokenRefreshMutex.withLock {
+        val session = userPrefs.getUserSession()
+        val refreshToken = session.refreshToken
+        if (refreshToken.isNullOrBlank()) {
+            return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
+        }
+
+        Log.i("TaskzAuth", "Forcing session token refresh...")
+        val refreshResult = supabaseClient.refreshSession(refreshToken)
+        if (refreshResult.isSuccess) {
+            val newSession = refreshResult.getOrThrow()
+            userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
+            Log.i("TaskzAuth", "Forced token refresh succeeded")
+            Result.success(newSession.accessToken)
+        } else {
+            val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
+            if (isNetworkFailure(err)) {
+                Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", err))
+            } else {
+                Result.failure(SessionExpiredException("Authentication required: ${err.message}", err))
+            }
+        }
+    }
+
+    /**
      * Restore session on app launch without prompting for login if session is valid.
+     * Automatically handles token refresh and preserves offline profiles gracefully.
      */
     suspend fun restoreSession(): Result<UserProfile?> {
         val session = userPrefs.getUserSession()
@@ -226,25 +346,41 @@ class AuthRepository(
 
         val cachedProfile = profileDao.getCachedProfile()?.toDomain()
 
-        // Verify with server
-        val token = session.accessToken ?: return Result.success(cachedProfile)
+        if (session.accessToken?.startsWith("offline_demo_token_") == true) {
+            return Result.success(cachedProfile)
+        }
+
+        // Obtain valid token (or refresh if expired)
+        val tokenRes = getValidAccessToken()
+        if (tokenRes.isFailure) {
+            val ex = tokenRes.exceptionOrNull()!!
+            if (ex is NetworkUnavailableException || isNetworkFailure(ex)) {
+                // Offline launch: smoothly preserve cached profile and offline session
+                Log.i("TaskzAuth", "App launched offline or network unreachable; preserving cached profile")
+                return Result.success(cachedProfile)
+            } else {
+                // Refresh token is revoked or invalid: user must reauthenticate.
+                // CRITICAL: Preserve all local unsynced outbox events and tasks.
+                Log.w("TaskzAuth", "Session restoration requires reauthentication: ${ex.message}")
+                return Result.failure(ex)
+            }
+        }
+
+        val validToken = tokenRes.getOrThrow()
         val userId = session.userId ?: return Result.success(cachedProfile)
 
-        val remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
-
+        // Verify with server using valid token
+        val remoteProfileRes = supabaseClient.fetchProfileById(validToken, userId)
         if (remoteProfileRes.isSuccess) {
             val remoteProfile = remoteProfileRes.getOrNull()
             if (remoteProfile != null) {
                 if (!remoteProfile.isActive) {
-                    logout()
                     return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
                 }
 
                 val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
-                    supabaseClient.getSignedProfilePhotoUrl(token, remoteProfile.profilePhotoPath).getOrNull()
-                } else {
-                    null
-                }
+                    supabaseClient.getSignedProfilePhotoUrl(validToken, remoteProfile.profilePhotoPath).getOrNull()
+                } else null
                 val enriched = remoteProfile.copy(avatarSignedUrl = signedUrl)
 
                 profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
@@ -252,36 +388,13 @@ class AuthRepository(
                 return Result.success(enriched)
             }
         } else {
-            // Attempt token refresh
-            val refresh = session.refreshToken
-            if (!refresh.isNullOrBlank()) {
-                val refreshRes = supabaseClient.refreshSession(refresh)
-                if (refreshRes.isSuccess) {
-                    val newSession = refreshRes.getOrThrow()
-                    userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-                    val retryProfileRes = supabaseClient.fetchProfileById(newSession.accessToken, newSession.userId)
-                    if (retryProfileRes.isSuccess && retryProfileRes.getOrNull() != null) {
-                        val validProfile = retryProfileRes.getOrThrow()!!
-                        if (!validProfile.isActive) {
-                            logout()
-                            return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
-                        }
-
-                        val signedUrl = if (!validProfile.profilePhotoPath.isNullOrBlank()) {
-                            supabaseClient.getSignedProfilePhotoUrl(newSession.accessToken, validProfile.profilePhotoPath).getOrNull()
-                        } else {
-                            null
-                        }
-                        val enriched = validProfile.copy(avatarSignedUrl = signedUrl)
-
-                        profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
-                        return Result.success(enriched)
-                    }
-                }
+            val ex = remoteProfileRes.exceptionOrNull()
+            if (ex != null && isNetworkFailure(ex)) {
+                return Result.success(cachedProfile)
             }
         }
 
-        // Return cached profile if offline
+        // Return cached profile if offline or server temporary error
         return Result.success(cachedProfile)
     }
 
@@ -344,16 +457,20 @@ class AuthRepository(
         return if (res.isSuccess) Result.success(Unit) else Result.failure(res.exceptionOrNull()!!)
     }
 
-    private fun isNetworkFailure(throwable: Throwable): Boolean {
+    fun isNetworkFailure(throwable: Throwable): Boolean {
+        if (throwable is NetworkUnavailableException) return true
         val msg = throwable.message.orEmpty()
         return throwable is java.net.UnknownHostException ||
                 throwable is java.net.ConnectException ||
                 throwable is java.net.SocketTimeoutException ||
+                throwable is java.net.NoRouteToHostException ||
                 msg.contains("resolve host", ignoreCase = true) ||
                 msg.contains("failed to connect", ignoreCase = true) ||
                 msg.contains("timeout", ignoreCase = true) ||
                 msg.contains("unreachable", ignoreCase = true) ||
                 msg.contains("route to host", ignoreCase = true) ||
-                msg.contains("Supabase is not configured", ignoreCase = true)
+                msg.contains("Supabase is not configured", ignoreCase = true) ||
+                msg.contains("Network unreachable", ignoreCase = true) ||
+                msg.contains("No internet connection", ignoreCase = true)
     }
 }

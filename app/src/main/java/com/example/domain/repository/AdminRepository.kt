@@ -11,8 +11,10 @@ class AdminRepository(
     private val userPrefs: UserPreferencesDataStore
 ) {
     private suspend fun getActiveToken(): String {
-        val session = userPrefs.getUserSession()
-        return session.accessToken ?: throw IOException("Authentication required")
+        val validToken = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+        return validToken
+            ?: userPrefs.getUserSession().accessToken
+            ?: throw IOException("Authentication required")
     }
 
     suspend fun getAllUsers(): Result<List<UserProfile>> {

@@ -12,6 +12,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_client_operation_id
 ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS sync_status text NOT NULL DEFAULT 'SYNCED';
 
 -- 2. HARDENED ATOMIC TASK CREATION RPC (No exception swallowing)
+DROP FUNCTION IF EXISTS public.create_task_atomic(jsonb);
 CREATE OR REPLACE FUNCTION public.create_task_atomic(p_task jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -366,6 +367,7 @@ END;
 $$;
 
 -- 3. HARDENED ASSIGN USER TO TASK RPC (Strict Validation)
+DROP FUNCTION IF EXISTS public.assign_user_to_task(uuid, uuid, uuid);
 CREATE OR REPLACE FUNCTION public.assign_user_to_task(
     p_task_id uuid,
     p_user_id uuid,
