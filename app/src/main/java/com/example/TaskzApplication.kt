@@ -31,6 +31,9 @@ class TaskzApplication : Application() {
     lateinit var supabaseClient: SupabaseClient
         private set
 
+    lateinit var firebaseAuthService: com.example.data.remote.FirebaseAuthService
+        private set
+
     lateinit var authRepository: AuthRepository
         private set
 
@@ -60,6 +63,11 @@ class TaskzApplication : Application() {
         userPreferences = UserPreferencesDataStore(this)
         networkMonitor = NetworkMonitor(this)
         supabaseClient = SupabaseClient()
+        firebaseAuthService = com.example.data.remote.FirebaseAuthService(
+            context = this,
+            profileDao = database.profileDao(),
+            userPrefs = userPreferences
+        )
 
         // 2. Initialize Repositories
         authRepository = AuthRepository(

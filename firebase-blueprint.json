@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile in Firestore",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "employeeId": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "mobile": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "appRole": {
+          "type": "string"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "authProvider": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "fullName"]
+    }
+  },
+  "firestore": {
+    "collections": {
+      "/users/{userId}": {
+        "schema": {
+          "$ref": "#/entities/User"
+        },
+        "description": "User profile documents"
+      }
+    }
+  }
+}

@@ -170,6 +170,24 @@ class SystemIncidentViewModel(
         }
     }
 
+    fun createAndSelectCentre(code: String, name: String, district: String, state: String) {
+        viewModelScope.launch {
+            val newCentre = repository.createCentre(code, name, district, state)
+            val centres = repository.getAvailableCentres()
+            _availableCentres.value = centres
+            onCentreSelected(newCentre)
+        }
+    }
+
+    fun updateCentre(centreId: String, code: String, name: String, district: String, state: String) {
+        viewModelScope.launch {
+            val updated = repository.updateCentre(centreId, code, name, district, state)
+            val centres = repository.getAvailableCentres()
+            _availableCentres.value = centres
+            onCentreSelected(updated)
+        }
+    }
+
     private suspend fun applyCentre(
         centre: TaskGroup,
         userId: String,
@@ -180,16 +198,18 @@ class SystemIncidentViewModel(
         val defaultLan = repository.resolveDefaultLan(userId, centre.id)
         val defaultItManager = repository.resolveDefaultItManager(userId, centre.id)
 
-        val state = "Rajasthan"
-        val district = "Jaipur"
-        val code = centre.code ?: centre.title.filter { it.isDigit() }.ifBlank { "141" }
+        val locParts = centre.description?.split(",")?.map { it.trim() } ?: emptyList()
+        val district = if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: "Jaipur"
+        val state = if (locParts.isNotEmpty()) locParts.last() else "Rajasthan"
+        val code = centre.code ?: centre.title.substringBefore("·").trim().filter { it.isDigit() }.ifBlank { "141" }
+        val name = if (centre.title.contains("·")) centre.title.substringAfter("·").trim() else centre.title
 
         _formState.value = _formState.value.copy(
             selectedCentre = centre,
             stateName = state,
             districtName = district,
             centreCode = code,
-            centreName = centre.title,
+            centreName = name,
             examDate = currentDateStr,
             examName = exam,
             shiftName = shift,

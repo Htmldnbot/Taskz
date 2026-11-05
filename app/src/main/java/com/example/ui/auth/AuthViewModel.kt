@@ -1,5 +1,6 @@
 package com.example.ui.auth
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -31,8 +32,18 @@ sealed interface ResetRequestUiState {
     data class Error(val message: String) : ResetRequestUiState
 }
 
+sealed interface PhoneVerificationState {
+    object Idle : PhoneVerificationState
+    object SendingCode : PhoneVerificationState
+    data class CodeSent(val verificationId: String, val phoneNumber: String) : PhoneVerificationState
+    object VerifyingCode : PhoneVerificationState
+    data class Success(val profile: UserProfile) : PhoneVerificationState
+    data class Error(val message: String) : PhoneVerificationState
+}
+
 class AuthViewModel(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val firebaseAuthService: com.example.data.remote.FirebaseAuthService = com.example.TaskzApplication.instance.firebaseAuthService
 ) : ViewModel() {
 
     private val _loginState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
@@ -43,6 +54,9 @@ class AuthViewModel(
 
     private val _resetRequestState = MutableStateFlow<ResetRequestUiState>(ResetRequestUiState.Idle)
     val resetRequestState: StateFlow<ResetRequestUiState> = _resetRequestState.asStateFlow()
+
+    private val _phoneVerificationState = MutableStateFlow<PhoneVerificationState>(PhoneVerificationState.Idle)
+    val phoneVerificationState: StateFlow<PhoneVerificationState> = _phoneVerificationState.asStateFlow()
 
     fun login(employeeId: String, password: String) {
         val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
@@ -247,6 +261,175 @@ class AuthViewModel(
     fun clearSignUpError() {
         if (_signUpState.value is AuthUiState.Error) {
             _signUpState.value = AuthUiState.Idle
+        }
+    }
+
+    // ----------------------------------------------------
+    // Firebase Phone Authentication (Phone No. + OTP)
+    // ----------------------------------------------------
+
+    fun sendPhoneOtp(activity: Activity, rawPhoneNumber: String) {
+        val trimmed = rawPhoneNumber.trim()
+        if (trimmed.length < 8) {
+            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid phone number with country code (e.g. +91 9876543210).")
+            return
+        }
+
+        _phoneVerificationState.value = PhoneVerificationState.SendingCode
+        firebaseAuthService.sendPhoneOtp(
+            activity = activity,
+            phoneNumber = trimmed,
+            onCodeSent = { verificationId ->
+                _phoneVerificationState.value = PhoneVerificationState.CodeSent(verificationId, trimmed)
+            },
+            onAutoVerified = { profile ->
+                _phoneVerificationState.value = PhoneVerificationState.Success(profile)
+                _loginState.value = AuthUiState.Success(profile)
+            },
+            onError = { errMsg ->
+                _phoneVerificationState.value = PhoneVerificationState.Error(errMsg)
+            }
+        )
+    }
+
+    fun verifyPhoneOtp(verificationId: String, otpCode: String, fullName: String? = null) {
+        if (otpCode.trim().length != 6) {
+            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter the 6-digit verification code.")
+            return
+        }
+
+        viewModelScope.launch {
+            _phoneVerificationState.value = PhoneVerificationState.VerifyingCode
+            val result = firebaseAuthService.verifyOtpAndSignIn(verificationId, otpCode, fullName)
+            result.fold(
+                onSuccess = { profile ->
+                    _phoneVerificationState.value = PhoneVerificationState.Success(profile)
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _phoneVerificationState.value = PhoneVerificationState.Error(error.message ?: "Verification failed. Please retry.")
+                }
+            )
+        }
+    }
+
+    fun resetPhoneVerification() {
+        _phoneVerificationState.value = PhoneVerificationState.Idle
+    }
+
+    /**
+     * Fallback login when live carrier SMS is restricted by Firebase SMS Region Policy.
+     */
+    fun signInWithTestPhone(phoneNumber: String, fullName: String? = null) {
+        val trimmed = phoneNumber.trim()
+        if (trimmed.length < 8) {
+            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid phone number.")
+            return
+        }
+        viewModelScope.launch {
+            _phoneVerificationState.value = PhoneVerificationState.VerifyingCode
+            val result = firebaseAuthService.signInWithTestPhone(trimmed, fullName)
+            result.fold(
+                onSuccess = { profile ->
+                    _phoneVerificationState.value = PhoneVerificationState.Success(profile)
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _phoneVerificationState.value = PhoneVerificationState.Error(error.message ?: "Test login failed.")
+                }
+            )
+        }
+    }
+
+    // ----------------------------------------------------
+    // Firebase Email & Password Authentication
+    // ----------------------------------------------------
+
+    fun loginWithEmailPassword(email: String, password: String) {
+        val trimmedEmail = email.trim()
+        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
+            _loginState.value = AuthUiState.Error("Please enter a valid email address.")
+            return
+        }
+        if (password.isBlank()) {
+            _loginState.value = AuthUiState.Error("Please enter your password.")
+            return
+        }
+
+        viewModelScope.launch {
+            _loginState.value = AuthUiState.Loading
+            val result = firebaseAuthService.signInWithEmailPassword(trimmedEmail, password)
+            result.fold(
+                onSuccess = { profile ->
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _loginState.value = AuthUiState.Error(error.message ?: "Email login failed. Check credentials.")
+                }
+            )
+        }
+    }
+
+    fun sendPasswordReset(email: String, onResult: (Result<Unit>) -> Unit) {
+        val trimmedEmail = email.trim()
+        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
+            onResult(Result.failure(IllegalArgumentException("Please enter a valid email address.")))
+            return
+        }
+        viewModelScope.launch {
+            val result = firebaseAuthService.sendPasswordReset(trimmedEmail)
+            onResult(result)
+        }
+    }
+
+    fun signUpWithEmailPassword(email: String, password: String, fullName: String, mobile: String) {
+        val trimmedEmail = email.trim()
+        val trimmedName = fullName.trim()
+        val trimmedMobile = mobile.trim()
+
+        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
+            _signUpState.value = AuthUiState.Error("Please enter a valid email address.")
+            return
+        }
+        if (trimmedName.length < 2) {
+            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+            return
+        }
+        if (password.length < 6) {
+            _signUpState.value = AuthUiState.Error("Password must be at least 6 characters.")
+            return
+        }
+
+        viewModelScope.launch {
+            _signUpState.value = AuthUiState.Loading
+            val result = firebaseAuthService.signUpWithEmailPassword(trimmedEmail, password, trimmedName, trimmedMobile)
+            result.fold(
+                onSuccess = { profile ->
+                    _signUpState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _signUpState.value = AuthUiState.Error(error.message ?: "Email registration failed.")
+                }
+            )
+        }
+    }
+
+    // ----------------------------------------------------
+    // Google Sign-In via Credential Manager
+    // ----------------------------------------------------
+
+    fun signInWithGoogle(activity: Activity) {
+        viewModelScope.launch {
+            _loginState.value = AuthUiState.Loading
+            val result = firebaseAuthService.signInWithGoogle(activity)
+            result.fold(
+                onSuccess = { profile ->
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _loginState.value = AuthUiState.Error(error.message ?: "Google Sign-In failed.")
+                }
+            )
         }
     }
 

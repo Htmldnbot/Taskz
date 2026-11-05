@@ -1,6 +1,10 @@
 package com.example.ui.auth
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,22 +33,31 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.Warning
-import com.example.core.network.SupabaseConfig
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -61,12 +74,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -76,18 +87,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.core.model.UserProfile
+import com.example.core.network.SupabaseConfig
 import com.example.ui.common.AccountInactiveDialog
 import com.example.ui.common.ConfigureSupabaseDialog
-import com.example.ui.common.TaskzOutlinedButton
 import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
+import kotlinx.coroutines.launch
+
+private fun Context.findActivity(): Activity? {
+    var cur = this
+    while (cur is ContextWrapper) {
+        if (cur is Activity) return cur
+        cur = cur.baseContext
+    }
+    return null
+}
+
+enum class LoginAuthMethod {
+    PHONE_OTP,
+    EMAIL_PASSWORD,
+    EMPLOYEE_ID
+}
+
+enum class SignUpAuthMethod {
+    EMAIL_PASSWORD,
+    EMPLOYEE_ID
+}
 
 @Composable
 fun AuthScreen(
@@ -96,19 +127,27 @@ fun AuthScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var loginMethod by rememberSaveable { mutableStateOf(LoginAuthMethod.PHONE_OTP) }
+    var signUpMethod by rememberSaveable { mutableStateOf(SignUpAuthMethod.EMAIL_PASSWORD) }
+
     var showContactAdminDialog by rememberSaveable { mutableStateOf(false) }
+    var showForgotPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var showFirebaseSmsGuideDialog by rememberSaveable { mutableStateOf(false) }
     var showConfigDialog by rememberSaveable { mutableStateOf(false) }
     var showInactiveDialog by rememberSaveable { mutableStateOf(false) }
     var showSupabaseGuideDialog by rememberSaveable { mutableStateOf(false) }
     var offlinePendingData by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    var lastAttemptedPhone by rememberSaveable { mutableStateOf("") }
 
     val loginState by viewModel.loginState.collectAsStateWithLifecycle()
     val signUpState by viewModel.signUpState.collectAsStateWithLifecycle()
+    val phoneState by viewModel.phoneVerificationState.collectAsStateWithLifecycle()
 
     // Handle Auth Success navigation
     LaunchedEffect(loginState) {
@@ -122,6 +161,12 @@ fun AuthScreen(
     LaunchedEffect(signUpState) {
         if (signUpState is AuthUiState.Success) {
             onAuthSuccess((signUpState as AuthUiState.Success).profile)
+        }
+    }
+
+    LaunchedEffect(phoneState) {
+        if (phoneState is PhoneVerificationState.Success) {
+            onAuthSuccess((phoneState as PhoneVerificationState.Success).profile)
         }
     }
 
@@ -191,7 +236,7 @@ fun AuthScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Tab Selector: Login vs Sign Up
             TabRow(
@@ -240,32 +285,249 @@ fun AuthScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Content based on tab
             if (selectedTab == 0) {
-                LoginForm(
-                    uiState = loginState,
-                    onLogin = { empId, pwd ->
-                        focusManager.clearFocus()
-                        viewModel.login(empId, pwd)
+                // Method selection chips for Login
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = loginMethod == LoginAuthMethod.PHONE_OTP,
+                        onClick = { loginMethod = LoginAuthMethod.PHONE_OTP },
+                        label = { Text("Phone OTP", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("auth_mode_phone")
+                    )
+                    FilterChip(
+                        selected = loginMethod == LoginAuthMethod.EMAIL_PASSWORD,
+                        onClick = { loginMethod = LoginAuthMethod.EMAIL_PASSWORD },
+                        label = { Text("Email", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("auth_mode_email")
+                    )
+                    FilterChip(
+                        selected = loginMethod == LoginAuthMethod.EMPLOYEE_ID,
+                        onClick = { loginMethod = LoginAuthMethod.EMPLOYEE_ID },
+                        label = { Text("Employee ID", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Badge,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .testTag("auth_mode_empid")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                when (loginMethod) {
+                    LoginAuthMethod.PHONE_OTP -> {
+                        PhoneOtpLoginForm(
+                            phoneState = phoneState,
+                            onSendOtp = { rawNumber ->
+                                focusManager.clearFocus()
+                                lastAttemptedPhone = rawNumber
+                                if (activity != null) {
+                                    viewModel.sendPhoneOtp(activity, rawNumber)
+                                } else {
+                                    Toast.makeText(context, "Activity unavailable for phone verification", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onVerifyOtp = { verificationId, code, fullName ->
+                                focusManager.clearFocus()
+                                viewModel.verifyPhoneOtp(verificationId, code, fullName)
+                            },
+                            onResetState = {
+                                viewModel.resetPhoneVerification()
+                            },
+                            onSignInTestPhone = { phoneNum ->
+                                focusManager.clearFocus()
+                                viewModel.signInWithTestPhone(phoneNum)
+                            },
+                            onOpenSmsGuide = {
+                                showFirebaseSmsGuideDialog = true
+                            }
+                        )
+                    }
+                    LoginAuthMethod.EMAIL_PASSWORD -> {
+                        EmailPasswordLoginForm(
+                            uiState = loginState,
+                            onLogin = { email, pwd ->
+                                focusManager.clearFocus()
+                                viewModel.loginWithEmailPassword(email, pwd)
+                            },
+                            onForgotPassword = { showForgotPasswordDialog = true }
+                        )
+                    }
+                    LoginAuthMethod.EMPLOYEE_ID -> {
+                        EmployeeIdLoginForm(
+                            uiState = loginState,
+                            onLogin = { empId, pwd ->
+                                focusManager.clearFocus()
+                                viewModel.login(empId, pwd)
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Divider and Google Sign In
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "  OR CONTINUE WITH  ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        if (activity != null) {
+                            viewModel.signInWithGoogle(activity)
+                        } else {
+                            Toast.makeText(context, "Activity context unavailable", Toast.LENGTH_SHORT).show()
+                        }
                     },
-                    onContactAdmin = { showContactAdminDialog = true }
-                )
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("google_signin_button")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "G",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Sign in with Google",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
+                        )
+                    }
+                }
             } else {
-                SignUpForm(
-                    uiState = signUpState,
-                    onSignUp = { empId, name, mob, pwd, confirmPwd, uri ->
-                        focusManager.clearFocus()
-                        offlinePendingData = Triple(empId, name, mob)
-                        viewModel.signUp(context, empId, name, mob, pwd, confirmPwd, uri)
-                    },
-                    onSignUpOffline = { empId, name, mob ->
-                        focusManager.clearFocus()
-                        viewModel.registerOffline(empId, name, mob)
-                    },
-                    onOpenSupabaseGuide = { showSupabaseGuideDialog = true }
-                )
+                // Method selection chips for Sign Up
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = signUpMethod == SignUpAuthMethod.EMAIL_PASSWORD,
+                        onClick = { signUpMethod = SignUpAuthMethod.EMAIL_PASSWORD },
+                        label = { Text("Email (Firebase)", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("signup_mode_email")
+                    )
+                    FilterChip(
+                        selected = signUpMethod == SignUpAuthMethod.EMPLOYEE_ID,
+                        onClick = { signUpMethod = SignUpAuthMethod.EMPLOYEE_ID },
+                        label = { Text("Employee ID", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Badge,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("signup_mode_empid")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                when (signUpMethod) {
+                    SignUpAuthMethod.EMAIL_PASSWORD -> {
+                        FirebaseEmailSignUpForm(
+                            uiState = signUpState,
+                            onSignUp = { email, password, fullName, mobile ->
+                                focusManager.clearFocus()
+                                viewModel.signUpWithEmailPassword(email, password, fullName, mobile)
+                            }
+                        )
+                    }
+                    SignUpAuthMethod.EMPLOYEE_ID -> {
+                        EmployeeSignUpForm(
+                            uiState = signUpState,
+                            onSignUp = { empId, name, mob, pwd, confirmPwd, uri ->
+                                focusManager.clearFocus()
+                                offlinePendingData = Triple(empId, name, mob)
+                                viewModel.signUp(context, empId, name, mob, pwd, confirmPwd, uri)
+                            },
+                            onSignUpOffline = { empId, name, mob ->
+                                focusManager.clearFocus()
+                                viewModel.registerOffline(empId, name, mob)
+                            },
+                            onOpenSupabaseGuide = { showSupabaseGuideDialog = true }
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -287,7 +549,7 @@ fun AuthScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Contact Administrator / Forgot Password",
+                    text = "Contact Administrator / Request Help",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -304,6 +566,13 @@ fun AuthScreen(
                 showContactAdminDialog = false
                 viewModel.resetResetRequestState()
             }
+        )
+    }
+
+    if (showForgotPasswordDialog) {
+        ForgotPasswordModal(
+            viewModel = viewModel,
+            onDismiss = { showForgotPasswordDialog = false }
         )
     }
 
@@ -337,13 +606,358 @@ fun AuthScreen(
             }
         )
     }
+
+    if (showFirebaseSmsGuideDialog) {
+        FirebaseSmsGuideDialog(
+            phoneNumber = lastAttemptedPhone,
+            onDismiss = { showFirebaseSmsGuideDialog = false },
+            onUseDemoOtp = {
+                viewModel.signInWithTestPhone(lastAttemptedPhone)
+            }
+        )
+    }
 }
 
+/**
+ * Firebase Phone Number & OTP Verification Form
+ */
 @Composable
-private fun LoginForm(
+private fun PhoneOtpLoginForm(
+    phoneState: PhoneVerificationState,
+    onSendOtp: (String) -> Unit,
+    onVerifyOtp: (verificationId: String, code: String, fullName: String?) -> Unit,
+    onResetState: () -> Unit,
+    onSignInTestPhone: (String) -> Unit,
+    onOpenSmsGuide: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    var phoneNumber by rememberSaveable { mutableStateOf("") }
+    var otpCode by rememberSaveable { mutableStateOf("") }
+    var fullName by rememberSaveable { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        when (phoneState) {
+            is PhoneVerificationState.CodeSent, is PhoneVerificationState.VerifyingCode -> {
+                val verificationId = if (phoneState is PhoneVerificationState.CodeSent) phoneState.verificationId else ""
+                val targetPhone = if (phoneState is PhoneVerificationState.CodeSent) phoneState.phoneNumber else phoneNumber
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Send,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Code sent to $targetPhone",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "Enter 6-digit SMS verification code",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                        TextButton(
+                            onClick = onResetState,
+                            modifier = Modifier.testTag("change_phone_button")
+                        ) {
+                            Text("Change")
+                        }
+                    }
+                }
+
+                TaskzTextField(
+                    value = otpCode,
+                    onValueChange = { if (it.length <= 6) otpCode = it.trim() },
+                    label = "6-Digit SMS Code *",
+                    placeholder = "123456",
+                    leadingIcon = Icons.Default.VpnKey,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.NumberPassword,
+                        imeAction = ImeAction.Next
+                    ),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                    testTag = "otp_code_input"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                TaskzTextField(
+                    value = fullName,
+                    onValueChange = { fullName = it },
+                    label = "Your Full Name (Optional)",
+                    placeholder = "e.g., Alex Morgan",
+                    leadingIcon = Icons.Default.Person,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = {
+                        focusManager.clearFocus()
+                        onVerifyOtp(verificationId, otpCode, fullName.takeIf { it.isNotBlank() })
+                    }),
+                    testTag = "otp_fullname_input"
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                TaskzPrimaryButton(
+                    text = "Verify Code & Sign In",
+                    leadingIcon = Icons.Default.Check,
+                    onClick = {
+                        onVerifyOtp(verificationId, otpCode, fullName.takeIf { it.isNotBlank() })
+                    },
+                    isLoading = phoneState is PhoneVerificationState.VerifyingCode,
+                    testTag = "verify_otp_button"
+                )
+            }
+            else -> {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Instant SMS Login",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Enter your phone number to receive a secure 6-digit one-time password (OTP) via SMS.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                TaskzTextField(
+                    value = phoneNumber,
+                    onValueChange = { phoneNumber = it },
+                    label = "Phone Number *",
+                    placeholder = "+91 9876543210",
+                    leadingIcon = Icons.Default.Phone,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Phone,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = {
+                        focusManager.clearFocus()
+                        onSendOtp(phoneNumber)
+                    }),
+                    testTag = "phone_input"
+                )
+
+                AnimatedVisibility(visible = phoneState is PhoneVerificationState.Error) {
+                    val rawError = (phoneState as? PhoneVerificationState.Error)?.message.orEmpty()
+                    val isRegionBlocked = rawError.contains("SMS_REGION_BLOCKED", ignoreCase = true) ||
+                            rawError.contains("SMS unable to be sent until this region enabled", ignoreCase = true) ||
+                            rawError.contains("operation is not allowed", ignoreCase = true) ||
+                            rawError.contains("17006")
+                    val isPlayIntegrityIssue = rawError.contains("PLAY_INTEGRITY_FAILED", ignoreCase = true) ||
+                            rawError.contains("Integrity API", ignoreCase = true) ||
+                            rawError.contains("Recaptcha", ignoreCase = true) ||
+                            rawError.contains("CANNOT_BIND_TO_SERVICE", ignoreCase = true) ||
+                            rawError.contains("siteKey", ignoreCase = true)
+
+                    if (isRegionBlocked || isPlayIntegrityIssue) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isPlayIntegrityIssue) "Device Verification Notice" else "SMS Region Policy Restriction",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = if (isPlayIntegrityIssue) {
+                                        "This device/emulator cannot bind to Play Store Integrity service. You can use your test phone number from the Firebase console, or tap Instant Demo OTP to sign in immediately."
+                                    } else {
+                                        "Phone sign-in is enabled in Firebase, but live SMS to India (+91) is restricted by Firebase's regional fraud policy. You can either add a test number in the console or sign in immediately using demo mode."
+                                    },
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = onOpenSmsGuide,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("How to Fix", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Button(
+                                        onClick = { onSignInTestPhone(phoneNumber) },
+                                        modifier = Modifier.weight(1.3f)
+                                    ) {
+                                        Text("Instant Demo OTP", maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                        ) {
+                            Text(
+                                text = rawError,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                TaskzPrimaryButton(
+                    text = "Send Verification Code",
+                    leadingIcon = Icons.Default.Send,
+                    onClick = { onSendOtp(phoneNumber) },
+                    isLoading = phoneState is PhoneVerificationState.SendingCode,
+                    testTag = "send_otp_button"
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Firebase Email & Password Login Form
+ */
+@Composable
+private fun EmailPasswordLoginForm(
     uiState: AuthUiState,
     onLogin: (String, String) -> Unit,
-    onContactAdmin: () -> Unit
+    onForgotPassword: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    var email by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        TaskzTextField(
+            value = email,
+            onValueChange = { email = it.trim() },
+            label = "Email Address *",
+            placeholder = "you@example.com",
+            leadingIcon = Icons.Default.Email,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "email_input"
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        TaskzTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = "Password *",
+            placeholder = "Enter password",
+            leadingIcon = Icons.Default.Lock,
+            isPassword = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(onDone = {
+                focusManager.clearFocus()
+                onLogin(email, password)
+            }),
+            testTag = "email_password_input"
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                onClick = onForgotPassword,
+                modifier = Modifier.testTag("forgot_password_button")
+            ) {
+                Text("Forgot Password?", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        AnimatedVisibility(visible = uiState is AuthUiState.Error) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                Text(
+                    text = (uiState as? AuthUiState.Error)?.message.orEmpty(),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        TaskzPrimaryButton(
+            text = "Sign In with Email",
+            onClick = { onLogin(email, password) },
+            isLoading = uiState is AuthUiState.Loading,
+            testTag = "email_login_button"
+        )
+    }
+}
+
+/**
+ * Legacy Employee ID Login Form
+ */
+@Composable
+private fun EmployeeIdLoginForm(
+    uiState: AuthUiState,
+    onLogin: (String, String) -> Unit
 ) {
     val focusManager = LocalFocusManager.current
     var employeeId by rememberSaveable { mutableStateOf("") }
@@ -364,7 +978,7 @@ private fun LoginForm(
             testTag = "login_employee_id"
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         TaskzTextField(
             value = password,
@@ -401,10 +1015,10 @@ private fun LoginForm(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         TaskzPrimaryButton(
-            text = "Login to Taskz",
+            text = "Login with Employee ID",
             onClick = { onLogin(employeeId, password) },
             isLoading = uiState is AuthUiState.Loading,
             testTag = "login_submit_button"
@@ -412,8 +1026,153 @@ private fun LoginForm(
     }
 }
 
+/**
+ * Firebase Email Registration Form
+ */
 @Composable
-private fun SignUpForm(
+private fun FirebaseEmailSignUpForm(
+    uiState: AuthUiState,
+    onSignUp: (email: String, password: String, fullName: String, mobile: String) -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    var fullName by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }
+    var mobile by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var confirmPassword by rememberSaveable { mutableStateOf("") }
+    var localError by rememberSaveable { mutableStateOf<String?>(null) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        TaskzTextField(
+            value = fullName,
+            onValueChange = { fullName = it },
+            label = "Full Name *",
+            placeholder = "e.g., Priya Patel",
+            leadingIcon = Icons.Default.Person,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_firebase_fullname"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = email,
+            onValueChange = { email = it.trim() },
+            label = "Email Address *",
+            placeholder = "priya@example.com",
+            leadingIcon = Icons.Default.Email,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_firebase_email"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = mobile,
+            onValueChange = { mobile = it },
+            label = "Mobile Number (Optional)",
+            placeholder = "+91 9876543210",
+            leadingIcon = Icons.Default.Phone,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Phone,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_firebase_mobile"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = "Password *",
+            placeholder = "Minimum 6 characters",
+            leadingIcon = Icons.Default.Lock,
+            isPassword = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_firebase_password"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = confirmPassword,
+            onValueChange = { confirmPassword = it },
+            label = "Confirm Password *",
+            placeholder = "Re-enter password",
+            leadingIcon = Icons.Default.Lock,
+            isPassword = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(onDone = {
+                focusManager.clearFocus()
+                if (password != confirmPassword) {
+                    localError = "Passwords do not match."
+                } else {
+                    localError = null
+                    onSignUp(email, password, fullName, mobile)
+                }
+            }),
+            testTag = "signup_firebase_confirm_password"
+        )
+
+        val displayError = localError ?: (uiState as? AuthUiState.Error)?.message
+
+        AnimatedVisibility(visible = !displayError.isNullOrBlank()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+            ) {
+                Text(
+                    text = displayError.orEmpty(),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        TaskzPrimaryButton(
+            text = "Create Firebase Account",
+            onClick = {
+                if (password != confirmPassword) {
+                    localError = "Passwords do not match."
+                } else {
+                    localError = null
+                    onSignUp(email, password, fullName, mobile)
+                }
+            },
+            isLoading = uiState is AuthUiState.Loading,
+            testTag = "signup_firebase_submit_button"
+        )
+    }
+}
+
+/**
+ * Workforce Employee Sign Up Form
+ */
+@Composable
+private fun EmployeeSignUpForm(
     uiState: AuthUiState,
     onSignUp: (String, String, String, String, String, Uri?) -> Unit,
     onSignUpOffline: (String, String, String) -> Unit,
@@ -427,7 +1186,6 @@ private fun SignUpForm(
     var confirmPassword by rememberSaveable { mutableStateOf("") }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Zero-permission Android Photo Picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -700,10 +1458,10 @@ private fun SignUpForm(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         TaskzPrimaryButton(
-            text = "Create Account",
+            text = "Create Workforce Account",
             onClick = {
                 onSignUp(employeeId, fullName, mobile, password, confirmPassword, selectedPhotoUri)
             },
@@ -711,6 +1469,104 @@ private fun SignUpForm(
             testTag = "signup_submit_button"
         )
     }
+}
+
+@Composable
+fun ForgotPasswordModal(
+    viewModel: AuthViewModel,
+    onDismiss: () -> Unit
+) {
+    var email by rememberSaveable { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var isSuccess by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Reset Password",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (isSuccess) {
+                    Text(
+                        text = statusMessage ?: "A password reset link has been sent to your email address.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                } else {
+                    Text(
+                        text = "Enter your registered Firebase email address. We'll send you a link to reset your password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    TaskzTextField(
+                        value = email,
+                        onValueChange = { email = it.trim() },
+                        label = "Email Address",
+                        placeholder = "you@example.com",
+                        leadingIcon = Icons.Default.Email,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        testTag = "forgot_pwd_email_input"
+                    )
+
+                    if (!statusMessage.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = statusMessage.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (isSuccess) {
+                Button(onClick = onDismiss) {
+                    Text("Done")
+                }
+            } else {
+                Button(
+                    onClick = {
+                        isSending = true
+                        statusMessage = null
+                        viewModel.sendPasswordReset(email) { result ->
+                            isSending = false
+                            result.fold(
+                                onSuccess = {
+                                    isSuccess = true
+                                    statusMessage = "Password reset email sent to $email. Please check your inbox."
+                                },
+                                onFailure = { error ->
+                                    statusMessage = error.message ?: "Failed to send reset email."
+                                }
+                            )
+                        }
+                    },
+                    enabled = !isSending,
+                    modifier = Modifier.testTag("send_reset_email_button")
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Send Reset Link")
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (!isSuccess) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        }
+    )
 }
 
 @Composable
@@ -876,6 +1732,95 @@ fun ContactAdminModal(
                 TextButton(onClick = onDismiss) {
                     Text("Cancel")
                 }
+            }
+        }
+    )
+}
+
+@Composable
+fun FirebaseSmsGuideDialog(
+    phoneNumber: String,
+    onDismiss: () -> Unit,
+    onUseDemoOtp: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Fixing Firebase SMS Error",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "In your Firebase Console, Phone is marked as Enabled, but sending carrier SMS requires one of the following:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Option 1 (Recommended & 100% Free): Add Test Phone Number",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "1. In Firebase Console ➔ Authentication ➔ Sign-in method tab:\n2. Click the pencil (Edit) icon next to 'Phone'.\n3. Expand 'Phone numbers for testing'.\n4. Add your number: ${phoneNumber.ifBlank { "+917550448793" }}\n5. Add test code: 123456\n6. Click Save.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Option 2: Enable India in SMS Region Policy",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "1. In Firebase Console ➔ Authentication, click the 'Settings' tab (top right).\n2. Scroll down to 'SMS region policy'.\n3. Enable/allow India (+91).\n4. Click Save.\n\nNote: Carrier SMS delivery may require an Identity Platform SMS quota or Blaze plan.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onUseDemoOtp()
+                    onDismiss()
+                }
+            ) {
+                Text("Login with Test Code")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got It")
             }
         }
     )

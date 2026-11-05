@@ -18,6 +18,7 @@ import com.example.data.local.dao.TaskGroupDao
 import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.SystemIncidentAuditEntity
 import com.example.data.local.entity.SystemIncidentEntity
+import com.example.data.local.entity.TaskGroupEntity
 import com.example.data.remote.SupabaseClient
 import com.example.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
@@ -84,7 +85,96 @@ class SystemIncidentRepository(
     // ==========================================
 
     suspend fun getAvailableCentres(): List<TaskGroup> = withContext(Dispatchers.IO) {
-        taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
+        val existing = taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
+        if (existing.isEmpty()) {
+            val seeded = listOf(
+                TaskGroup(
+                    id = "centre_141",
+                    title = "141 · Yagyavalkya Institute of Technology",
+                    code = "141",
+                    description = "Sitapura Industrial Area, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                ),
+                TaskGroup(
+                    id = "centre_142",
+                    title = "142 · Arya College of Engineering & IT",
+                    code = "142",
+                    description = "SP-42, RIICO Industrial Area, Kukas, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                ),
+                TaskGroup(
+                    id = "centre_143",
+                    title = "143 · JECRC Foundation & University",
+                    code = "143",
+                    description = "Ramchandrapura, Sitapura Extension, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                ),
+                TaskGroup(
+                    id = "centre_144",
+                    title = "144 · Poornima Institute of Engineering & Technology",
+                    code = "144",
+                    description = "ISI-2, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                ),
+                TaskGroup(
+                    id = "centre_145",
+                    title = "145 · Swami Keshvanand Institute of Technology",
+                    code = "145",
+                    description = "Ramnagaria, Jagatpura, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                ),
+                TaskGroup(
+                    id = "centre_146",
+                    title = "146 · Rajasthan College of Engineering for Women",
+                    code = "146",
+                    description = "Bhankrota, Ajmer Road, Jaipur, Rajasthan",
+                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                )
+            )
+            taskGroupDao.insertGroups(seeded.map { TaskGroupEntity.fromDomain(it) })
+            seeded
+        } else {
+            existing
+        }
+    }
+
+    suspend fun createCentre(code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
+        val trimmedCode = code.trim().filter { it.isDigit() || it.isLetter() || it == '-' }
+        val cleanName = name.trim().removePrefix("$trimmedCode ·").removePrefix("$trimmedCode -").trim()
+        val title = if (trimmedCode.isNotBlank()) "$trimmedCode · $cleanName" else cleanName
+        val location = "${district.trim().ifBlank { "Jaipur" }}, ${state.trim().ifBlank { "Rajasthan" }}"
+        val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+
+        val newCentre = TaskGroup(
+            id = "centre_${UUID.randomUUID().toString().take(8)}",
+            title = title,
+            code = trimmedCode.ifBlank { null },
+            description = location,
+            createdAt = nowStr,
+            updatedAt = nowStr
+        )
+        taskGroupDao.insertGroup(TaskGroupEntity.fromDomain(newCentre))
+        rememberSelectedCentre(newCentre.id)
+        newCentre
+    }
+
+    suspend fun updateCentre(centreId: String, code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
+        val trimmedCode = code.trim().filter { it.isDigit() || it.isLetter() || it == '-' }
+        val cleanName = name.trim().removePrefix("$trimmedCode ·").removePrefix("$trimmedCode -").trim()
+        val title = if (trimmedCode.isNotBlank()) "$trimmedCode · $cleanName" else cleanName
+        val location = "${district.trim().ifBlank { "Jaipur" }}, ${state.trim().ifBlank { "Rajasthan" }}"
+        val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+
+        val updated = TaskGroup(
+            id = centreId,
+            title = title,
+            code = trimmedCode.ifBlank { null },
+            description = location,
+            updatedAt = nowStr
+        )
+        taskGroupDao.updateGroup(TaskGroupEntity.fromDomain(updated))
+        rememberSelectedCentre(updated.id)
+        updated
     }
 
     suspend fun resolveDefaultCentre(): TaskGroup? = withContext(Dispatchers.IO) {

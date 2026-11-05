@@ -5,6 +5,7 @@ import android.app.TimePickerDialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -17,6 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -102,6 +107,9 @@ fun QuickEntryScreen(
     val context = LocalContext.current
 
     var showCentreDialog by remember { mutableStateOf(false) }
+    var showAddCentreDialog by remember { mutableStateOf(false) }
+    var editingCentre by remember { mutableStateOf<TaskGroup?>(null) }
+    var centreSearchQuery by remember { mutableStateOf("") }
     var showExamEditDialog by remember { mutableStateOf(false) }
     var showReasonMenu by remember { mutableStateOf(false) }
 
@@ -707,54 +715,330 @@ fun QuickEntryScreen(
     // DIALOGS: CENTRE SELECTION & EXAM EDIT
     // ==========================================
     if (showCentreDialog) {
+        val filteredCentres = availableCentres.filter {
+            centreSearchQuery.isBlank() ||
+            it.title.contains(centreSearchQuery, ignoreCase = true) ||
+            it.description?.contains(centreSearchQuery, ignoreCase = true) == true ||
+            it.code?.contains(centreSearchQuery, ignoreCase = true) == true
+        }
+
         AlertDialog(
-            onDismissRequest = { showCentreDialog = false },
-            title = { Text("Select Examination Centre") },
+            onDismissRequest = {
+                showCentreDialog = false
+                centreSearchQuery = ""
+            },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Examination Centres",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                    IconButton(onClick = { showAddCentreDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Add New Centre",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (availableCentres.isEmpty()) {
-                        Text("No other centres available. Default centre is active.")
-                    } else {
-                        availableCentres.forEach { centre ->
-                            val isSelected = formState.selectedCentre?.id == centre.id
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        viewModel.onCentreSelected(centre)
-                                        showCentreDialog = false
-                                    }
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = {
-                                        viewModel.onCentreSelected(centre)
-                                        showCentreDialog = false
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = centreSearchQuery,
+                        onValueChange = { centreSearchQuery = it },
+                        placeholder = { Text("Search by code, name, or city...") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Search,
+                                contentDescription = "Search",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 300.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (filteredCentres.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 20.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
                                     Text(
-                                        text = centre.title,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                    )
-                                    val loc = centre.description?.ifBlank { "Jaipur, Rajasthan" } ?: "Jaipur, Rajasthan"
-                                    Text(
-                                        text = loc,
-                                        style = MaterialTheme.typography.bodySmall,
+                                        text = if (centreSearchQuery.isNotBlank()) "No centres match '$centreSearchQuery'" else "No examination centres configured yet.",
+                                        style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
+                        } else {
+                            items(filteredCentres) { centre ->
+                                val isSelected = formState.selectedCentre?.id == centre.id
+                                ElevatedCard(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            viewModel.onCentreSelected(centre)
+                                            showCentreDialog = false
+                                            centreSearchQuery = ""
+                                        },
+                                    colors = CardDefaults.elevatedCardColors(
+                                        containerColor = if (isSelected) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surface
+                                        }
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = {
+                                                viewModel.onCentreSelected(centre)
+                                                showCentreDialog = false
+                                                centreSearchQuery = ""
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = centre.title,
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                                                )
+                                            )
+                                            val loc = centre.description?.ifBlank { "Jaipur, Rajasthan" } ?: "Jaipur, Rajasthan"
+                                            Text(
+                                                text = loc,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { editingCentre = centre },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Edit Centre",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
+                    }
+
+                    Button(
+                        onClick = { showAddCentreDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(imageVector = Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add New Centre")
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showCentreDialog = false }) {
+                TextButton(onClick = {
+                    showCentreDialog = false
+                    centreSearchQuery = ""
+                }) {
                     Text("Close")
+                }
+            }
+        )
+    }
+
+    if (showAddCentreDialog) {
+        var newCode by remember { mutableStateOf("") }
+        var newName by remember { mutableStateOf("") }
+        var newDistrict by remember { mutableStateOf("Jaipur") }
+        var newState by remember { mutableStateOf("Rajasthan") }
+        var addError by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { showAddCentreDialog = false },
+            title = { Text("Add Examination Centre", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newCode,
+                        onValueChange = { newCode = it.trim() },
+                        label = { Text("Centre Code *") },
+                        placeholder = { Text("e.g., 148, EXAM-01") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Centre / Institution Name *") },
+                        placeholder = { Text("e.g., Govt Engineering College") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newDistrict,
+                        onValueChange = { newDistrict = it },
+                        label = { Text("District / City") },
+                        placeholder = { Text("e.g., Jaipur, Ajmer, Kota") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newState,
+                        onValueChange = { newState = it },
+                        label = { Text("State") },
+                        placeholder = { Text("e.g., Rajasthan") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (addError != null) {
+                        Text(
+                            text = addError.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isBlank()) {
+                            addError = "Please enter the centre name."
+                        } else {
+                            viewModel.createAndSelectCentre(
+                                code = newCode,
+                                name = newName,
+                                district = newDistrict,
+                                state = newState
+                            )
+                            showAddCentreDialog = false
+                            showCentreDialog = false
+                        }
+                    }
+                ) {
+                    Text("Add & Select")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddCentreDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (editingCentre != null) {
+        val target = editingCentre!!
+        val locParts = target.description?.split(",")?.map { it.trim() } ?: emptyList()
+        var editCode by remember(target) {
+            mutableStateOf(target.code ?: target.title.substringBefore("·").trim().filter { it.isDigit() })
+        }
+        var editName by remember(target) {
+            mutableStateOf(if (target.title.contains("·")) target.title.substringAfter("·").trim() else target.title)
+        }
+        var editDistrict by remember(target) {
+            mutableStateOf(if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: "Jaipur")
+        }
+        var editState by remember(target) {
+            mutableStateOf(if (locParts.isNotEmpty()) locParts.last() else "Rajasthan")
+        }
+        var editError by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { editingCentre = null },
+            title = { Text("Edit Examination Centre", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editCode,
+                        onValueChange = { editCode = it.trim() },
+                        label = { Text("Centre Code *") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Centre Name *") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editDistrict,
+                        onValueChange = { editDistrict = it },
+                        label = { Text("District / City") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editState,
+                        onValueChange = { editState = it },
+                        label = { Text("State") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (editError != null) {
+                        Text(
+                            text = editError.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editName.isBlank()) {
+                            editError = "Please enter the centre name."
+                        } else {
+                            viewModel.updateCentre(
+                                centreId = target.id,
+                                code = editCode,
+                                name = editName,
+                                district = editDistrict,
+                                state = editState
+                            )
+                            editingCentre = null
+                        }
+                    }
+                ) {
+                    Text("Save Changes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCentre = null }) {
+                    Text("Cancel")
                 }
             }
         )
