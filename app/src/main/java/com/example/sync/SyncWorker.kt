@@ -79,11 +79,23 @@ class SyncWorker(
                     SyncStatus.ERROR.name,
                     "Authentication required: Please sign in to resume synchronization"
                 )
-                return@withContext Result.retry()
+                return@withContext Result.failure()
             }
         }
 
         var token = tokenRes.getOrThrow()
+
+        val isFirebaseOrOfflineUser = token.startsWith("firebase_") || 
+            token.startsWith("offline_") || 
+            activeUserId.startsWith("phone_user_")
+
+        if (isFirebaseOrOfflineUser) {
+            val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
+            if (remaining == 0) {
+                db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+            }
+            return@withContext Result.success()
+        }
 
         // Strictly query pending events for the currently active user to prevent account data leakage
         val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)

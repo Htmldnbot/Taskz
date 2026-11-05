@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.tasks.await
 import org.json.JSONObject
 import java.io.IOException
 
@@ -229,7 +232,13 @@ class AuthRepository(
      */
     fun isTokenExpired(token: String?, bufferSeconds: Long = 60L): Boolean {
         if (token.isNullOrBlank()) return true
-        if (token.startsWith("offline_demo_token_")) return false
+        if (token.startsWith("offline_demo_token_") ||
+            token.startsWith("firebase_token_") ||
+            token.startsWith("firebase_")
+        ) {
+            val parts = token.split(".")
+            if (parts.size < 2) return false
+        }
         return try {
             val parts = token.split(".")
             if (parts.size < 2) return true
@@ -275,6 +284,31 @@ class AuthRepository(
             return Result.success(currentToken)
         }
 
+        // Firebase-managed authentication session
+        if (currentToken.startsWith("firebase_token_") ||
+            session.refreshToken?.startsWith("firebase_") == true ||
+            session.userId?.startsWith("phone_user_") == true
+        ) {
+            val fbUser = try {
+                Firebase.auth.currentUser
+            } catch (_: Exception) {
+                null
+            }
+            if (fbUser != null) {
+                try {
+                    val tokenResult = fbUser.getIdToken(false).await()
+                    val newToken = tokenResult.token ?: currentToken
+                    userPrefs.updateAccessToken(newToken, "firebase_refresh_${fbUser.uid}")
+                    return Result.success(newToken)
+                } catch (e: Exception) {
+                    if (isNetworkFailure(e)) {
+                        return Result.success(currentToken)
+                    }
+                }
+            }
+            return Result.success(currentToken)
+        }
+
         // If current access token is not expired (with 60-second safety window), return it
         if (!isTokenExpired(currentToken, bufferSeconds = 60L)) {
             return Result.success(currentToken)
@@ -317,6 +351,29 @@ class AuthRepository(
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
+        if (session.accessToken?.startsWith("firebase_") == true ||
+            session.accessToken?.startsWith("offline_") == true ||
+            refreshToken.startsWith("firebase_") ||
+            session.userId?.startsWith("phone_user_") == true
+        ) {
+            val fbUser = try { Firebase.auth.currentUser } catch (_: Exception) { null }
+            if (fbUser != null) {
+                return try {
+                    val tokenResult = fbUser.getIdToken(true).await()
+                    val newToken = tokenResult.token ?: session.accessToken ?: "firebase_token_${fbUser.uid}"
+                    userPrefs.updateAccessToken(newToken, "firebase_refresh_${fbUser.uid}")
+                    Result.success(newToken)
+                } catch (e: Exception) {
+                    if (isNetworkFailure(e)) {
+                        Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", e))
+                    } else {
+                        Result.success(session.accessToken ?: "firebase_token_${fbUser.uid}")
+                    }
+                }
+            }
+            return Result.success(session.accessToken ?: "firebase_token_${session.userId}")
+        }
+
         Log.i("TaskzAuth", "Forcing session token refresh...")
         val refreshResult = supabaseClient.refreshSession(refreshToken)
         if (refreshResult.isSuccess) {
@@ -346,7 +403,10 @@ class AuthRepository(
 
         val cachedProfile = profileDao.getCachedProfile()?.toDomain()
 
-        if (session.accessToken?.startsWith("offline_demo_token_") == true) {
+        if (session.accessToken?.startsWith("offline_demo_token_") == true ||
+            session.accessToken?.startsWith("firebase_") == true ||
+            session.userId?.startsWith("phone_user_") == true
+        ) {
             return Result.success(cachedProfile)
         }
 

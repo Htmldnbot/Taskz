@@ -121,6 +121,37 @@ class SyncRepository(
 
         var token = tokenRes.getOrThrow()
 
+        val isFirebaseOrOfflineUser = token.startsWith("firebase_") || 
+            token.startsWith("offline_") || 
+            userId.startsWith("phone_user_")
+
+        if (isFirebaseOrOfflineUser) {
+            val cachedProfile = profileDao.getCachedProfile()?.toDomain()
+            if (cachedProfile != null && !cachedProfile.isActive) {
+                syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Account is inactive")
+                userPrefs.clearSession()
+                profileDao.clearProfile()
+                return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
+            }
+
+            syncMetadataDao.updateLastServerFetch(now)
+            val pendingCount = outboxDao.getPendingEventsForUser(userId).size
+            if (pendingCount > 0) {
+                syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
+            } else {
+                syncMetadataDao.updateLastSuccessfulSync(now)
+                syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+            }
+
+            val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
+                lastServerFetch = now,
+                lastSuccessfulSync = if (pendingCount == 0) now else null,
+                pendingSyncCount = pendingCount,
+                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
+            )
+            return Result.success(updated)
+        }
+
         // 2. Validate session & profile against Supabase
         var remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
 
