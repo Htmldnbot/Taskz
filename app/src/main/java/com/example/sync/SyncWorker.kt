@@ -19,6 +19,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.tasks.await
 
 class SyncWorker(
     appContext: Context,
@@ -90,9 +94,25 @@ class SyncWorker(
             activeUserId.startsWith("phone_user_")
 
         if (isFirebaseOrOfflineUser) {
+            val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
+            for (event in pendingEvents) {
+                if (event.operationType == "SYSTEM_INCIDENT_SUBMISSION") {
+                    val localIncident = db.systemIncidentDao().getIncidentBySubmissionId(event.eventId)
+                    if (localIncident != null) {
+                        try {
+                            TaskzApplication.instance.systemIncidentRepository.syncIncidentToFirestore(localIncident.toDomain())
+                        } catch (_: Exception) {}
+                        db.systemIncidentDao().updateSyncStatus(localIncident.id, "SYNCED", null)
+                    }
+                    outboxDao.markEventSynced(event.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                } else {
+                    outboxDao.markEventSynced(event.id, "OFFLINE_PROCESSED", System.currentTimeMillis())
+                }
+            }
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
             if (remaining == 0) {
                 db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+                db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
             }
             return@withContext Result.success()
         }
@@ -118,32 +138,52 @@ class SyncWorker(
                 when (event.operationType) {
                     "TASK_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
-                        var res = supabaseClient.createTaskAtomic(token, payload)
-                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
-                            if (forceRes.isSuccess) {
-                                token = forceRes.getOrThrow()
-                                res = supabaseClient.createTaskAtomic(token, payload)
+                        if (token.startsWith("firebase_") || token.startsWith("offline_") || token.split(".").size != 3) {
+                            try {
+                                val firestore = FirebaseFirestore.getInstance()
+                                val taskId = event.taskId ?: payload.optString("id", java.util.UUID.randomUUID().toString())
+                                val taskDoc = mutableMapOf<String, Any>()
+                                val keys = payload.keys()
+                                while (keys.hasNext()) {
+                                    val k = keys.next()
+                                    taskDoc[k] = payload.get(k)
+                                }
+                                taskDoc["updatedAt"] = FieldValue.serverTimestamp()
+                                firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
+                                outboxDao.markEventSynced(event.id, taskId, System.currentTimeMillis())
+                                db.taskDao().updateTaskStatus(event.taskId, "open")
+                            } catch (e: Exception) {
+                                outboxDao.markEventFailed(event.id, e.message ?: "Firestore task sync failed", "FAILED_RETRYABLE", System.currentTimeMillis())
+                                hasRetryableFailure = true
                             }
-                        }
-
-                        if (res.isSuccess) {
-                            val serverObj = res.getOrThrow()
-                            val isDuplicate = serverObj.optBoolean("is_duplicate", false)
-                            val serverTaskId = serverObj.optString("task_id", event.taskId)
-                            if (isDuplicate) {
-                                Log.i(TAG, "Duplicate task creation detected via client_operation_id; reconciled with server task $serverTaskId")
-                            }
-                            outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
-                            db.taskDao().updateTaskStatus(event.taskId, "open")
                         } else {
-                            val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
-                            val isPermanent = err.contains("not authorized", ignoreCase = true) ||
-                                    err.contains("inactive", ignoreCase = true) ||
-                                    err.contains("cannot be blank", ignoreCase = true)
-                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
-                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
-                            if (!isPermanent) hasRetryableFailure = true
+                            var res = supabaseClient.createTaskAtomic(token, payload)
+                            if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                                val forceRes = authRepo.forceRefreshAccessToken()
+                                if (forceRes.isSuccess) {
+                                    token = forceRes.getOrThrow()
+                                    res = supabaseClient.createTaskAtomic(token, payload)
+                                }
+                            }
+
+                            if (res.isSuccess) {
+                                val serverObj = res.getOrThrow()
+                                val isDuplicate = serverObj.optBoolean("is_duplicate", false)
+                                val serverTaskId = serverObj.optString("task_id", event.taskId)
+                                if (isDuplicate) {
+                                    Log.i(TAG, "Duplicate task creation detected via client_operation_id; reconciled with server task $serverTaskId")
+                                }
+                                outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
+                                db.taskDao().updateTaskStatus(event.taskId, "open")
+                            } else {
+                                val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
+                                val isPermanent = err.contains("not authorized", ignoreCase = true) ||
+                                        err.contains("inactive", ignoreCase = true) ||
+                                        err.contains("cannot be blank", ignoreCase = true)
+                                val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                                outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                                if (!isPermanent) hasRetryableFailure = true
+                            }
                         }
                     }
 

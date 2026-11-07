@@ -298,7 +298,7 @@ class AuthViewModel(
         fullName: String? = null,
         phoneNumber: String? = null
     ) {
-        val trimmedOtp = otpCode.trim().ifBlank { "123456" }
+        val trimmedOtp = otpCode.trim()
         if (trimmedOtp.length != 6) {
             _phoneVerificationState.value = PhoneVerificationState.Error("Please enter the 6-digit verification code.")
             return

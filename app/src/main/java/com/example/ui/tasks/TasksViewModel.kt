@@ -460,6 +460,7 @@ class TasksViewModel(
 
     fun createTask(
         task: TaskItem,
+        selectedEmployeeIds: List<String> = emptyList(),
         onSuccess: (TaskItem) -> Unit
     ) {
         createTask(
@@ -472,7 +473,7 @@ class TasksViewModel(
             dueAt = task.dueAt,
             priority = task.priority,
             visibility = task.visibility,
-            selectedEmployeeIds = emptyList(),
+            selectedEmployeeIds = selectedEmployeeIds,
             allowSelfJoin = task.allowSelfJoin,
             joinRequiresApproval = task.joinRequiresApproval,
             notifyCreatorOnJoin = task.notifyCreatorOnJoin,

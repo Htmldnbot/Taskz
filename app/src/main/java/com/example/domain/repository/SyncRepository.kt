@@ -18,6 +18,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.io.IOException
 import java.util.UUID
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
+import kotlinx.coroutines.tasks.await
+import com.example.R
 
 class SyncRepository(
     private val supabaseClient: SupabaseClient,
@@ -28,6 +32,18 @@ class SyncRepository(
     private val networkMonitor: NetworkMonitor,
     private val context: Context = TaskzApplication.instance
 ) {
+    private val firestore: FirebaseFirestore by lazy {
+        val dbId = try {
+            context.getString(R.string.firestore_database_id)
+        } catch (_: Exception) {
+            "(default)"
+        }
+        try {
+            FirebaseFirestore.getInstance(dbId)
+        } catch (_: Exception) {
+            FirebaseFirestore.getInstance()
+        }
+    }
     val syncMetadataFlow: Flow<SyncMetadata> = combine(
         syncMetadataDao.getSyncMetadataFlow(),
         outboxDao.getPendingCountFlow()
@@ -134,20 +150,41 @@ class SyncRepository(
                 return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
             }
 
-            syncMetadataDao.updateLastServerFetch(now)
+            // Real server verification: Verify live connection to Firestore server
+            try {
+                firestore.collection("system_incidents").limit(1).get(Source.SERVER).await()
+            } catch (e: Exception) {
+                val errMsg = e.localizedMessage ?: "Unable to connect to server"
+                syncMetadataDao.updateSyncStatus(
+                    SyncStatus.OFFLINE.name,
+                    "Offline — Server unreachable. Local data preserved."
+                )
+                return Result.failure(IOException("Server verification failed: $errMsg", e))
+            }
+
+            // Sync any pending incidents and tasks to Firestore
+            try {
+                TaskzApplication.instance.systemIncidentRepository.syncPendingIncidents()
+                TaskzApplication.instance.taskRepository.syncPendingTasksToFirestore()
+            } catch (e: Exception) {
+                android.util.Log.w("TaskzSync", "Data sync warning: ${e.message}")
+            }
+
             val pendingCount = outboxDao.getPendingEventsForUser(userId).size
+            syncMetadataDao.updateLastServerFetch(now)
             if (pendingCount > 0) {
                 syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
             } else {
                 syncMetadataDao.updateLastSuccessfulSync(now)
-                syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+                syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
             }
 
             val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
                 lastServerFetch = now,
                 lastSuccessfulSync = if (pendingCount == 0) now else null,
                 pendingSyncCount = pendingCount,
-                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
+                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED,
+                statusMessage = if (pendingCount > 0) "$pendingCount pending operations awaiting sync" else "Verified with Server"
             )
             return Result.success(updated)
         }

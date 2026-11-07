@@ -39,8 +39,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SupportAgent
@@ -98,6 +100,7 @@ import com.example.ui.common.AccountInactiveDialog
 import com.example.ui.common.ConfigureSupabaseDialog
 import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private fun Context.findActivity(): Activity? {
@@ -628,275 +631,302 @@ private fun PhoneOtpLoginForm(
     onSendOtp: (String) -> Unit,
     onVerifyOtp: (verificationId: String, code: String, fullName: String?, phoneNumber: String?) -> Unit,
     onResetState: () -> Unit,
-    onSignInTestPhone: (String) -> Unit,
-    onOpenSmsGuide: () -> Unit
+    onSignInTestPhone: (String) -> Unit = {},
+    onOpenSmsGuide: () -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     var phoneNumber by rememberSaveable { mutableStateOf("") }
     var otpCode by rememberSaveable { mutableStateOf("") }
     var fullName by rememberSaveable { mutableStateOf("") }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        when (phoneState) {
-            is PhoneVerificationState.CodeSent, is PhoneVerificationState.VerifyingCode -> {
-                val verificationId = if (phoneState is PhoneVerificationState.CodeSent) phoneState.verificationId else ""
-                val targetPhone = if (phoneState is PhoneVerificationState.CodeSent) phoneState.phoneNumber else phoneNumber
+    var activeVerificationId by rememberSaveable { mutableStateOf("") }
+    var activeTargetPhone by rememberSaveable { mutableStateOf("") }
+    var isInOtpMode by rememberSaveable { mutableStateOf(false) }
+    var resendCountdown by rememberSaveable { mutableIntStateOf(60) }
 
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                    shape = RoundedCornerShape(12.dp),
+    LaunchedEffect(phoneState) {
+        if (phoneState is PhoneVerificationState.CodeSent) {
+            activeVerificationId = phoneState.verificationId
+            activeTargetPhone = phoneState.phoneNumber
+            isInOtpMode = true
+            resendCountdown = 60
+            while (resendCountdown > 0) {
+                delay(1000L)
+                resendCountdown--
+            }
+        } else if (phoneState is PhoneVerificationState.Idle) {
+            isInOtpMode = false
+            otpCode = ""
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (isInOtpMode) {
+            val targetPhone = activeTargetPhone.ifBlank { phoneNumber }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Send,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Code sent to $targetPhone",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Text(
+                            text = "Enter the 6-digit verification code",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            isInOtpMode = false
+                            otpCode = ""
+                            onResetState()
+                        },
+                        modifier = Modifier.testTag("change_phone_button")
+                    ) {
+                        Text("Change")
+                    }
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp)
+            ) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Check your system notifications or SMS for your dynamic verification code.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            TaskzTextField(
+                value = otpCode,
+                onValueChange = { input ->
+                    val digits = input.filter { it.isDigit() }.take(6)
+                    otpCode = digits
+                },
+                label = "6-Digit SMS Code *",
+                placeholder = "• • • • • •",
+                leadingIcon = Icons.Default.VpnKey,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                testTag = "otp_code_input"
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (resendCountdown > 0) "Resend code in ${resendCountdown}s" else "Didn't receive code?",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = {
+                        if (resendCountdown == 0) {
+                            resendCountdown = 60
+                            onSendOtp(targetPhone)
+                        }
+                    },
+                    enabled = resendCountdown == 0,
+                    modifier = Modifier.testTag("resend_otp_button")
+                ) {
+                    Text(
+                        text = "Resend Code",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            TaskzTextField(
+                value = fullName,
+                onValueChange = { fullName = it },
+                label = "Your Full Name (Optional)",
+                placeholder = "e.g., Alex Morgan",
+                leadingIcon = Icons.Default.Person,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = {
+                    focusManager.clearFocus()
+                    if (otpCode.length == 6) {
+                        onVerifyOtp(activeVerificationId, otpCode, fullName.takeIf { it.isNotBlank() }, targetPhone)
+                    }
+                }),
+                testTag = "otp_fullname_input"
+            )
+
+            AnimatedVisibility(visible = phoneState is PhoneVerificationState.Error) {
+                val errText = (phoneState as? PhoneVerificationState.Error)?.message.orEmpty()
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(14.dp),
+                        modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Send,
+                            imageVector = Icons.Default.ErrorOutline,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.size(20.dp)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Code sent to $targetPhone",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                            Text(
-                                text = "Enter 6-digit SMS verification code",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
-                        TextButton(
-                            onClick = onResetState,
-                            modifier = Modifier.testTag("change_phone_button")
-                        ) {
-                            Text("Change")
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = errText,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
+            }
 
+            Spacer(modifier = Modifier.height(20.dp))
+
+            TaskzPrimaryButton(
+                text = "Verify Code & Sign In",
+                leadingIcon = Icons.Default.Check,
+                onClick = {
+                    focusManager.clearFocus()
+                    if (otpCode.length == 6) {
+                        onVerifyOtp(activeVerificationId, otpCode, fullName.takeIf { it.isNotBlank() }, targetPhone)
+                    }
+                },
+                enabled = otpCode.length == 6 && phoneState !is PhoneVerificationState.VerifyingCode,
+                isLoading = phoneState is PhoneVerificationState.VerifyingCode,
+                testTag = "verify_otp_button"
+            )
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "Instant Mobile Login",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Enter your mobile number to sign in securely. A dynamic verification code will be sent to your device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            TaskzTextField(
+                value = phoneNumber,
+                onValueChange = { phoneNumber = it },
+                label = "Phone Number *",
+                placeholder = "+91 9876543210",
+                leadingIcon = Icons.Default.Phone,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Phone,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = {
+                    focusManager.clearFocus()
+                    onSendOtp(phoneNumber)
+                }),
+                testTag = "phone_input"
+            )
+
+            AnimatedVisibility(visible = phoneState is PhoneVerificationState.Error) {
+                val rawError = (phoneState as? PhoneVerificationState.Error)?.message.orEmpty()
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 14.dp)
+                        .padding(top = 12.dp)
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Verification Code: 123456",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                            Text(
-                                text = "Instant zero-reCAPTCHA login",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
-                        TextButton(
-                            onClick = { otpCode = "123456" },
-                            modifier = Modifier.testTag("autofill_otp_button")
-                        ) {
-                            Text("Fill 123456", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                TaskzTextField(
-                    value = otpCode,
-                    onValueChange = { if (it.length <= 6) otpCode = it.trim() },
-                    label = "6-Digit SMS Code *",
-                    placeholder = "123456",
-                    leadingIcon = Icons.Default.VpnKey,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.NumberPassword,
-                        imeAction = ImeAction.Next
-                    ),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                    testTag = "otp_code_input"
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                TaskzTextField(
-                    value = fullName,
-                    onValueChange = { fullName = it },
-                    label = "Your Full Name (Optional)",
-                    placeholder = "e.g., Alex Morgan",
-                    leadingIcon = Icons.Default.Person,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Words,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(onDone = {
-                        focusManager.clearFocus()
-                        val finalCode = otpCode.ifBlank { "123456" }
-                        onVerifyOtp(verificationId, finalCode, fullName.takeIf { it.isNotBlank() }, targetPhone)
-                    }),
-                    testTag = "otp_fullname_input"
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                TaskzPrimaryButton(
-                    text = "Verify Code & Sign In",
-                    leadingIcon = Icons.Default.Check,
-                    onClick = {
-                        val finalCode = otpCode.ifBlank { "123456" }
-                        onVerifyOtp(verificationId, finalCode, fullName.takeIf { it.isNotBlank() }, targetPhone)
-                    },
-                    isLoading = phoneState is PhoneVerificationState.VerifyingCode,
-                    testTag = "verify_otp_button"
-                )
-            }
-            else -> {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            text = "Instant Mobile Login",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Enter your mobile number to sign in securely. No external browser or reCAPTCHA required.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = rawError,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
-
-                TaskzTextField(
-                    value = phoneNumber,
-                    onValueChange = { phoneNumber = it },
-                    label = "Phone Number *",
-                    placeholder = "+91 9876543210",
-                    leadingIcon = Icons.Default.Phone,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Phone,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(onDone = {
-                        focusManager.clearFocus()
-                        onSendOtp(phoneNumber)
-                    }),
-                    testTag = "phone_input"
-                )
-
-                AnimatedVisibility(visible = phoneState is PhoneVerificationState.Error) {
-                    val rawError = (phoneState as? PhoneVerificationState.Error)?.message.orEmpty()
-                    val isRegionBlocked = rawError.contains("SMS_REGION_BLOCKED", ignoreCase = true) ||
-                            rawError.contains("SMS unable to be sent until this region enabled", ignoreCase = true) ||
-                            rawError.contains("operation is not allowed", ignoreCase = true) ||
-                            rawError.contains("17006")
-                    val isPlayIntegrityIssue = rawError.contains("PLAY_INTEGRITY_FAILED", ignoreCase = true) ||
-                            rawError.contains("Integrity API", ignoreCase = true) ||
-                            rawError.contains("Recaptcha", ignoreCase = true) ||
-                            rawError.contains("CANNOT_BIND_TO_SERVICE", ignoreCase = true) ||
-                            rawError.contains("siteKey", ignoreCase = true)
-
-                    if (isRegionBlocked || isPlayIntegrityIssue) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (isPlayIntegrityIssue) "Device Verification Notice" else "SMS Region Policy Restriction",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = if (isPlayIntegrityIssue) {
-                                        "This device/emulator cannot bind to Play Store Integrity service. You can use your test phone number from the Firebase console, or tap Instant Demo OTP to sign in immediately."
-                                    } else {
-                                        "Phone sign-in is enabled in Firebase, but live SMS to India (+91) is restricted by Firebase's regional fraud policy. You can either add a test number in the console or sign in immediately using demo mode."
-                                    },
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = onOpenSmsGuide,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("How to Fix", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Button(
-                                        onClick = { onSignInTestPhone(phoneNumber) },
-                                        modifier = Modifier.weight(1.3f)
-                                    ) {
-                                        Text("Instant Demo OTP", maxLines = 1, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp)
-                        ) {
-                            Text(
-                                text = rawError,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                TaskzPrimaryButton(
-                    text = "Send Verification Code",
-                    leadingIcon = Icons.Default.Send,
-                    onClick = { onSendOtp(phoneNumber) },
-                    isLoading = phoneState is PhoneVerificationState.SendingCode,
-                    testTag = "send_otp_button"
-                )
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            TaskzPrimaryButton(
+                text = "Send Verification Code",
+                leadingIcon = Icons.Default.Send,
+                onClick = { onSendOtp(phoneNumber) },
+                isLoading = phoneState is PhoneVerificationState.SendingCode,
+                testTag = "send_otp_button"
+            )
         }
     }
 }
@@ -1779,13 +1809,13 @@ fun ContactAdminModal(
 fun FirebaseSmsGuideDialog(
     phoneNumber: String,
     onDismiss: () -> Unit,
-    onUseDemoOtp: () -> Unit
+    onUseDemoOtp: () -> Unit = {}
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Fixing Firebase SMS Error",
+                text = "Verification Assistance",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
             )
         },
@@ -1796,7 +1826,7 @@ fun FirebaseSmsGuideDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "In your Firebase Console, Phone is marked as Enabled, but sending carrier SMS requires one of the following:",
+                    text = "If you have not received your verification code:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1809,21 +1839,21 @@ fun FirebaseSmsGuideDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "Option 1 (Recommended & 100% Free): Add Test Phone Number",
+                            text = "Check Notification Drawer",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "1. In Firebase Console ➔ Authentication ➔ Sign-in method tab:\n2. Click the pencil (Edit) icon next to 'Phone'.\n3. Expand 'Phone numbers for testing'.\n4. Add your number: ${phoneNumber.ifBlank { "+917550448793" }}\n5. Add test code: 123456\n6. Click Save.",
+                            text = "A high-priority notification with your 6-digit verification code has been dispatched to your notification panel.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -1832,13 +1862,13 @@ fun FirebaseSmsGuideDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "Option 2: Enable India in SMS Region Policy",
+                            text = "Resend Code",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "1. In Firebase Console ➔ Authentication, click the 'Settings' tab (top right).\n2. Scroll down to 'SMS region policy'.\n3. Enable/allow India (+91).\n4. Click Save.\n\nNote: Carrier SMS delivery may require an Identity Platform SMS quota or Blaze plan.",
+                            text = "You can tap 'Resend Code' once the 60-second cooldown expires to generate a fresh dynamic code.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1847,18 +1877,8 @@ fun FirebaseSmsGuideDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    onUseDemoOtp()
-                    onDismiss()
-                }
-            ) {
-                Text("Login with Test Code")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Got It")
+            Button(onClick = onDismiss) {
+                Text("Understood")
             }
         }
     )

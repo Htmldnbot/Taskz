@@ -39,6 +39,11 @@ import java.util.Date
 import android.content.Context
 import com.example.TaskzApplication
 import com.example.alarm.TaskAlarmScheduler
+import com.example.R
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.tasks.await
 import com.example.core.model.AlarmType
 import com.example.core.model.LanProgressItem
 import com.example.core.model.ResponseType
@@ -71,6 +76,18 @@ class TaskRepository(
     private val tag = "TaskRepository"
     private val isoDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
     private val taskAlarmScheduler = TaskAlarmScheduler(context)
+    private val firestore: FirebaseFirestore by lazy {
+        val dbId = try {
+            context.getString(R.string.firestore_database_id)
+        } catch (_: Exception) {
+            "(default)"
+        }
+        try {
+            FirebaseFirestore.getInstance(dbId)
+        } catch (_: Exception) {
+            FirebaseFirestore.getInstance()
+        }
+    }
 
     // In-memory data store for rich relations (requirements, participants, join requests, activity)
     // Synchronized across the app lifecycle and persisted in-memory / backed by Supabase
@@ -924,13 +941,18 @@ class TaskRepository(
             return@withContext Result.success(localProfile.id)
         }
 
-        // 3. Query remote Supabase profiles if token is available
+        // 3. Query remote Supabase profiles only if token is a valid 3-part JWT
         val token = getActiveAccessToken()
-        if (!token.isNullOrBlank()) {
+        if (!token.isNullOrBlank() && token.split(".").size == 3) {
             val remoteRes = supabaseClient.resolveEmployeeToUuid(token, trimmed)
             if (remoteRes.isSuccess) {
                 return@withContext remoteRes
             }
+        }
+
+        // 4. For Firebase/phone users or direct employee identifiers, accept trimmed directly
+        if (trimmed.length in 2..60) {
+            return@withContext Result.success(trimmed)
         }
 
         Result.failure(NoSuchElementException("Employee '$trimmed' could not be resolved to a valid user account."))
@@ -1108,7 +1130,62 @@ class TaskRepository(
             val token = getActiveAccessToken()
             var serverSavedTask = task
 
-            if (!token.isNullOrBlank()) {
+            val isFirebaseUser = token?.startsWith("firebase_") == true ||
+                    token?.startsWith("offline_") == true ||
+                    userId.startsWith("phone_user_") ||
+                    (token != null && token.split(".").size != 3)
+
+            if (isFirebaseUser) {
+                try {
+                    val taskDoc = mutableMapOf<String, Any>(
+                        "id" to taskId,
+                        "clientOperationId" to clientOperationId,
+                        "groupId" to targetGroupId,
+                        "groupTitle" to (group?.title ?: "General Operations"),
+                        "title" to title.trim(),
+                        "description" to (description?.trim() ?: ""),
+                        "location" to (location?.trim() ?: ""),
+                        "priority" to priority.lowercase(),
+                        "status" to "open",
+                        "visibility" to visibility,
+                        "allowSelfJoin" to allowSelfJoin,
+                        "taskType" to taskType.name,
+                        "importance" to importance.name,
+                        "urgencyType" to urgencyType.name,
+                        "alarmType" to alarmType.name,
+                        "responseType" to responseType.name,
+                        "createdBy" to userId,
+                        "creatorName" to (userName ?: "User"),
+                        "overdueReminderIntervalMinutes" to (overdueReminderIntervalMinutes ?: 5),
+                        "targetPercentage" to (targetPercentage ?: 100),
+                        "lanTargetList" to lanTargetList,
+                        "assignedUserIds" to resolvedEmployeeUuids,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
+                    serverSavedTask = task.copy(id = taskId, status = "open")
+                } catch (e: Exception) {
+                    Log.w(tag, "Direct Firestore sync failed, queueing offline outbox event: ${e.message}")
+                    try {
+                        TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
+                            com.example.data.local.entity.OutboxEventEntity(
+                                eventId = clientOperationId,
+                                userId = userId,
+                                taskId = taskId,
+                                operationType = "TASK_CREATION",
+                                payloadJson = taskPayload.toString(),
+                                syncStatus = "PENDING",
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                        com.example.sync.SyncWorker.enqueueSync(context)
+                        serverSavedTask = task.copy(status = "pending_sync")
+                    } catch (oe: Exception) {
+                        return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
+                    }
+                }
+            } else if (!token.isNullOrBlank() && token.split(".").size == 3) {
                 val remoteRes = supabaseClient.createTaskAtomic(token, taskPayload)
                 if (remoteRes.isSuccess) {
                     val serverObj = remoteRes.getOrThrow()
@@ -1139,11 +1216,9 @@ class TaskRepository(
                             com.example.sync.SyncWorker.enqueueSync(context)
                             serverSavedTask = task.copy(status = "pending_sync")
                         } catch (oe: Exception) {
-                            // Must not report success if durable outbox commit failed!
                             return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
                         }
                     } else {
-                        // Real server failure (validation error, inactive user, etc.) -> FAIL ATOMICALLY
                         return@withContext Result.failure(IOException(errMsg, error))
                     }
                 }
@@ -2373,24 +2448,85 @@ class TaskRepository(
 
     // Employee Directory Search
     suspend fun searchEmployees(query: String): List<UserProfile> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        val resultList = mutableListOf<UserProfile>()
         try {
+            val localProfiles = profileDao.searchProfiles(trimmed).map { it.toDomain() }
+            resultList.addAll(localProfiles)
+
+            // Search in Firestore
+            try {
+                val firestoreUsers = firestore.collection("users").limit(30).get().await()
+                for (doc in firestoreUsers.documents) {
+                    val name = doc.getString("fullName").orEmpty()
+                    val phone = doc.getString("mobile").orEmpty()
+                    val email = doc.getString("email").orEmpty()
+                    val empId = doc.getString("employeeId").orEmpty()
+                    val uid = doc.id
+                    if (trimmed.isBlank() ||
+                        name.contains(trimmed, ignoreCase = true) ||
+                        phone.contains(trimmed, ignoreCase = true) ||
+                        email.contains(trimmed, ignoreCase = true) ||
+                        empId.contains(trimmed, ignoreCase = true)
+                    ) {
+                        if (resultList.none { it.id == uid || it.employeeId == empId }) {
+                            resultList.add(
+                                UserProfile(
+                                    id = uid,
+                                    employeeId = empId.ifBlank { "EMP-${uid.takeLast(4)}" },
+                                    fullName = name.ifBlank { "User ${empId.ifBlank { phone }}" },
+                                    mobile = phone,
+                                    profilePhotoPath = null,
+                                    appRole = doc.getString("appRole") ?: "employee",
+                                    isActive = true
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
             val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                val remoteRes = supabaseClient.searchEmployeeDirectory(token, query)
+            if (!token.isNullOrBlank() && token.split(".").size == 3) {
+                val remoteRes = supabaseClient.searchEmployeeDirectory(token, trimmed)
                 if (remoteRes.isSuccess) {
                     val remoteProfiles = remoteRes.getOrDefault(emptyList())
-                    if (remoteProfiles.isNotEmpty()) {
-                        for (p in remoteProfiles) {
-                            profileDao.insertProfile(com.example.data.local.entity.ProfileEntity.fromDomain(p))
+                    for (p in remoteProfiles) {
+                        if (resultList.none { it.id == p.id }) {
+                            resultList.add(p)
                         }
-                        return@withContext remoteProfiles
                     }
                 }
             }
-            // Fallback to local profile cache
-            profileDao.searchProfiles(query).map { it.toDomain() }
         } catch (e: Exception) {
-            emptyList()
+            Log.w(tag, "Search employees error: ${e.message}")
+        }
+        resultList
+    }
+
+    suspend fun syncPendingTasksToFirestore() = withContext(Dispatchers.IO) {
+        val db = TaskzDatabase.getInstance(context)
+        val pendingEvents = db.outboxDao().getPendingEvents()
+        val now = System.currentTimeMillis()
+        for (ev in pendingEvents) {
+            if (ev.operationType == "TASK_CREATION") {
+                try {
+                    val obj = JSONObject(ev.payloadJson)
+                    val taskId = ev.taskId ?: obj.optString("id", UUID.randomUUID().toString())
+                    val taskDoc = mutableMapOf<String, Any>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        taskDoc[k] = obj.get(k)
+                    }
+                    taskDoc["updatedAt"] = FieldValue.serverTimestamp()
+                    firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
+                    db.outboxDao().markEventSynced(ev.id, "SYNCED", now)
+                    db.taskDao().updateTaskStatus(taskId, "open")
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to sync pending task ${ev.taskId}: ${e.message}")
+                }
+            }
         }
     }
 

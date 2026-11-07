@@ -24,7 +24,7 @@ interface ProfileDao {
     @Query("SELECT * FROM cached_profile WHERE isActive = 1 ORDER BY fullName ASC")
     fun getAllProfilesFlow(): Flow<List<ProfileEntity>>
 
-    @Query("SELECT * FROM cached_profile WHERE fullName LIKE '%' || :query || '%' OR employeeId LIKE '%' || :query || '%'")
+    @Query("SELECT * FROM cached_profile WHERE fullName LIKE '%' || :query || '%' OR employeeId LIKE '%' || :query || '%' OR mobile LIKE '%' || :query || '%'")
     suspend fun searchProfiles(query: String): List<ProfileEntity>
 
     @Query("SELECT * FROM cached_profile WHERE id = :idOrEmpId OR employeeId = :idOrEmpId LIMIT 1")

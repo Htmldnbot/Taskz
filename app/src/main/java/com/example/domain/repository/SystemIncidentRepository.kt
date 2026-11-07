@@ -32,6 +32,11 @@ import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
+import com.example.R
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.tasks.await
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -57,6 +62,51 @@ class SystemIncidentRepository(
     }
 
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val firestore: FirebaseFirestore by lazy {
+        val dbId = try {
+            context.getString(R.string.firestore_database_id)
+        } catch (_: Exception) {
+            "(default)"
+        }
+        try {
+            FirebaseFirestore.getInstance(dbId)
+        } catch (_: Exception) {
+            FirebaseFirestore.getInstance()
+        }
+    }
+
+    suspend fun syncIncidentToFirestore(incident: SystemIncident): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val incidentDoc = mapOf(
+                "id" to incident.id,
+                "submissionId" to incident.submissionId,
+                "centreId" to (incident.centreId ?: ""),
+                "lockedSystemNumber" to incident.lockedSystemNumber,
+                "newlyAllocatedSystemNumber" to (incident.newlyAllocatedSystemNumber ?: ""),
+                "candidateShifted" to incident.candidateShifted,
+                "macAddress" to incident.macAddress,
+                "ipAddress" to incident.ipAddress,
+                "reason" to incident.reason,
+                "itManagerName" to incident.itManagerName,
+                "examDate" to incident.examDate,
+                "examName" to incident.examName,
+                "shiftName" to incident.shiftName,
+                "lanName" to incident.lanName,
+                "createdBy" to (incident.createdBy ?: ""),
+                "creatorName" to (incident.creatorName ?: ""),
+                "syncStatus" to "SYNCED",
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            firestore.collection("system_incidents").document(incident.id)
+                .set(incidentDoc, SetOptions.merge())
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.w(TAG, "Firestore sync error for incident ${incident.id}: ${e.message}")
+            Result.failure(e)
+        }
+    }
 
     val allIncidentsFlow: Flow<List<SystemIncident>> = systemIncidentDao.getAllIncidentsFlow().map { entities ->
         entities.map { it.toDomain() }
@@ -348,21 +398,48 @@ class SystemIncidentRepository(
                 )
             )
 
-            // 3. Attempt direct sync if online
-            if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
-                val remoteRes = supabaseClient.submitSystemIncident(token, finalIncident)
-                if (remoteRes.isSuccess) {
-                    systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
-                    outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
-                    return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
+            // 3. Attempt direct sync
+            val isFirebaseOrOffline = (token?.startsWith("firebase_") == true) || 
+                (token?.startsWith("offline_") == true) || 
+                userId.startsWith("phone_user_")
+
+            if (isFirebaseOrOffline) {
+                // Sync to Firestore when connected, and mark locally synced
+                if (networkMonitor.isCurrentlyConnected()) {
+                    syncIncidentToFirestore(finalIncident)
+                }
+                systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
+                outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                try {
+                    TaskzApplication.instance.database.syncMetadataDao().apply {
+                        val remaining = outboxDao.getPendingEventsForUser(userId).size
+                        if (remaining == 0) {
+                            updateSyncStatus("SYNCED", "Up to date")
+                            updateLastSuccessfulSync(now)
+                        } else {
+                            updateSyncStatus("PENDING", "$remaining pending operations awaiting sync")
+                        }
+                        updateLastServerFetch(now)
+                    }
+                } catch (_: Exception) {}
+                return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
+            } else {
+                if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
+                    val remoteRes = supabaseClient.submitSystemIncident(token, finalIncident)
+                    if (remoteRes.isSuccess) {
+                        systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
+                        outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
+                        return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
+                    } else {
+                        val ex = remoteRes.exceptionOrNull()
+                        Log.w(TAG, "Direct sync failed, keeping as PENDING: ${ex?.message}")
+                        systemIncidentDao.updateSyncStatus(finalIncident.id, "PENDING", ex?.message)
+                        SyncWorker.enqueueSync(context)
+                    }
                 } else {
-                    val ex = remoteRes.exceptionOrNull()
-                    Log.w(TAG, "Direct sync failed, keeping as PENDING: ${ex?.message}")
-                    systemIncidentDao.updateSyncStatus(finalIncident.id, "PENDING", ex?.message)
                     SyncWorker.enqueueSync(context)
                 }
-            } else {
-                SyncWorker.enqueueSync(context)
             }
 
             Result.success(finalIncident)
@@ -374,26 +451,67 @@ class SystemIncidentRepository(
 
     suspend fun syncPendingIncidents(): Int = withContext(Dispatchers.IO) {
         val pending = systemIncidentDao.getPendingIncidents()
-        if (pending.isEmpty()) return@withContext 0
-
         val session = userPrefs.getUserSession()
         val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull() ?: session.accessToken
-        if (token.isNullOrBlank() || !networkMonitor.isCurrentlyConnected()) {
-            return@withContext 0
-        }
+        val userId = session.userId ?: getActiveUserId()
+        val isFirebaseOrOffline = (token?.startsWith("firebase_") == true) || 
+            (token?.startsWith("offline_") == true) || 
+            userId.startsWith("phone_user_")
 
         var syncedCount = 0
         for (item in pending) {
             val domain = item.toDomain()
-            val res = supabaseClient.submitSystemIncident(token, domain)
-            if (res.isSuccess) {
+            if (isFirebaseOrOffline) {
+                if (networkMonitor.isCurrentlyConnected()) {
+                    syncIncidentToFirestore(domain)
+                }
                 systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
+                outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
+                    outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                }
                 syncedCount++
             } else {
-                systemIncidentDao.updateSyncStatus(item.id, "ERROR", res.exceptionOrNull()?.message)
+                if (!token.isNullOrBlank() && networkMonitor.isCurrentlyConnected()) {
+                    val res = supabaseClient.submitSystemIncident(token, domain)
+                    if (res.isSuccess) {
+                        systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
+                        outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
+                            outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                        }
+                        syncedCount++
+                    } else {
+                        systemIncidentDao.updateSyncStatus(item.id, "ERROR", res.exceptionOrNull()?.message)
+                    }
+                }
             }
         }
-        syncedCount
+
+        // Clean up any lingering outbox events for this user if they are incidents that are now synced
+        if (isFirebaseOrOffline) {
+            val pendingOutbox = outboxDao.getPendingEventsForUser(userId)
+            for (ev in pendingOutbox) {
+                if (ev.operationType == "SYSTEM_INCIDENT_SUBMISSION") {
+                    outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                    syncedCount++
+                }
+            }
+        }
+
+        val now = System.currentTimeMillis()
+        try {
+            val remaining = outboxDao.getPendingEventsForUser(userId).size
+            TaskzApplication.instance.database.syncMetadataDao().apply {
+                if (remaining == 0) {
+                    updateSyncStatus("SYNCED", "Up to date")
+                    updateLastSuccessfulSync(now)
+                } else {
+                    updateSyncStatus("PENDING", "$remaining pending operations awaiting sync")
+                }
+                updateLastServerFetch(now)
+            }
+        } catch (_: Exception) {}
+
+        return@withContext syncedCount
     }
 
     // ==========================================
