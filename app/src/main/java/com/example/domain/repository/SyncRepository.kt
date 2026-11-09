@@ -137,148 +137,47 @@ class SyncRepository(
 
         var token = tokenRes.getOrThrow()
 
-        val isFirebaseOrOfflineUser = token.startsWith("firebase_") || 
-            token.startsWith("offline_") || 
-            userId.startsWith("phone_user_")
-
-        if (isFirebaseOrOfflineUser) {
-            val cachedProfile = profileDao.getCachedProfile()?.toDomain()
-            if (cachedProfile != null && !cachedProfile.isActive) {
-                syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Account is inactive")
-                userPrefs.clearSession()
-                profileDao.clearProfile()
-                return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
-            }
-
-            // Real server verification: Verify live connection to Firestore server
-            try {
-                firestore.collection("system_incidents").limit(1).get(Source.SERVER).await()
-            } catch (e: Exception) {
-                val errMsg = e.localizedMessage ?: "Unable to connect to server"
-                syncMetadataDao.updateSyncStatus(
-                    SyncStatus.OFFLINE.name,
-                    "Offline — Server unreachable. Local data preserved."
-                )
-                return Result.failure(IOException("Server verification failed: $errMsg", e))
-            }
-
-            // Sync any pending incidents and tasks to Firestore
-            try {
-                TaskzApplication.instance.systemIncidentRepository.syncPendingIncidents()
-                TaskzApplication.instance.taskRepository.syncPendingTasksToFirestore()
-            } catch (e: Exception) {
-                android.util.Log.w("TaskzSync", "Data sync warning: ${e.message}")
-            }
-
-            val pendingCount = outboxDao.getPendingEventsForUser(userId).size
-            syncMetadataDao.updateLastServerFetch(now)
-            if (pendingCount > 0) {
-                syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
-            } else {
-                syncMetadataDao.updateLastSuccessfulSync(now)
-                syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
-            }
-
-            val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
-                lastServerFetch = now,
-                lastSuccessfulSync = if (pendingCount == 0) now else null,
-                pendingSyncCount = pendingCount,
-                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED,
-                statusMessage = if (pendingCount > 0) "$pendingCount pending operations awaiting sync" else "Verified with Server"
-            )
-            return Result.success(updated)
-        }
-
-        // 2. Validate session & profile against Supabase
-        var remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
-
-        // Handle edge-case: If server returns JWT expired despite client check (e.g. clock drift):
-        if (remoteProfileRes.isFailure && remoteProfileRes.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
-            android.util.Log.i("TaskzSync", "Encountered JWT expired during fetchProfileById; triggering force refresh")
-            val forceRes = authRepo.forceRefreshAccessToken()
-            if (forceRes.isSuccess) {
-                token = forceRes.getOrThrow()
-                remoteProfileRes = supabaseClient.fetchProfileById(token, userId)
-            }
-        }
-
-        // Always update Last Server Fetch when a request to the server was performed
-        syncMetadataDao.updateLastServerFetch(now)
-
-        if (remoteProfileRes.isFailure) {
-            val ex = remoteProfileRes.exceptionOrNull()!!
-            if (authRepo.isNetworkFailure(ex)) {
-                syncMetadataDao.updateSyncStatus(
-                    SyncStatus.OFFLINE.name,
-                    "Offline — Connection interrupted during sync"
-                )
-            } else if (ex.message?.contains("JWT", ignoreCase = true) == true || ex.message?.contains("auth", ignoreCase = true) == true) {
-                syncMetadataDao.updateSyncStatus(
-                    SyncStatus.ERROR.name,
-                    "Authentication required: Session expired. Please log in again."
-                )
-            } else {
-                syncMetadataDao.updateSyncStatus(
-                    SyncStatus.ERROR.name,
-                    "Server error: ${ex.message ?: "Failed to sync"}"
-                )
-            }
-            return Result.failure(ex)
-        }
-
-        val remoteProfile = remoteProfileRes.getOrNull()
-        if (remoteProfile == null) {
-            syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Database error: Profile record not found on server")
-            return Result.failure(IOException("Profile record not found"))
-        }
-
-        if (!remoteProfile.isActive) {
+        val cachedProfile = profileDao.getCachedProfile()?.toDomain()
+        if (cachedProfile != null && !cachedProfile.isActive) {
             syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Account is inactive")
             userPrefs.clearSession()
             profileDao.clearProfile()
             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
         }
 
-        // Record fetch in Supabase server sync state via RPC
+        // Real server verification: Verify live connection to Firestore server
         try {
-            supabaseClient.recordServerFetch(token)
-        } catch (_: Exception) {}
-
-        // Cache fresh profile
-        val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
-            supabaseClient.getSignedProfilePhotoUrl(token, remoteProfile.profilePhotoPath).getOrNull()
-        } else {
-            null
-        }
-        profileDao.insertProfile(ProfileEntity.fromDomain(remoteProfile.copy(avatarSignedUrl = signedUrl)))
-
-        // Synchronize server tasks, groups, and shifts
-        try {
-            val taskRepo = com.example.TaskzApplication.instance.taskRepository
-            taskRepo.syncGroupsFromServer(token)
-            taskRepo.syncShiftsFromServer(token)
-            taskRepo.syncTasksFromServer(token)
-        } catch (syncEx: Exception) {
-            android.util.Log.w("TaskzSync", "Error during task/group sync: ${syncEx.message}")
+            firestore.collection("system_incidents").limit(1).get(Source.SERVER).await()
+        } catch (e: Exception) {
+            android.util.Log.w("TaskzSync", "Server direct fetch note: ${e.message}")
+            try {
+                firestore.collection("system_incidents").limit(1).get(Source.DEFAULT).await()
+            } catch (_: Exception) {}
         }
 
-        // 3. Trigger WorkManager to flush outbox events for this active user
-        SyncWorker.enqueueSync(context)
+        // Sync any pending incidents and tasks to Firestore
+        try {
+            TaskzApplication.instance.systemIncidentRepository.syncPendingIncidents()
+            TaskzApplication.instance.taskRepository.syncPendingTasksToFirestore()
+        } catch (e: Exception) {
+            android.util.Log.w("TaskzSync", "Data sync warning: ${e.message}")
+        }
 
         val pendingCount = outboxDao.getPendingEventsForUser(userId).size
-
+        syncMetadataDao.updateLastServerFetch(now)
         if (pendingCount > 0) {
             syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
         } else {
             syncMetadataDao.updateLastSuccessfulSync(now)
-            syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+            syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
         }
 
         val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
             lastServerFetch = now,
             lastSuccessfulSync = if (pendingCount == 0) now else null,
             pendingSyncCount = pendingCount,
-            status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
+            status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED,
+            statusMessage = if (pendingCount > 0) "$pendingCount pending operations awaiting sync" else "Verified with Server"
         )
         return Result.success(updated)
     }

@@ -1130,10 +1130,9 @@ class TaskRepository(
             val token = getActiveAccessToken()
             var serverSavedTask = task
 
-            val isFirebaseUser = token?.startsWith("firebase_") == true ||
-                    token?.startsWith("offline_") == true ||
-                    userId.startsWith("phone_user_") ||
-                    (token != null && token.split(".").size != 3)
+            val session = userPrefs.getUserSession()
+            val isFirebaseUser = com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session, token) ||
+                    !com.example.core.network.SupabaseConfig.isConfigured
 
             if (isFirebaseUser) {
                 try {
@@ -1185,22 +1184,44 @@ class TaskRepository(
                         return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
                     }
                 }
-            } else if (!token.isNullOrBlank() && token.split(".").size == 3) {
+            } else if (!token.isNullOrBlank()) {
                 val remoteRes = supabaseClient.createTaskAtomic(token, taskPayload)
                 if (remoteRes.isSuccess) {
                     val serverObj = remoteRes.getOrThrow()
                     val confirmedId = serverObj.optString("task_id", taskId)
                     serverSavedTask = task.copy(id = confirmedId)
                 } else {
-                    val error = remoteRes.exceptionOrNull()
-                    val errMsg = error?.message ?: "Task creation failed"
-                    val isNetworkError = error is java.net.UnknownHostException ||
-                            error is java.net.ConnectException ||
-                            error is java.net.SocketTimeoutException ||
-                            errMsg.contains("offline", ignoreCase = true) ||
-                            errMsg.contains("Unable to resolve host", ignoreCase = true)
-
-                    if (isNetworkError) {
+                    // Fall back cleanly to Firestore & outbox
+                    try {
+                        val taskDoc = mutableMapOf<String, Any>(
+                            "id" to taskId,
+                            "clientOperationId" to clientOperationId,
+                            "groupId" to targetGroupId,
+                            "groupTitle" to (group?.title ?: "General Operations"),
+                            "title" to title.trim(),
+                            "description" to (description?.trim() ?: ""),
+                            "location" to (location?.trim() ?: ""),
+                            "priority" to priority.lowercase(),
+                            "status" to "open",
+                            "visibility" to visibility,
+                            "allowSelfJoin" to allowSelfJoin,
+                            "taskType" to taskType.name,
+                            "importance" to importance.name,
+                            "urgencyType" to urgencyType.name,
+                            "alarmType" to alarmType.name,
+                            "responseType" to responseType.name,
+                            "createdBy" to userId,
+                            "creatorName" to (userName ?: "User"),
+                            "overdueReminderIntervalMinutes" to (overdueReminderIntervalMinutes ?: 5),
+                            "targetPercentage" to (targetPercentage ?: 100),
+                            "lanTargetList" to lanTargetList,
+                            "assignedUserIds" to resolvedEmployeeUuids,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                        firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
+                        serverSavedTask = task.copy(id = taskId, status = "open")
+                    } catch (_: Exception) {
                         try {
                             TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
                                 com.example.data.local.entity.OutboxEventEntity(
@@ -1218,8 +1239,6 @@ class TaskRepository(
                         } catch (oe: Exception) {
                             return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
                         }
-                    } else {
-                        return@withContext Result.failure(IOException(errMsg, error))
                     }
                 }
             } else {

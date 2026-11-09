@@ -35,7 +35,7 @@ sealed interface ResetRequestUiState {
 sealed interface PhoneVerificationState {
     object Idle : PhoneVerificationState
     object SendingCode : PhoneVerificationState
-    data class CodeSent(val verificationId: String, val phoneNumber: String) : PhoneVerificationState
+    data class CodeSent(val verificationId: String, val phoneNumber: String, val dynamicCode: String = "") : PhoneVerificationState
     object VerifyingCode : PhoneVerificationState
     data class Success(val profile: UserProfile) : PhoneVerificationState
     data class Error(val message: String) : PhoneVerificationState
@@ -270,17 +270,25 @@ class AuthViewModel(
 
     fun sendPhoneOtp(activity: Activity? = null, rawPhoneNumber: String) {
         val trimmed = rawPhoneNumber.trim()
-        if (trimmed.length < 8) {
-            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid phone number with country code (e.g. +91 9876543210).")
+        val digits = trimmed.filter { it.isDigit() }
+        val tenDigits = if (digits.length == 12 && digits.startsWith("91")) digits.takeLast(10) else digits
+
+        if (tenDigits.length != 10 || tenDigits[0] !in '6'..'9') {
+            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.")
             return
         }
 
+        val fullIndianNumber = "+91$tenDigits"
         _phoneVerificationState.value = PhoneVerificationState.SendingCode
         firebaseAuthService.sendPhoneOtp(
             activity = activity,
-            phoneNumber = trimmed,
-            onCodeSent = { verificationId ->
-                _phoneVerificationState.value = PhoneVerificationState.CodeSent(verificationId, trimmed)
+            phoneNumber = fullIndianNumber,
+            onCodeSent = { verificationId, dynamicCode ->
+                _phoneVerificationState.value = PhoneVerificationState.CodeSent(
+                    verificationId = verificationId,
+                    phoneNumber = tenDigits,
+                    dynamicCode = dynamicCode
+                )
             },
             onAutoVerified = { profile ->
                 _phoneVerificationState.value = PhoneVerificationState.Success(profile)
@@ -428,6 +436,21 @@ class AuthViewModel(
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
             val result = firebaseAuthService.signInWithGoogle(activity)
+            result.fold(
+                onSuccess = { profile ->
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _loginState.value = AuthUiState.Error(error.message ?: "Google Sign-In failed.")
+                }
+            )
+        }
+    }
+
+    fun signInWithGoogleToken(idToken: String, displayName: String? = null, email: String? = null) {
+        viewModelScope.launch {
+            _loginState.value = AuthUiState.Loading
+            val result = firebaseAuthService.signInWithGoogleIdToken(idToken, displayName, email)
             result.fold(
                 onSuccess = { profile ->
                     _loginState.value = AuthUiState.Success(profile)

@@ -285,10 +285,7 @@ class AuthRepository(
         }
 
         // Firebase-managed authentication session
-        if (currentToken.startsWith("firebase_token_") ||
-            session.refreshToken?.startsWith("firebase_") == true ||
-            session.userId?.startsWith("phone_user_") == true
-        ) {
+        if (com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session, currentToken)) {
             val fbUser = try {
                 Firebase.auth.currentUser
             } catch (_: Exception) {

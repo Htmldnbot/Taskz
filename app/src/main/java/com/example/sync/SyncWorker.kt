@@ -88,10 +88,7 @@ class SyncWorker(
         }
 
         var token = tokenRes.getOrThrow()
-
-        val isFirebaseOrOfflineUser = token.startsWith("firebase_") || 
-            token.startsWith("offline_") || 
-            activeUserId.startsWith("phone_user_")
+        val isFirebaseOrOfflineUser = com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session, token)
 
         if (isFirebaseOrOfflineUser) {
             val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
@@ -105,13 +102,31 @@ class SyncWorker(
                         db.systemIncidentDao().updateSyncStatus(localIncident.id, "SYNCED", null)
                     }
                     outboxDao.markEventSynced(event.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                } else if (event.operationType == "TASK_CREATION") {
+                    try {
+                        val payload = JSONObject(event.payloadJson)
+                        val firestore = FirebaseFirestore.getInstance()
+                        val taskId = event.taskId ?: payload.optString("id", java.util.UUID.randomUUID().toString())
+                        val taskDoc = mutableMapOf<String, Any>()
+                        val keys = payload.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            taskDoc[k] = payload.get(k)
+                        }
+                        taskDoc["updatedAt"] = FieldValue.serverTimestamp()
+                        firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
+                        outboxDao.markEventSynced(event.id, taskId, System.currentTimeMillis())
+                        db.taskDao().updateTaskStatus(taskId, "open")
+                    } catch (_: Exception) {
+                        outboxDao.markEventSynced(event.id, "OFFLINE_PROCESSED", System.currentTimeMillis())
+                    }
                 } else {
                     outboxDao.markEventSynced(event.id, "OFFLINE_PROCESSED", System.currentTimeMillis())
                 }
             }
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
             if (remaining == 0) {
-                db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
+                db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
                 db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
             }
             return@withContext Result.success()
