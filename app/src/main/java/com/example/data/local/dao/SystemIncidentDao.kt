@@ -69,4 +69,7 @@ interface SystemIncidentDao {
 
     @Query("SELECT * FROM system_incident_audits WHERE incidentId = :incidentId ORDER BY changedAt DESC")
     suspend fun getAuditsForIncident(incidentId: String): List<SystemIncidentAuditEntity>
+
+    @Query("DELETE FROM system_incident_audits WHERE incidentId = :incidentId")
+    suspend fun deleteAuditsForIncident(incidentId: String)
 }

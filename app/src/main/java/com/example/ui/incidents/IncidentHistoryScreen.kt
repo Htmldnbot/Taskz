@@ -2,6 +2,7 @@ package com.example.ui.incidents
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,7 +36,11 @@ import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -83,11 +88,29 @@ fun IncidentHistoryScreen(
     modifier: Modifier = Modifier
 ) {
     val incidents by viewModel.filteredIncidents.collectAsStateWithLifecycle()
+    val allIncidents by viewModel.allIncidents.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val myReportsOnly by viewModel.filterMyReportsOnly.collectAsStateWithLifecycle()
     val filterShiftedOnly by viewModel.filterShiftedOnly.collectAsStateWithLifecycle()
     val filterLan by viewModel.filterLan.collectAsStateWithLifecycle()
+    val filterCentre by viewModel.filterCentre.collectAsStateWithLifecycle()
+    val filterCity by viewModel.filterCity.collectAsStateWithLifecycle()
+    val filterState by viewModel.filterSelectedState.collectAsStateWithLifecycle()
+    val filterZone by viewModel.filterZone.collectAsStateWithLifecycle()
+    val filterDateRange by viewModel.filterDateRange.collectAsStateWithLifecycle()
+    val availableLans by viewModel.availableLans.collectAsStateWithLifecycle()
+    val availableCentres by viewModel.availableCentreNames.collectAsStateWithLifecycle()
+    val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
+    val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
+
+    val availableZones = viewModel.availableZones
     val selectedIncident by viewModel.selectedIncident.collectAsStateWithLifecycle()
     val selectedAudits by viewModel.incidentAudits.collectAsStateWithLifecycle()
+    var incidentToDelete by remember { mutableStateOf<SystemIncident?>(null) }
+
+    val hasActiveFilter = myReportsOnly || filterShiftedOnly || filterLan != null ||
+        filterCentre != null || filterCity != null || filterState != null || filterZone != null ||
+        (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
 
     Column(
         modifier = modifier
@@ -95,48 +118,161 @@ fun IncidentHistoryScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Search Bar
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { viewModel.setSearchQuery(it) },
-            placeholder = { Text("Search by system (e.g. C059), reason, LAN...") },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = "Search",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            trailingIcon = {
-                if (searchQuery.isNotBlank()) {
-                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                        Icon(imageVector = Icons.Filled.Clear, contentDescription = "Clear Search")
+        // Search & Refresh Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { viewModel.setSearchQuery(it) },
+                placeholder = { Text("Search by system, centre, reason...") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                            Icon(imageVector = Icons.Filled.Clear, contentDescription = "Clear Search")
+                        }
                     }
-                }
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("history_search_input")
-        )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("history_search_input")
+            )
 
-        // Filter Chips Row
-        val chipScroll = rememberScrollState()
+            IconButton(
+                onClick = { viewModel.refreshIncidents() },
+                modifier = Modifier.size(44.dp).testTag("history_refresh_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = "Sync from Cloud",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        val allFilterLans = remember(availableLans) {
+            val presets = (1..25).map { "LAN $it" }
+            (availableLans + presets).distinct().sortedWith(compareBy({
+                it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE
+            }, { it }))
+        }
+
+        // Dropdown Filters Row 1: LAN, Centre, Date
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterDropdownButton(
+                label = "LAN",
+                selectedValue = filterLan,
+                options = allFilterLans,
+                onSelect = { viewModel.setFilterLan(it) },
+                icon = Icons.Filled.Lan,
+                modifier = Modifier.weight(1f).testTag("filter_dropdown_lan")
+            )
+
+            FilterDropdownButton(
+                label = "Centre",
+                selectedValue = filterCentre,
+                options = availableCentres,
+                onSelect = { viewModel.setFilterCentre(it) },
+                icon = Icons.Filled.Business,
+                modifier = Modifier.weight(1.2f).testTag("filter_dropdown_centre")
+            )
+
+            FilterDropdownButton(
+                label = "Date",
+                selectedValue = when (filterDateRange) {
+                    "today" -> "Today"
+                    "yesterday" -> "Yesterday"
+                    else -> null
+                },
+                options = listOf("Today", "Yesterday"),
+                onSelect = { selected ->
+                    viewModel.setFilterDateRange(
+                        when (selected) {
+                            "Today" -> "today"
+                            "Yesterday" -> "yesterday"
+                            else -> "all"
+                        }
+                    )
+                },
+                icon = Icons.Filled.CalendarMonth,
+                modifier = Modifier.weight(0.9f).testTag("filter_dropdown_date")
+            )
+        }
+
+        // Dropdown Filters Row 2: City, State, Zone
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterDropdownButton(
+                label = "City",
+                selectedValue = filterCity,
+                options = (availableCities + listOf("Jaipur")).distinct().sorted(),
+                onSelect = { viewModel.setFilterCity(it) },
+                icon = Icons.Filled.Place,
+                modifier = Modifier.weight(1f).testTag("filter_dropdown_city")
+            )
+
+            FilterDropdownButton(
+                label = "State",
+                selectedValue = filterState,
+                options = (availableStates + listOf("Rajasthan")).distinct().sorted(),
+                onSelect = { viewModel.setFilterState(it) },
+                icon = Icons.Filled.Place,
+                modifier = Modifier.weight(1f).testTag("filter_dropdown_state")
+            )
+
+            FilterDropdownButton(
+                label = "Zone",
+                selectedValue = filterZone,
+                options = availableZones,
+                onSelect = { viewModel.setFilterZone(it) },
+                icon = Icons.Filled.FilterList,
+                modifier = Modifier.weight(1f).testTag("filter_dropdown_zone")
+            )
+        }
+
+        // Quick Toggles: My Reports, Shifted Only, Clear
+        val primaryChipScroll = rememberScrollState()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(chipScroll),
+                .horizontalScroll(primaryChipScroll),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             FilterChip(
-                selected = !filterShiftedOnly && filterLan == null,
-                onClick = {
-                    viewModel.setFilterShiftedOnly(false)
-                    viewModel.setFilterLan(null)
+                selected = myReportsOnly,
+                onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
+                label = { Text(if (myReportsOnly) "My Reports Only ✓" else "My Reports Only") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
                 },
-                label = { Text("All (${incidents.size})") },
+                modifier = Modifier.testTag("filter_my_reports_chip")
+            )
+
+            FilterChip(
+                selected = !filterShiftedOnly && !hasActiveFilter,
+                onClick = { viewModel.clearAllFilters() },
+                label = { Text("All (${allIncidents.size})") },
                 modifier = Modifier.testTag("filter_all_chip")
             )
 
@@ -144,37 +280,21 @@ fun IncidentHistoryScreen(
                 selected = filterShiftedOnly,
                 onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
                 label = { Text("Shifted Only") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Filled.SwapHoriz,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                },
                 modifier = Modifier.testTag("filter_shifted_chip")
             )
 
-            (1..6).forEach { lanNum ->
-                val lan = "LAN $lanNum"
-                val isSelected = filterLan.equals(lan, ignoreCase = true)
-                FilterChip(
-                    selected = isSelected,
-                    onClick = {
-                        viewModel.setFilterLan(if (isSelected) null else lan)
-                    },
-                    label = { Text(lan) },
-                    modifier = Modifier.testTag("filter_lan_$lanNum")
-                )
-            }
-
-            IconButton(
-                onClick = { viewModel.syncPending() },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Refresh,
-                    contentDescription = "Sync Pending Incidents",
-                    tint = MaterialTheme.colorScheme.primary
+            if (hasActiveFilter) {
+                AssistChip(
+                    onClick = { viewModel.clearAllFilters() },
+                    label = { Text("Clear All Filters", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Clear,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 )
             }
         }
@@ -217,11 +337,43 @@ fun IncidentHistoryScreen(
                 items(incidents, key = { it.id }) { incident ->
                     IncidentItemCard(
                         incident = incident,
-                        onClick = { viewModel.selectIncidentForDetail(incident) }
+                        onClick = { viewModel.selectIncidentForDetail(incident) },
+                        onLongClick = { incidentToDelete = incident }
                     )
                 }
             }
         }
+    }
+
+    // Delete Incident Dialog
+    if (incidentToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { incidentToDelete = null },
+            title = {
+                Text("Delete Incident Record")
+            },
+            text = {
+                Text("Are you sure you want to delete incident for system '${incidentToDelete?.lockedSystemNumber}'? This will remove it from the register and cloud database.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val id = incidentToDelete?.id
+                        if (id != null) {
+                            viewModel.deleteIncident(id)
+                        }
+                        incidentToDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { incidentToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // Incident Details Dialog
@@ -234,15 +386,20 @@ fun IncidentHistoryScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun IncidentItemCard(
     incident: SystemIncident,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .testTag("incident_card_${incident.lockedSystemNumber}"),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
@@ -402,7 +559,6 @@ fun IncidentDetailDialog(
                     .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DetailRow("Submission ID", incident.submissionId)
                 DetailRow("Centre", "${incident.centreCode} · ${incident.centreName}")
                 DetailRow("Location", "${incident.districtName}, ${incident.stateName}")
                 DetailRow("Examination", incident.examName)
@@ -462,5 +618,103 @@ fun DetailRow(label: String, value: String) {
             text = value,
             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
         )
+    }
+}
+
+@Composable
+fun FilterDropdownButton(
+    label: String,
+    selectedValue: String?,
+    options: List<String>,
+    onSelect: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier) {
+        OutlinedCard(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.outlinedCardColors(
+                containerColor = if (selectedValue != null) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surface
+            ),
+            border = CardDefaults.outlinedCardBorder().copy(
+                brush = androidx.compose.ui.graphics.SolidColor(
+                    if (selectedValue != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                )
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    if (icon != null) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = if (selectedValue != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = if (selectedValue != null) "$label: $selectedValue" else "$label: All",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = if (selectedValue != null) FontWeight.Bold else FontWeight.Normal
+                        ),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 280.dp)
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        text = "All $label",
+                        fontWeight = if (selectedValue == null) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selectedValue == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = opt,
+                            fontWeight = if (selectedValue == opt) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selectedValue == opt) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    onClick = {
+                        onSelect(opt)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
 }

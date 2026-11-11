@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -66,11 +68,13 @@ fun TaskParticipantsScreen(
     modifier: Modifier = Modifier
 ) {
     val participants by viewModel.taskParticipants.collectAsStateWithLifecycle()
+    val directoryEmployees by viewModel.directoryEmployees.collectAsStateWithLifecycle()
     val activeParts = participants.filter { it.status == "active" }
     val historicalParts = participants.filter { it.status != "active" }
 
     var participantToRemove by remember { mutableStateOf<TaskParticipant?>(null) }
     var removeReason by remember { mutableStateOf("") }
+    var showAddParticipantDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(taskId) {
         viewModel.loadTaskDetails(taskId)
@@ -93,7 +97,7 @@ fun TaskParticipantsScreen(
                     Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Task Participants",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
@@ -103,6 +107,17 @@ fun TaskParticipantsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                Button(
+                    onClick = {
+                        showAddParticipantDialog = true
+                        viewModel.searchEmployees("")
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add", style = MaterialTheme.typography.labelMedium)
                 }
             }
 
@@ -150,6 +165,100 @@ fun TaskParticipantsScreen(
                 }
             }
         }
+    }
+
+    // Add Participant Dialog
+    if (showAddParticipantDialog) {
+        var searchQuery by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddParticipantDialog = false },
+            title = { Text("Add Participant to Task", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Search by Name, Email, or Employee ID (max 7 digits):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = {
+                            searchQuery = it
+                            viewModel.searchEmployees(it)
+                        },
+                        placeholder = { Text("e.g. Rahul, rahul@gmail.com, 0123456") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = null)
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    if (directoryEmployees.isEmpty()) {
+                        Text(
+                            text = "No employees found. Type a query to search.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(directoryEmployees) { emp ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = emp.fullName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Text(
+                                                text = "ID: ${emp.employeeId} • ${emp.mobile}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Button(
+                                            onClick = {
+                                                viewModel.assignUserToTask(
+                                                    taskId = taskId,
+                                                    userId = emp.id,
+                                                    onSuccess = { showAddParticipantDialog = false }
+                                                )
+                                            },
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text("Add")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAddParticipantDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 
     // Remove Participant Dialog

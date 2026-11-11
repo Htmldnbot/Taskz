@@ -359,10 +359,10 @@ class AuthViewModel(
     // Firebase Email & Password Authentication
     // ----------------------------------------------------
 
-    fun loginWithEmailPassword(email: String, password: String) {
-        val trimmedEmail = email.trim()
-        if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
-            _loginState.value = AuthUiState.Error("Please enter a valid email address.")
+    fun loginWithEmailPassword(emailOrEmpId: String, password: String) {
+        val trimmed = emailOrEmpId.trim()
+        if (trimmed.isBlank()) {
+            _loginState.value = AuthUiState.Error("Please enter your registered Email or Employee ID.")
             return
         }
         if (password.isBlank()) {
@@ -372,13 +372,13 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signInWithEmailPassword(trimmedEmail, password)
+            val result = firebaseAuthService.signInWithEmailPassword(trimmed, password)
             result.fold(
                 onSuccess = { profile ->
                     _loginState.value = AuthUiState.Success(profile)
                 },
                 onFailure = { error ->
-                    _loginState.value = AuthUiState.Error(error.message ?: "Email login failed. Check credentials.")
+                    _loginState.value = AuthUiState.Error(error.message ?: "Sign-in failed. Please check your credentials.")
                 }
             )
         }
@@ -396,17 +396,32 @@ class AuthViewModel(
         }
     }
 
-    fun signUpWithEmailPassword(email: String, password: String, fullName: String, mobile: String) {
+    fun signUpWithEmailPassword(
+        email: String,
+        password: String,
+        fullName: String,
+        mobile: String,
+        employeeId: String = ""
+    ) {
         val trimmedEmail = email.trim()
         val trimmedName = fullName.trim()
         val trimmedMobile = mobile.trim()
+        val trimmedEmpId = employeeId.trim()
 
+        if (trimmedName.length < 2) {
+            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+            return
+        }
         if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
             _signUpState.value = AuthUiState.Error("Please enter a valid email address.")
             return
         }
-        if (trimmedName.length < 2) {
-            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+        if (trimmedMobile.filter { it.isDigit() }.length < 10) {
+            _signUpState.value = AuthUiState.Error("Please enter a valid 10-digit mobile number.")
+            return
+        }
+        if (trimmedEmpId.isBlank()) {
+            _signUpState.value = AuthUiState.Error("Please enter your Employee ID (up to 7 digits).")
             return
         }
         if (password.length < 6) {
@@ -416,13 +431,19 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _signUpState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signUpWithEmailPassword(trimmedEmail, password, trimmedName, trimmedMobile)
+            val result = firebaseAuthService.signUpWithEmailPassword(
+                email = trimmedEmail,
+                password = password,
+                fullName = trimmedName,
+                mobile = trimmedMobile,
+                employeeId = trimmedEmpId
+            )
             result.fold(
                 onSuccess = { profile ->
                     _signUpState.value = AuthUiState.Success(profile)
                 },
                 onFailure = { error ->
-                    _signUpState.value = AuthUiState.Error(error.message ?: "Email registration failed.")
+                    _signUpState.value = AuthUiState.Error(error.message ?: "Registration failed.")
                 }
             )
         }
@@ -457,6 +478,50 @@ class AuthViewModel(
                 },
                 onFailure = { error ->
                     _loginState.value = AuthUiState.Error(error.message ?: "Google Sign-In failed.")
+                }
+            )
+        }
+    }
+
+    fun completeGoogleProfile(
+        uid: String,
+        fullName: String,
+        mobile: String,
+        employeeId: String,
+        role: String
+    ) {
+        val trimmedName = fullName.trim()
+        val trimmedMobile = mobile.trim()
+        val trimmedEmpId = employeeId.trim()
+
+        if (trimmedName.length < 2) {
+            _loginState.value = AuthUiState.Error("Please enter your full name.")
+            return
+        }
+        if (trimmedMobile.filter { it.isDigit() }.length < 10) {
+            _loginState.value = AuthUiState.Error("Please enter a valid 10-digit mobile number.")
+            return
+        }
+        if (trimmedEmpId.isBlank() || trimmedEmpId.length > 7 || !trimmedEmpId.all { it.isDigit() }) {
+            _loginState.value = AuthUiState.Error("Employee ID must be numeric and up to 7 digits.")
+            return
+        }
+
+        viewModelScope.launch {
+            _loginState.value = AuthUiState.Loading
+            val result = firebaseAuthService.completeGoogleProfile(
+                uid = uid,
+                fullName = trimmedName,
+                mobile = trimmedMobile,
+                employeeId = trimmedEmpId,
+                appRole = role
+            )
+            result.fold(
+                onSuccess = { profile ->
+                    _loginState.value = AuthUiState.Success(profile)
+                },
+                onFailure = { error ->
+                    _loginState.value = AuthUiState.Error(error.message ?: "Failed to save profile details.")
                 }
             )
         }

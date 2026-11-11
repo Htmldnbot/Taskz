@@ -38,8 +38,11 @@ import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.TaskAlt
@@ -520,41 +523,77 @@ fun TaskDetailScreen(
                         }
 
                         ResponseType.YES_NO -> {
-                            Text("Confirm operational readiness:", style = MaterialTheme.typography.bodySmall)
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        viewModel.submitTaskResponse(
-                                            taskId = currentTask.id,
-                                            responseType = ResponseType.YES_NO,
-                                            responseValue = "YES"
-                                        )
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
-                                    modifier = Modifier.weight(1f)
+                            val hasConfirmedYes = currentTask.status.equals("completed", ignoreCase = true) ||
+                                taskResponses.any { it.responseValue.equals("YES", ignoreCase = true) }
+
+                            if (hasConfirmedYes) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = TaskzSuccess.copy(alpha = 0.15f),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("YES / CONFIRMED")
+                                    Row(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = TaskzSuccess,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = "Confirmed: YES / DONE",
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = TaskzSuccess
+                                            )
+                                            Text(
+                                                text = "Your confirmation has been saved and alarms for this task are stopped.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
                                 }
-                                Button(
-                                    onClick = {
-                                        viewModel.submitTaskResponse(
-                                            taskId = currentTask.id,
-                                            responseType = ResponseType.YES_NO,
-                                            responseValue = "NO"
-                                        )
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
-                                    modifier = Modifier.weight(1f)
+                            } else {
+                                Text("Confirm operational readiness:", style = MaterialTheme.typography.bodySmall)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(imageVector = Icons.Default.Close, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("NO / ISSUE")
+                                    Button(
+                                        onClick = {
+                                            viewModel.submitTaskResponse(
+                                                taskId = currentTask.id,
+                                                responseType = ResponseType.YES_NO,
+                                                responseValue = "YES"
+                                            )
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("YES / CONFIRMED")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            viewModel.submitTaskResponse(
+                                                taskId = currentTask.id,
+                                                responseType = ResponseType.YES_NO,
+                                                responseValue = "NO"
+                                            )
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Close, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("NO / ISSUE")
+                                    }
                                 }
                             }
                         }
@@ -831,6 +870,21 @@ fun TaskDetailScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+                onClick = {
+                    showAssignDialog = true
+                    viewModel.searchEmployees("")
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(imageVector = Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Add Participant to Task")
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -865,6 +919,102 @@ fun TaskDetailScreen(
             dismissButton = {
                 TextButton(onClick = { showCompleteDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Add Participant Dialog
+    if (showAssignDialog) {
+        var searchQuery by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAssignDialog = false },
+            title = {
+                Text("Add Participant", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Search directory by Name, Email, or Employee ID (max 7 digits):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = {
+                            searchQuery = it
+                            viewModel.searchEmployees(it)
+                        },
+                        placeholder = { Text("e.g. Rahul, rahul@gmail.com, 0123456") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = null)
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    if (directoryEmployees.isEmpty()) {
+                        Text(
+                            text = "No employees found. Type a query to search.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(directoryEmployees) { emp ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = emp.fullName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                            Text(
+                                                text = "ID: ${emp.employeeId} • ${emp.mobile}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Button(
+                                            onClick = {
+                                                viewModel.assignUserToTask(
+                                                    taskId = currentTask.id,
+                                                    userId = emp.id,
+                                                    onSuccess = { showAssignDialog = false }
+                                                )
+                                            },
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text("Add")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAssignDialog = false }) {
+                    Text("Close")
                 }
             }
         )

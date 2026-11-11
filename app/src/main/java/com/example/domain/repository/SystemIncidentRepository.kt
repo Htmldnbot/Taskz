@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.TaskzApplication
 import com.example.core.datastore.UserPreferencesDataStore
+import com.example.core.model.DailyDutyCheckin
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.TaskGroup
@@ -25,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -76,12 +78,135 @@ class SystemIncidentRepository(
         }
     }
 
+    private val repoScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+
+    init {
+        // Start background real-time sync with Cloud Firestore
+        setupFirestoreSyncAndListener()
+    }
+
+    private fun setupFirestoreSyncAndListener() {
+        repoScope.launch {
+            try {
+                fetchAndSyncIncidentsFromFirestore()
+                // Attach real-time Firestore snapshot listener
+                firestore.collection("system_incidents")
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            Log.w(TAG, "Firestore snapshot listener error: ${error.message}")
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null && !snapshot.isEmpty) {
+                            repoScope.launch {
+                                val entities = snapshot.documents.mapNotNull { doc ->
+                                    val data = doc.data ?: return@mapNotNull null
+                                    mapFirestoreDocToEntity(doc.id, data)
+                                }
+                                if (entities.isNotEmpty()) {
+                                    systemIncidentDao.insertIncidents(entities)
+                                    Log.d(TAG, "Synced ${entities.size} incidents from Firestore listener into local DB")
+                                }
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error initializing Firestore sync: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun fetchAndSyncIncidentsFromFirestore(): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val snapshot = firestore.collection("system_incidents")
+                .get()
+                .await()
+            val entities = snapshot.documents.mapNotNull { doc ->
+                val data = doc.data ?: return@mapNotNull null
+                mapFirestoreDocToEntity(doc.id, data)
+            }
+            if (entities.isNotEmpty()) {
+                systemIncidentDao.insertIncidents(entities)
+                Log.d(TAG, "Fetched and inserted ${entities.size} incidents from Firestore")
+            }
+            Result.success(entities.size)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch incidents from Firestore: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    private fun mapFirestoreDocToEntity(id: String, data: Map<String, Any?>): SystemIncidentEntity {
+        val submissionId = (data["submissionId"] as? String) ?: "SUB-$id"
+        val centreId = data["centreId"] as? String
+        val examSessionId = data["examSessionId"] as? String
+        val stateName = (data["stateName"] as? String)?.ifBlank { "Rajasthan" } ?: "Rajasthan"
+        val districtName = (data["districtName"] as? String)?.ifBlank { "Jaipur" } ?: "Jaipur"
+        val centreCode = (data["centreCode"] as? String)?.ifBlank { "141" } ?: "141"
+        val centreName = (data["centreName"] as? String)?.ifBlank { "Yagyavalkya Institute of Technology" }
+            ?: "Yagyavalkya Institute of Technology"
+        val examDate = (data["examDate"] as? String) ?: SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val examName = (data["examName"] as? String) ?: "Staff Selection Commission Examination"
+        val shiftName = (data["shiftName"] as? String) ?: "Shift 1"
+        val lanName = (data["lanName"] as? String) ?: "LAN 1"
+        val macAddress = (data["macAddress"] as? String) ?: "AA:BB:CC:DD:EE:FF"
+        val ipAddress = (data["ipAddress"] as? String) ?: "192.168.1.10"
+        val lockedSystemNumber = (data["lockedSystemNumber"] as? String) ?: "C001"
+        val newlyAllocatedSystemNumber = data["newlyAllocatedSystemNumber"] as? String
+        val candidateShifted = (data["candidateShifted"] as? Boolean) ?: (!newlyAllocatedSystemNumber.isNullOrBlank())
+        val incidentTime = (data["incidentTime"] as? String) ?: SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+        val incidentTimestampMillis = (data["incidentTimestampMillis"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val reason = (data["reason"] as? String) ?: "System Lock"
+        val itManagerName = (data["itManagerName"] as? String) ?: ""
+        val createdBy = (data["createdBy"] as? String) ?: ""
+        val creatorName = data["creatorName"] as? String
+        val createdAt = (data["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val updatedAt = (data["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        val updatedBy = data["updatedBy"] as? String
+        val syncStatus = (data["syncStatus"] as? String) ?: "SYNCED"
+
+        return SystemIncidentEntity(
+            id = id,
+            submissionId = submissionId,
+            centreId = centreId,
+            examSessionId = examSessionId,
+            stateName = stateName,
+            districtName = districtName,
+            centreCode = centreCode,
+            centreName = centreName,
+            examDate = examDate,
+            examName = examName,
+            shiftName = shiftName,
+            lanName = lanName,
+            macAddress = macAddress,
+            ipAddress = ipAddress,
+            lockedSystemNumber = lockedSystemNumber,
+            newlyAllocatedSystemNumber = newlyAllocatedSystemNumber,
+            candidateShifted = candidateShifted,
+            incidentTime = incidentTime,
+            incidentTimestampMillis = incidentTimestampMillis,
+            reason = reason,
+            itManagerName = itManagerName,
+            createdBy = createdBy,
+            creatorName = creatorName,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            updatedBy = updatedBy,
+            syncStatus = syncStatus,
+            lastSyncError = null
+        )
+    }
+
     suspend fun syncIncidentToFirestore(incident: SystemIncident): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val incidentDoc = mapOf(
                 "id" to incident.id,
                 "submissionId" to incident.submissionId,
                 "centreId" to (incident.centreId ?: ""),
+                "examSessionId" to (incident.examSessionId ?: ""),
+                "stateName" to incident.stateName,
+                "districtName" to incident.districtName,
+                "centreCode" to incident.centreCode,
+                "centreName" to incident.centreName,
                 "lockedSystemNumber" to incident.lockedSystemNumber,
                 "newlyAllocatedSystemNumber" to (incident.newlyAllocatedSystemNumber ?: ""),
                 "candidateShifted" to incident.candidateShifted,
@@ -93,10 +218,13 @@ class SystemIncidentRepository(
                 "examName" to incident.examName,
                 "shiftName" to incident.shiftName,
                 "lanName" to incident.lanName,
+                "incidentTime" to incident.incidentTime,
+                "incidentTimestampMillis" to incident.incidentTimestampMillis,
                 "createdBy" to (incident.createdBy ?: ""),
                 "creatorName" to (incident.creatorName ?: ""),
-                "syncStatus" to "SYNCED",
-                "updatedAt" to FieldValue.serverTimestamp()
+                "createdAt" to incident.createdAt,
+                "updatedAt" to System.currentTimeMillis(),
+                "syncStatus" to "SYNCED"
             )
             firestore.collection("system_incidents").document(incident.id)
                 .set(incidentDoc, SetOptions.merge())
@@ -136,56 +264,181 @@ class SystemIncidentRepository(
 
     suspend fun getAvailableCentres(): List<TaskGroup> = withContext(Dispatchers.IO) {
         val existing = taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
-        if (existing.isEmpty()) {
-            val seeded = listOf(
-                TaskGroup(
-                    id = "centre_141",
-                    title = "141 · Yagyavalkya Institute of Technology",
-                    code = "141",
-                    description = "Sitapura Industrial Area, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                ),
-                TaskGroup(
-                    id = "centre_142",
-                    title = "142 · Arya College of Engineering & IT",
-                    code = "142",
-                    description = "SP-42, RIICO Industrial Area, Kukas, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                ),
-                TaskGroup(
-                    id = "centre_143",
-                    title = "143 · JECRC Foundation & University",
-                    code = "143",
-                    description = "Ramchandrapura, Sitapura Extension, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                ),
-                TaskGroup(
-                    id = "centre_144",
-                    title = "144 · Poornima Institute of Engineering & Technology",
-                    code = "144",
-                    description = "ISI-2, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                ),
-                TaskGroup(
-                    id = "centre_145",
-                    title = "145 · Swami Keshvanand Institute of Technology",
-                    code = "145",
-                    description = "Ramnagaria, Jagatpura, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                ),
-                TaskGroup(
-                    id = "centre_146",
-                    title = "146 · Rajasthan College of Engineering for Women",
-                    code = "146",
-                    description = "Bhankrota, Ajmer Road, Jaipur, Rajasthan",
-                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                )
-            )
-            taskGroupDao.insertGroups(seeded.map { TaskGroupEntity.fromDomain(it) })
-            seeded
+        val jaipurSeedList = listOf(
+            TaskGroup("centre_141", "141 · Yagyavalkya Institute of Technology", "141", "Sitapura Industrial Area, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_142", "142 · Arya College of Engineering & IT", "142", "SP-42, RIICO Industrial Area, Kukas, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_143", "143 · JECRC Foundation & University", "143", "Ramchandrapura, Sitapura Extension, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_144", "144 · Poornima Institute of Engineering & Technology", "144", "ISI-2, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_145", "145 · Swami Keshvanand Institute of Technology", "145", "Ramnagaria, Jagatpura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_146", "146 · Rajasthan College of Engineering for Women", "146", "Bhankrota, Ajmer Road, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_147", "147 · Anand International College of Engineering", "147", "Near Kanota, Agra Road, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_148", "148 · Global Institute of Technology", "148", "ITS-1 & 2, IT Park, EPIP, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_149", "149 · Apex Institute of Engineering & Technology", "149", "ISI-5, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_150", "150 · Maharishi Arvind Institute of Engineering", "150", "Sector 7, Madhyam Marg, Mansarovar, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_151", "151 · Jaipur Engineering College & Research Centre", "151", "Tonk Road, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_152", "152 · Stani Memorial P.G. College", "152", "Sector 11, Tagor Path, Mansarovar, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_153", "153 · Subodh Public School & PG College", "153", "Near Rambagh Circle / Sanganer, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_154", "154 · Shankara Institute of Technology", "154", "SP-43, RIICO Kukas, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
+            TaskGroup("centre_155", "155 · Vivekananda Global University", "155", "Sector 36, NRI Road, Jagatpura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+        )
+
+        if (existing.isEmpty() || existing.size < 10) {
+            val missing = jaipurSeedList.filter { seed -> existing.none { it.code == seed.code } }
+            if (missing.isNotEmpty()) {
+                taskGroupDao.insertGroups(missing.map { TaskGroupEntity.fromDomain(it) })
+            }
+            taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: jaipurSeedList
         } else {
             existing
         }
+    }
+
+    // ==========================================
+    // DAILY EXAMINATION DUTY CHECK-IN
+    // ==========================================
+
+    suspend fun saveDailyDutyCheckin(
+        userId: String,
+        userName: String,
+        employeeId: String,
+        centreCode: String,
+        centreName: String,
+        role: String,
+        lan: String?
+    ): DailyDutyCheckin = withContext(Dispatchers.IO) {
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val checkin = DailyDutyCheckin(
+            id = "${todayStr}_$userId",
+            userId = userId,
+            userName = userName,
+            employeeId = employeeId,
+            date = todayStr,
+            centreCode = centreCode,
+            centreName = centreName,
+            role = role,
+            lan = if (role == "VCO") null else lan,
+            timestamp = System.currentTimeMillis()
+        )
+
+        // Save in local SharedPreferences for fast offline retrieval
+        sharedPrefs.edit()
+            .putString("daily_checkin_date_$userId", todayStr)
+            .putString("daily_centre_code_$userId", centreCode)
+            .putString("daily_centre_name_$userId", centreName)
+            .putString("daily_role_$userId", role)
+            .putString("daily_lan_$userId", lan ?: "")
+            .apply()
+
+        // Sync to Cloud Firestore
+        try {
+            val docData = mapOf(
+                "userId" to userId,
+                "userName" to userName,
+                "employeeId" to employeeId,
+                "centreCode" to centreCode,
+                "centreName" to centreName,
+                "role" to role,
+                "lan" to (if (role == "VCO") "" else (lan ?: "")),
+                "date" to todayStr,
+                "timestamp" to System.currentTimeMillis()
+            )
+            firestore.collection("daily_checkins")
+                .document("${todayStr}_$userId")
+                .set(docData, SetOptions.merge())
+                .await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to upload daily check-in to Firestore: ${e.message}")
+        }
+
+        checkin
+    }
+
+    suspend fun getTodayDutyCheckin(userId: String): DailyDutyCheckin? = withContext(Dispatchers.IO) {
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val savedDate = sharedPrefs.getString("daily_checkin_date_$userId", null)
+        if (savedDate == todayStr) {
+            val code = sharedPrefs.getString("daily_centre_code_$userId", "") ?: ""
+            val name = sharedPrefs.getString("daily_centre_name_$userId", "") ?: ""
+            val role = sharedPrefs.getString("daily_role_$userId", "IT_MANAGER") ?: "IT_MANAGER"
+            val lan = sharedPrefs.getString("daily_lan_$userId", null)
+            return@withContext DailyDutyCheckin(
+                id = "${todayStr}_$userId",
+                userId = userId,
+                userName = "",
+                employeeId = "",
+                date = todayStr,
+                centreCode = code,
+                centreName = name,
+                role = role,
+                lan = lan.takeIf { !it.isNullOrBlank() }
+            )
+        }
+
+        // Fallback to Firestore
+        try {
+            val doc = firestore.collection("daily_checkins")
+                .document("${todayStr}_$userId")
+                .get()
+                .await()
+            if (doc.exists()) {
+                val checkin = DailyDutyCheckin(
+                    id = doc.id,
+                    userId = doc.getString("userId") ?: userId,
+                    userName = doc.getString("userName") ?: "",
+                    employeeId = doc.getString("employeeId") ?: "",
+                    date = todayStr,
+                    centreCode = doc.getString("centreCode") ?: "",
+                    centreName = doc.getString("centreName") ?: "",
+                    role = doc.getString("role") ?: "IT_MANAGER",
+                    lan = doc.getString("lan")?.takeIf { it.isNotBlank() }
+                )
+                // Cache locally
+                sharedPrefs.edit()
+                    .putString("daily_checkin_date_$userId", todayStr)
+                    .putString("daily_centre_code_$userId", checkin.centreCode)
+                    .putString("daily_centre_name_$userId", checkin.centreName)
+                    .putString("daily_role_$userId", checkin.role)
+                    .putString("daily_lan_$userId", checkin.lan ?: "")
+                    .apply()
+                return@withContext checkin
+            }
+        } catch (_: Exception) {}
+
+        null
+    }
+
+    suspend fun getTodayCheckinsForCentre(centreCode: String): List<DailyDutyCheckin> = withContext(Dispatchers.IO) {
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val cleanCode = centreCode.trim()
+        val result = mutableListOf<DailyDutyCheckin>()
+
+        try {
+            val snapshot = firestore.collection("daily_checkins")
+                .whereEqualTo("date", todayStr)
+                .whereEqualTo("centreCode", cleanCode)
+                .get()
+                .await()
+
+            for (doc in snapshot.documents) {
+                result.add(
+                    DailyDutyCheckin(
+                        id = doc.id,
+                        userId = doc.getString("userId") ?: "",
+                        userName = doc.getString("userName") ?: "Staff",
+                        employeeId = doc.getString("employeeId") ?: "",
+                        date = todayStr,
+                        centreCode = cleanCode,
+                        centreName = doc.getString("centreName") ?: "",
+                        role = doc.getString("role") ?: "IT_MANAGER",
+                        lan = doc.getString("lan")?.takeIf { it.isNotBlank() }
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error fetching checkins for centre $centreCode: ${e.message}")
+        }
+
+        result
     }
 
     suspend fun createCentre(code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
@@ -445,6 +698,25 @@ class SystemIncidentRepository(
             Result.success(finalIncident)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save incident", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteIncident(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            systemIncidentDao.deleteIncident(id)
+            systemIncidentDao.deleteAuditsForIncident(id)
+            try {
+                firestore.collection("system_incidents")
+                    .document(id)
+                    .delete()
+                    .await()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to delete incident from Firestore: ${e.message}")
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete incident", e)
             Result.failure(e)
         }
     }

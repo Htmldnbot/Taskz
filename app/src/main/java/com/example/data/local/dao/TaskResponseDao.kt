@@ -53,4 +53,10 @@ interface TaskResponseDao {
 
     @Query("UPDATE cached_task_acknowledgements SET syncStatus = 'SYNCED' WHERE id = :id")
     suspend fun markAcknowledgementSynced(id: String)
+
+    @Query("DELETE FROM cached_task_responses WHERE taskId = :taskId")
+    suspend fun deleteResponsesForTask(taskId: String)
+
+    @Query("DELETE FROM cached_task_acknowledgements WHERE taskId = :taskId")
+    suspend fun deleteAcknowledgementsForTask(taskId: String)
 }

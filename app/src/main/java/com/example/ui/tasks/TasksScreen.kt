@@ -40,11 +40,19 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +82,7 @@ fun TasksScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var taskToDelete by remember { mutableStateOf<TaskItem?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.actionEvent.collectLatest { msg ->
@@ -210,19 +219,61 @@ fun TasksScreen(
                     items(tasks, key = { it.id }) { task ->
                         TaskCard(
                             task = task,
-                            onClick = { onTaskClick(task) }
+                            onClick = { onTaskClick(task) },
+                            onLongClick = { taskToDelete = task }
                         )
                     }
                 }
             }
         }
     }
+
+    if (taskToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { taskToDelete = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Delete Task")
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete '${taskToDelete?.title}'? This will cancel all alarms and remove the task for all participants.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = taskToDelete?.id
+                        if (id != null) {
+                            viewModel.deleteTask(id)
+                        }
+                        taskToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { taskToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TaskCard(
     task: TaskItem,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val priorityColor = when (task.priority.lowercase()) {
@@ -238,7 +289,10 @@ fun TaskCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .testTag("task_card_${task.id}")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

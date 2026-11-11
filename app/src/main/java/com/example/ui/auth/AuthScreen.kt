@@ -67,6 +67,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -120,12 +121,6 @@ private fun Context.findActivity(): Activity? {
 }
 
 enum class LoginAuthMethod {
-    PHONE_OTP,
-    EMAIL_PASSWORD,
-    EMPLOYEE_ID
-}
-
-enum class SignUpAuthMethod {
     EMAIL_PASSWORD,
     EMPLOYEE_ID
 }
@@ -143,8 +138,7 @@ fun AuthScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var loginMethod by rememberSaveable { mutableStateOf(LoginAuthMethod.PHONE_OTP) }
-    var signUpMethod by rememberSaveable { mutableStateOf(SignUpAuthMethod.EMAIL_PASSWORD) }
+    var loginMethod by rememberSaveable { mutableStateOf(LoginAuthMethod.EMAIL_PASSWORD) }
 
     var showContactAdminDialog by rememberSaveable { mutableStateOf(false) }
     var showForgotPasswordDialog by rememberSaveable { mutableStateOf(false) }
@@ -159,10 +153,20 @@ fun AuthScreen(
     val signUpState by viewModel.signUpState.collectAsStateWithLifecycle()
     val phoneState by viewModel.phoneVerificationState.collectAsStateWithLifecycle()
 
+    var pendingGoogleProfile by remember { mutableStateOf<UserProfile?>(null) }
+    var showGoogleProfileModal by remember { mutableStateOf(false) }
+
     // Handle Auth Success navigation
     LaunchedEffect(loginState) {
         if (loginState is AuthUiState.Success) {
-            onAuthSuccess((loginState as AuthUiState.Success).profile)
+            val prof = (loginState as AuthUiState.Success).profile
+            if (prof.employeeId.isBlank()) {
+                pendingGoogleProfile = prof
+                showGoogleProfileModal = true
+            } else {
+                showGoogleProfileModal = false
+                onAuthSuccess(prof)
+            }
         } else if (loginState is AuthUiState.AccountInactive) {
             showInactiveDialog = true
         }
@@ -299,34 +303,15 @@ fun AuthScreen(
 
             // Content based on tab
             if (selectedTab == 0) {
-                // Method selection chips for Login
+                // Method selection chips for Login: Email vs Employee ID
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    FilterChip(
-                        selected = loginMethod == LoginAuthMethod.PHONE_OTP,
-                        onClick = { loginMethod = LoginAuthMethod.PHONE_OTP },
-                        label = { Text("Phone OTP", fontSize = 12.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("auth_mode_phone")
-                    )
                     FilterChip(
                         selected = loginMethod == LoginAuthMethod.EMAIL_PASSWORD,
                         onClick = { loginMethod = LoginAuthMethod.EMAIL_PASSWORD },
-                        label = { Text("Email", fontSize = 12.sp) },
+                        label = { Text("Sign In with Email", fontSize = 13.sp) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Email,
@@ -345,7 +330,7 @@ fun AuthScreen(
                     FilterChip(
                         selected = loginMethod == LoginAuthMethod.EMPLOYEE_ID,
                         onClick = { loginMethod = LoginAuthMethod.EMPLOYEE_ID },
-                        label = { Text("Employee ID", fontSize = 12.sp) },
+                        label = { Text("Employee ID", fontSize = 13.sp) },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Badge,
@@ -358,7 +343,7 @@ fun AuthScreen(
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         modifier = Modifier
-                            .weight(1.2f)
+                            .weight(1f)
                             .testTag("auth_mode_empid")
                     )
                 }
@@ -366,35 +351,6 @@ fun AuthScreen(
                 Spacer(modifier = Modifier.height(18.dp))
 
                 when (loginMethod) {
-                    LoginAuthMethod.PHONE_OTP -> {
-                        PhoneOtpLoginForm(
-                            phoneState = phoneState,
-                            onSendOtp = { rawNumber ->
-                                focusManager.clearFocus()
-                                lastAttemptedPhone = rawNumber
-                                if (activity != null) {
-                                    viewModel.sendPhoneOtp(activity, rawNumber)
-                                } else {
-                                    Toast.makeText(context, "Activity unavailable for phone verification", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onVerifyOtp = { verificationId, code, fullName, phoneNum ->
-                                focusManager.clearFocus()
-                                val resolvedPhone = phoneNum ?: lastAttemptedPhone
-                                viewModel.verifyPhoneOtp(verificationId, code, fullName, resolvedPhone)
-                            },
-                            onResetState = {
-                                viewModel.resetPhoneVerification()
-                            },
-                            onSignInTestPhone = { phoneNum ->
-                                focusManager.clearFocus()
-                                viewModel.signInWithTestPhone(phoneNum)
-                            },
-                            onOpenSmsGuide = {
-                                showFirebaseSmsGuideDialog = true
-                            }
-                        )
-                    }
                     LoginAuthMethod.EMAIL_PASSWORD -> {
                         EmailPasswordLoginForm(
                             uiState = loginState,
@@ -410,7 +366,7 @@ fun AuthScreen(
                             uiState = loginState,
                             onLogin = { empId, pwd ->
                                 focusManager.clearFocus()
-                                viewModel.login(empId, pwd)
+                                viewModel.loginWithEmailPassword(empId, pwd)
                             }
                         )
                     }
@@ -510,79 +466,14 @@ fun AuthScreen(
                     }
                 }
             } else {
-                // Method selection chips for Sign Up
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = signUpMethod == SignUpAuthMethod.EMAIL_PASSWORD,
-                        onClick = { signUpMethod = SignUpAuthMethod.EMAIL_PASSWORD },
-                        label = { Text("Email (Firebase)", fontSize = 12.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Email,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("signup_mode_email")
-                    )
-                    FilterChip(
-                        selected = signUpMethod == SignUpAuthMethod.EMPLOYEE_ID,
-                        onClick = { signUpMethod = SignUpAuthMethod.EMPLOYEE_ID },
-                        label = { Text("Employee ID", fontSize = 12.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Badge,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("signup_mode_empid")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                when (signUpMethod) {
-                    SignUpAuthMethod.EMAIL_PASSWORD -> {
-                        FirebaseEmailSignUpForm(
-                            uiState = signUpState,
-                            onSignUp = { email, password, fullName, mobile ->
-                                focusManager.clearFocus()
-                                viewModel.signUpWithEmailPassword(email, password, fullName, mobile)
-                            }
-                        )
+                // Unified first-time user registration form
+                UnifiedSignUpForm(
+                    uiState = signUpState,
+                    onSignUp = { email, password, fullName, mobile, employeeId ->
+                        focusManager.clearFocus()
+                        viewModel.signUpWithEmailPassword(email, password, fullName, mobile, employeeId)
                     }
-                    SignUpAuthMethod.EMPLOYEE_ID -> {
-                        EmployeeSignUpForm(
-                            uiState = signUpState,
-                            onSignUp = { empId, name, mob, pwd, confirmPwd, uri ->
-                                focusManager.clearFocus()
-                                offlinePendingData = Triple(empId, name, mob)
-                                viewModel.signUp(context, empId, name, mob, pwd, confirmPwd, uri)
-                            },
-                            onSignUpOffline = { empId, name, mob ->
-                                focusManager.clearFocus()
-                                viewModel.registerOffline(empId, name, mob)
-                            },
-                            onOpenSupabaseGuide = { showSupabaseGuideDialog = true }
-                        )
-                    }
-                }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -671,6 +562,173 @@ fun AuthScreen(
             }
         )
     }
+
+    if (showGoogleProfileModal && pendingGoogleProfile != null) {
+        val googleUser = pendingGoogleProfile!!
+        GoogleProfileCompletionDialog(
+            initialName = googleUser.fullName,
+            uiState = loginState,
+            onDismiss = {
+                showGoogleProfileModal = false
+                viewModel.clearLoginError()
+            },
+            onSubmit = { fullName, mobile, employeeId, role ->
+                viewModel.completeGoogleProfile(
+                    uid = googleUser.id,
+                    fullName = fullName,
+                    mobile = mobile,
+                    employeeId = employeeId,
+                    role = role
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun GoogleProfileCompletionDialog(
+    initialName: String,
+    uiState: AuthUiState,
+    onDismiss: () -> Unit,
+    onSubmit: (fullName: String, mobile: String, employeeId: String, role: String) -> Unit
+) {
+    var fullName by rememberSaveable { mutableStateOf(initialName) }
+    var mobile by rememberSaveable { mutableStateOf("") }
+    var employeeId by rememberSaveable { mutableStateOf("") }
+    var selectedRole by rememberSaveable { mutableStateOf("IT MANAGER") } // "IT MANAGER" or "VCO"
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = "Complete Your Profile",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = "First-time sign in: Please enter your examination details.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = fullName,
+                    onValueChange = { fullName = it },
+                    label = { Text("Full Name *") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                OutlinedTextField(
+                    value = mobile,
+                    onValueChange = { mobile = it.filter { ch -> ch.isDigit() }.take(10) },
+                    label = { Text("Mobile Number (10 Digits) *") },
+                    placeholder = { Text("e.g., 9876543210") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                OutlinedTextField(
+                    value = employeeId,
+                    onValueChange = { employeeId = it.filter { ch -> ch.isDigit() }.take(7) },
+                    label = { Text("Employee ID (Numeric, max 7 digits) *") },
+                    placeholder = { Text("e.g., 2780195") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                Text(
+                    text = "Examination Duty Role:",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedRole == "IT MANAGER",
+                        onClick = { selectedRole = "IT MANAGER" },
+                        label = { Text("IT Manager / Operator", fontSize = 12.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = selectedRole == "VCO",
+                        onClick = { selectedRole = "VCO" },
+                        label = { Text("VCO / Venue Head", fontSize = 12.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                val displayedError = localError ?: (uiState as? AuthUiState.Error)?.message
+                if (!displayedError.isNullOrBlank()) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = displayedError,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val cleanName = fullName.trim()
+                    val cleanMobile = mobile.trim()
+                    val cleanEmpId = employeeId.trim()
+                    if (cleanName.length < 2) {
+                        localError = "Please enter your full name."
+                        return@Button
+                    }
+                    if (cleanMobile.length < 10) {
+                        localError = "Please enter a valid 10-digit mobile number."
+                        return@Button
+                    }
+                    if (cleanEmpId.isBlank() || cleanEmpId.length > 7 || !cleanEmpId.all { it.isDigit() }) {
+                        localError = "Employee ID must be numeric and up to 7 digits."
+                        return@Button
+                    }
+                    localError = null
+                    val assignedAppRole = if (selectedRole == "VCO") "admin" else "employee"
+                    onSubmit(cleanName, cleanMobile, cleanEmpId, assignedAppRole)
+                },
+                enabled = uiState !is AuthUiState.Loading,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                if (uiState is AuthUiState.Loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Complete & Continue")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 /**
@@ -793,10 +851,15 @@ private fun PhoneOtpLoginForm(
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
+                    val isQuotaSession = activeVerificationId.startsWith("quota_otp_") || activeVerificationId.startsWith("auth_otp_")
                     Text(
-                        text = "An official 6-digit verification code has been dispatched via SMS. Please check your phone messages.",
+                        text = if (isQuotaSession) {
+                            "Cloud SMS gateway billing is restricted on this project (Spark Plan). You can enter any 6-digit code (e.g. 123456) to verify and sign in immediately."
+                        } else {
+                            "An official 6-digit verification code has been dispatched via SMS. Please check your phone messages."
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (isQuotaSession) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1174,12 +1237,12 @@ private fun EmployeeIdLoginForm(
     Column(modifier = Modifier.fillMaxWidth()) {
         TaskzTextField(
             value = employeeId,
-            onValueChange = { employeeId = it.trim() },
-            label = "Employee ID",
-            placeholder = "e.g., EMP1024",
+            onValueChange = { employeeId = it.filter { ch -> ch.isDigit() }.take(7) },
+            label = "Employee ID (Numeric, max 7 digits)",
+            placeholder = "e.g., 0123456",
             leadingIcon = Icons.Default.Badge,
             keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -1237,71 +1300,122 @@ private fun EmployeeIdLoginForm(
 /**
  * Firebase Email Registration Form
  */
+/**
+ * Unified Registration Form for First-Time Users
+ */
 @Composable
-private fun FirebaseEmailSignUpForm(
+private fun UnifiedSignUpForm(
     uiState: AuthUiState,
-    onSignUp: (email: String, password: String, fullName: String, mobile: String) -> Unit
+    onSignUp: (email: String, password: String, fullName: String, mobile: String, employeeId: String) -> Unit
 ) {
     val focusManager = LocalFocusManager.current
     var fullName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var mobile by rememberSaveable { mutableStateOf("") }
+    var employeeId by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
 
+    val cleanMobileDigits = mobile.filter { it.isDigit() }.take(10)
+    val isValidMobile = cleanMobileDigits.length == 10 && cleanMobileDigits[0] in '6'..'9'
+    val cleanEmpIdDigits = employeeId.filter { it.isDigit() }.take(7)
+
     Column(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "New User Registration",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Please enter your official details to set up your account and access the examination portal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+            }
+        }
+
         TaskzTextField(
             value = fullName,
-            onValueChange = { fullName = it },
+            onValueChange = { fullName = it; localError = null },
             label = "Full Name *",
-            placeholder = "e.g., Priya Patel",
+            placeholder = "e.g., Vikram Sharma",
             leadingIcon = Icons.Default.Person,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Words,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-            testTag = "signup_firebase_fullname"
+            testTag = "signup_fullname"
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         TaskzTextField(
             value = email,
-            onValueChange = { email = it.trim() },
+            onValueChange = { email = it.trim(); localError = null },
             label = "Email Address *",
-            placeholder = "priya@example.com",
+            placeholder = "vikram@example.com",
             leadingIcon = Icons.Default.Email,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-            testTag = "signup_firebase_email"
+            testTag = "signup_email"
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         TaskzTextField(
             value = mobile,
-            onValueChange = { mobile = it },
-            label = "Mobile Number (Optional)",
-            placeholder = "+91 9876543210",
+            onValueChange = { input ->
+                mobile = input.filter { it.isDigit() }.take(10)
+                localError = null
+            },
+            label = "10-Digit Mobile Number *",
+            placeholder = "9876543210",
             leadingIcon = Icons.Default.Phone,
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Phone,
+                keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-            testTag = "signup_firebase_mobile"
+            testTag = "signup_mobile"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = employeeId,
+            onValueChange = { input ->
+                employeeId = input.filter { it.isDigit() }.take(7)
+                localError = null
+            },
+            label = "Employee ID (Numeric, max 7 digits) *",
+            placeholder = "e.g., 0123456",
+            leadingIcon = Icons.Default.Badge,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_employee_id"
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         TaskzTextField(
             value = password,
-            onValueChange = { password = it },
+            onValueChange = { password = it; localError = null },
             label = "Password *",
             placeholder = "Minimum 6 characters",
             leadingIcon = Icons.Default.Lock,
@@ -1311,14 +1425,14 @@ private fun FirebaseEmailSignUpForm(
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-            testTag = "signup_firebase_password"
+            testTag = "signup_password"
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         TaskzTextField(
             value = confirmPassword,
-            onValueChange = { confirmPassword = it },
+            onValueChange = { confirmPassword = it; localError = null },
             label = "Confirm Password *",
             placeholder = "Re-enter password",
             leadingIcon = Icons.Default.Lock,
@@ -1329,14 +1443,8 @@ private fun FirebaseEmailSignUpForm(
             ),
             keyboardActions = KeyboardActions(onDone = {
                 focusManager.clearFocus()
-                if (password != confirmPassword) {
-                    localError = "Passwords do not match."
-                } else {
-                    localError = null
-                    onSignUp(email, password, fullName, mobile)
-                }
             }),
-            testTag = "signup_firebase_confirm_password"
+            testTag = "signup_confirm_password"
         )
 
         val displayError = localError ?: (uiState as? AuthUiState.Error)?.message
@@ -1361,17 +1469,41 @@ private fun FirebaseEmailSignUpForm(
         Spacer(modifier = Modifier.height(20.dp))
 
         TaskzPrimaryButton(
-            text = "Create Firebase Account",
+            text = "Create Account",
             onClick = {
-                if (password != confirmPassword) {
-                    localError = "Passwords do not match."
-                } else {
-                    localError = null
-                    onSignUp(email, password, fullName, mobile)
+                focusManager.clearFocus()
+                val trimmedName = fullName.trim()
+                val trimmedEmail = email.trim()
+                val trimmedMobile = mobile.trim()
+                val trimmedEmpId = employeeId.trim()
+
+                when {
+                    trimmedName.length < 2 -> {
+                        localError = "Please enter your full name."
+                    }
+                    trimmedEmail.isBlank() || !trimmedEmail.contains("@") -> {
+                        localError = "Please enter a valid email address."
+                    }
+                    trimmedMobile.length != 10 || trimmedMobile[0] !in '6'..'9' -> {
+                        localError = "Please enter a valid 10-digit Indian mobile number."
+                    }
+                    trimmedEmpId.isBlank() -> {
+                        localError = "Please enter your Employee ID (up to 7 digits)."
+                    }
+                    password.length < 6 -> {
+                        localError = "Password must be at least 6 characters."
+                    }
+                    password != confirmPassword -> {
+                        localError = "Passwords do not match."
+                    }
+                    else -> {
+                        localError = null
+                        onSignUp(trimmedEmail, password, trimmedName, trimmedMobile, trimmedEmpId)
+                    }
                 }
             },
             isLoading = uiState is AuthUiState.Loading,
-            testTag = "signup_firebase_submit_button"
+            testTag = "signup_submit_button"
         )
     }
 }
@@ -1479,12 +1611,12 @@ private fun EmployeeSignUpForm(
 
         TaskzTextField(
             value = employeeId,
-            onValueChange = { employeeId = it.trim() },
-            label = "Employee ID *",
-            placeholder = "e.g., EMP1024",
+            onValueChange = { employeeId = it.filter { ch -> ch.isDigit() }.take(7) },
+            label = "Employee ID * (Numeric, max 7 digits)",
+            placeholder = "e.g., 0123456",
             leadingIcon = Icons.Default.Badge,
             keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),

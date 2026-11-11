@@ -135,7 +135,24 @@ class TaskzApplication : Application() {
             }
             // Initialize sync metadata table
             syncRepository.initializeSyncState()
+
+            // Automatically sync tasks and incidents as soon as device gets network connection
+            networkMonitor.isOnlineFlow.collect { isOnline ->
+                if (isOnline) {
+                    try {
+                        syncRepository.manualSync()
+                    } catch (_: Exception) {}
+                    try {
+                        com.example.sync.SyncWorker.enqueueSync(this@TaskzApplication)
+                    } catch (_: Exception) {}
+                }
+            }
         }
+
+        // Schedule reliable periodic background sync
+        try {
+            com.example.sync.SyncWorker.schedulePeriodicSync(this)
+        } catch (_: Exception) {}
     }
 
     companion object {

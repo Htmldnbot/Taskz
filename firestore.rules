@@ -10,5 +10,8 @@ service cloud.firestore {
     match /system_incidents/{incidentId} {
       allow read, write: if true;
     }
+    match /daily_checkins/{checkinId} {
+      allow read, write: if true;
+    }
   }
 }

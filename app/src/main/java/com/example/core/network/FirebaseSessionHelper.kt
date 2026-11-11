@@ -38,4 +38,12 @@ object FirebaseSessionHelper {
         if (isFirebaseJwt(token)) return true
         return false
     }
+
+    fun isFirebaseSession(token: String?): Boolean {
+        if (Firebase.auth.currentUser != null) return true
+        if (token?.startsWith("firebase_") == true) return true
+        if (token?.startsWith("offline_") == true) return true
+        if (isFirebaseJwt(token)) return true
+        return false
+    }
 }

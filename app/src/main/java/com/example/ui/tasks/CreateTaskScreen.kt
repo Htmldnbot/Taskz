@@ -25,10 +25,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.AssistChip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.LocationOn
@@ -63,6 +66,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -194,15 +198,22 @@ fun CreateTaskScreen(
     var selectedTaskType by rememberSaveable { mutableStateOf(SimpleTaskType.YES_NO) }
     var targetPercentage by rememberSaveable { mutableIntStateOf(100) }
 
-    // 5. Snooze / Unfinished Remind Time (5, 10, 20, Custom)
+    // 5. Exact Alarm Time & Execution Schedule (Exact Hours & Minutes)
+    val initialTime = remember { java.time.LocalTime.now().plusMinutes(15) }
+    var alarmHour by rememberSaveable { mutableIntStateOf(initialTime.hour) }
+    var alarmMinute by rememberSaveable { mutableIntStateOf(initialTime.minute) }
+    var showTimePickerDialog by remember { mutableStateOf(false) }
+
+    // 6. Snooze / Unfinished Remind Time (5, 10, 20, Custom)
     var selectedSnoozeOption by rememberSaveable { mutableStateOf("10") } // "5", "10", "20", "custom"
     var customSnoozeMinutes by rememberSaveable { mutableStateOf("15") }
 
-    // 6. Who can join & Member Invitations
+    // 7. Who can join & Member Invitations
     var whoCanJoinScope by rememberSaveable { mutableStateOf("Test Centre") }
     var allowSelfJoin by rememberSaveable { mutableStateOf(true) }
     var memberSearchQuery by rememberSaveable { mutableStateOf("") }
     val selectedInvitees = remember { mutableStateListOf<UserProfile>() }
+    var autoAssignedNotice by remember { mutableStateOf<String?>(null) }
 
     // Initialise default centre if available
     remember(groups, preselectedGroupId) {
@@ -213,6 +224,42 @@ fun CreateTaskScreen(
                 groups.firstOrNull()
             }
         }
+    }
+
+    // Auto-assign personnel checked in today at the chosen Centre / LAN
+    LaunchedEffect(selectedGroup, selectedScope, lanText) {
+        val centreCode = selectedGroup?.code?.ifBlank { "141" } ?: "141"
+        try {
+            val checkins = com.example.TaskzApplication.instance.systemIncidentRepository.getTodayCheckinsForCentre(centreCode)
+            if (checkins.isNotEmpty()) {
+                val matching = when (selectedScope) {
+                    TaskScopeLevel.LAN -> {
+                        val cleanLan = lanText.trim().lowercase()
+                        checkins.filter { it.role == "VCO" || it.lan?.lowercase()?.contains(cleanLan) == true }
+                    }
+                    else -> checkins
+                }
+
+                var added = 0
+                matching.forEach { chk ->
+                    val user = UserProfile(
+                        id = chk.userId,
+                        employeeId = chk.employeeId,
+                        fullName = "${chk.userName} (${if (chk.role == "VCO") "VCO" else chk.lan ?: "IT Mgr"})",
+                        mobile = "",
+                        appRole = if (chk.role == "VCO") "admin" else "employee",
+                        isActive = true
+                    )
+                    if (selectedInvitees.none { it.id == user.id || (user.employeeId.isNotBlank() && it.employeeId == user.employeeId) }) {
+                        selectedInvitees.add(user)
+                        added++
+                    }
+                }
+                if (added > 0) {
+                    autoAssignedNotice = "Auto-assigned $added personnel stationed at Centre $centreCode today ✓"
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     BackHandler {
@@ -245,6 +292,15 @@ fun CreateTaskScreen(
             lanText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         } else emptyList()
 
+        val now = java.time.LocalDateTime.now()
+        var targetDateTime = now.withHour(alarmHour).withMinute(alarmMinute).withSecond(0).withNano(0)
+        if (targetDateTime.isBefore(now)) {
+            // If the exact time has already passed today, schedule for next occurrence or +5 minutes
+            targetDateTime = targetDateTime.plusDays(1)
+        }
+        val scheduledInstant = targetDateTime.atZone(java.time.ZoneId.systemDefault()).toInstant()
+        val scheduledIso = scheduledInstant.toString()
+
         val newTask = TaskItem(
             groupId = selectedGroup?.id ?: "centre_141",
             groupTitle = selectedGroup?.title ?: "141 · Yagyavalkya Institute of Technology",
@@ -253,16 +309,16 @@ fun CreateTaskScreen(
             description = description.trim().takeIf { it.isNotBlank() },
             location = resolvedLocation,
             startsAt = java.time.Instant.now().toString(),
-            dueAt = null,
+            dueAt = scheduledIso,
             priority = selectedPriority.priorityString,
             visibility = if (whoCanJoinScope == "National") "everyone" else whoCanJoinScope.lowercase(),
             allowSelfJoin = allowSelfJoin,
             joinRequiresApproval = false,
             requiresCompletionConfirmation = false,
-            taskType = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) TaskType.PROGRESS else TaskType.SIMPLE,
+            taskType = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) TaskType.PROGRESS else TaskType.TIME_SPECIFIC,
             importance = selectedPriority.importance,
-            urgencyType = TimeUrgency.BEFORE_DEADLINE,
-            executionTime = null,
+            urgencyType = TimeUrgency.SPECIFIC_TIME,
+            executionTime = scheduledIso,
             targetPercentage = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) targetPercentage else 100,
             alarmType = selectedPriority.alarmType,
             advanceRemindersMinutes = listOf(0, resolvedSnoozeMinutes),
@@ -655,7 +711,228 @@ fun CreateTaskScreen(
             }
 
             // ==========================================
-            // 5. UNFINISHED SNOOZE / REMINDER
+            // 5. ALARM TIME / EXECUTION TIME (Kb Alarm Bajega)
+            // ==========================================
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Alarm, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "5. Alarm Time (Alarm Kb Bajega)",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Text(
+                        text = "Set the exact time (Hour & Minute) when this task alarm will ring on assignee devices:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    val context = androidx.compose.ui.platform.LocalContext.current
+
+                    // Exact Time Display & Picker Card
+                    OutlinedCard(
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            val displayHour12 = when {
+                                alarmHour == 0 -> 12
+                                alarmHour > 12 -> alarmHour - 12
+                                else -> alarmHour
+                            }
+                            val isPm = alarmHour >= 12
+                            val formattedTimeStr = String.format("%02d:%02d %s", displayHour12, alarmMinute, if (isPm) "PM" else "AM")
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Target Alarm Time",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = formattedTimeStr,
+                                        style = MaterialTheme.typography.headlineMedium.copy(
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontFamily = FontFamily.Monospace
+                                        ),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        android.app.TimePickerDialog(
+                                            context,
+                                            { _, h, m ->
+                                                alarmHour = h
+                                                alarmMinute = m
+                                            },
+                                            alarmHour,
+                                            alarmMinute,
+                                            false
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Pick Exact Time")
+                                }
+                            }
+
+                            HorizontalDivider()
+
+                            // Interactive Hour, Minute & AM/PM Controls
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Hour Input
+                                OutlinedTextField(
+                                    value = String.format("%02d", displayHour12),
+                                    onValueChange = { input ->
+                                        val hVal = input.filter { it.isDigit() }.toIntOrNull()
+                                        if (hVal != null && hVal in 1..12) {
+                                            alarmHour = if (isPm) {
+                                                if (hVal == 12) 12 else hVal + 12
+                                            } else {
+                                                if (hVal == 12) 0 else hVal
+                                            }
+                                        }
+                                    },
+                                    label = { Text("Hour") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+
+                                Text(":", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
+
+                                // Minute Input
+                                OutlinedTextField(
+                                    value = String.format("%02d", alarmMinute),
+                                    onValueChange = { input ->
+                                        val mVal = input.filter { it.isDigit() }.take(2).toIntOrNull()
+                                        if (mVal != null && mVal in 0..59) {
+                                            alarmMinute = mVal
+                                        }
+                                    },
+                                    label = { Text("Minute") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+
+                                // AM/PM Toggle
+                                Row(
+                                    modifier = Modifier.weight(1.2f),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = !isPm,
+                                        onClick = {
+                                            if (isPm) alarmHour = (alarmHour - 12).coerceAtLeast(0)
+                                        },
+                                        label = { Text("AM") },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    FilterChip(
+                                        selected = isPm,
+                                        onClick = {
+                                            if (!isPm) alarmHour = (alarmHour + 12).coerceAtMost(23)
+                                        },
+                                        label = { Text("PM") },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+
+                            // Quick Time Shortcuts
+                            Text(
+                                text = "Quick Shortcuts from Now:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(
+                                    "+5m" to 5,
+                                    "+15m" to 15,
+                                    "+30m" to 30,
+                                    "+1 Hr" to 60
+                                ).forEach { (label, mins) ->
+                                    AssistChip(
+                                        onClick = {
+                                            val t = java.time.LocalTime.now().plusMinutes(mins.toLong())
+                                            alarmHour = t.hour
+                                            alarmMinute = t.minute
+                                        },
+                                        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val displayH = when {
+                                alarmHour == 0 -> 12
+                                alarmHour > 12 -> alarmHour - 12
+                                else -> alarmHour
+                            }
+                            val amPm = if (alarmHour >= 12) "PM" else "AM"
+                            Text(
+                                text = String.format("Alarm set for exact time: %02d:%02d %s Today", displayH, alarmMinute, amPm),
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 6. UNFINISHED SNOOZE / REMINDER
             // ==========================================
             Card(
                 shape = RoundedCornerShape(12.dp),
@@ -762,6 +1039,33 @@ fun CreateTaskScreen(
                             checked = allowSelfJoin,
                             onCheckedChange = { allowSelfJoin = it }
                         )
+                    }
+
+                    if (!autoAssignedNotice.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = autoAssignedNotice ?: "",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

@@ -504,4 +504,33 @@ class TasksViewModel(
             _directoryEmployees.value = taskRepository.searchEmployees(query)
         }
     }
+
+    fun deleteTask(taskId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val result = taskRepository.deleteTask(taskId)
+            _isLoading.value = false
+            if (result.isSuccess) {
+                _actionEvent.emit("Task deleted successfully")
+                onSuccess()
+            } else {
+                _actionEvent.emit("Failed to delete task: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun assignUserToTask(taskId: String, userId: String, roleId: String = "staff", onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val result = taskRepository.assignUserToTask(taskId, userId, roleId)
+            _isLoading.value = false
+            if (result.isSuccess) {
+                _actionEvent.emit("Participant added successfully")
+                loadTaskDetails(taskId)
+                onSuccess()
+            } else {
+                _actionEvent.emit("Failed to add participant: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
 }

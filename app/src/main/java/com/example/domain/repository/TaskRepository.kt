@@ -1325,6 +1325,37 @@ class TaskRepository(
         }
     }
 
+    suspend fun deleteTask(taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Cancel any scheduled native device alarms immediately
+            taskAlarmScheduler.cancelAlarmsForTask(taskId)
+            // Delete from local Room database
+            taskDao.deleteTask(taskId)
+            // Delete associated responses and acknowledgements
+            taskResponseDao.deleteResponsesForTask(taskId)
+            taskResponseDao.deleteAcknowledgementsForTask(taskId)
+            // Clean up in-memory caches
+            participantsStore.remove(taskId)
+            requirementsStore.remove(taskId)
+            activityLogStore.remove(taskId)
+            taskVisibleUsersStore.remove(taskId)
+
+            // Delete from Cloud Firestore if Firebase user
+            val session = userPrefs.getUserSession()
+            if (com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session.accessToken)) {
+                try {
+                    firestore.collection("tasks").document(taskId).delete().await()
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to delete task from firestore: ${e.message}")
+                }
+            }
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     /**
      * Fetch all authorized tasks from Supabase and synchronize into local Room cache.
      * Reconciles participants, requirements, and schedules alarms on this device.
@@ -1647,6 +1678,14 @@ class TaskRepository(
             val task = taskDao.getTaskById(taskId)?.toDomain()
             val isMultiLan = !task?.lanTargetList.isNullOrEmpty() || task?.taskType == TaskType.MULTI_CONFIRMATION
 
+            // Prevent duplicate YES confirmations
+            if (responseValue?.equals("YES", ignoreCase = true) == true) {
+                val existing = taskResponseDao.getResponsesForTask(taskId)
+                if (existing.any { it.userId == userId && it.responseValue.equals("YES", ignoreCase = true) }) {
+                    return@withContext Result.failure(IllegalStateException("Confirmation already submitted. Duplicate YES confirmations are not allowed."))
+                }
+            }
+
             val item = TaskResponseItem(
                 id = responseId,
                 taskId = taskId,
@@ -1703,6 +1742,24 @@ class TaskRepository(
                     } else {
                         taskDao.updateTaskStatus(taskId, "completed")
                         taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                    }
+                }
+            } else if (responseValue?.equals("YES", ignoreCase = true) == true && !isMultiLan) {
+                // Single YES response confirms task complete and cancels repeating/snoozing alarms!
+                taskDao.updateTaskStatus(taskId, "completed")
+                taskDao.updateTaskProgress(taskId, 100, nowIso)
+                taskAlarmScheduler.cancelAlarmsForTask(taskId)
+
+                if (com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session.accessToken)) {
+                    try {
+                        val taskDoc = mapOf(
+                            "status" to "completed",
+                            "progress_percentage" to 100,
+                            "completed_at" to nowIso
+                        )
+                        firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge())
+                    } catch (e: Exception) {
+                        Log.w(tag, "Failed to update completed task in firestore: ${e.message}")
                     }
                 }
             } else if (isMultiLan) {
@@ -2159,8 +2216,8 @@ class TaskRepository(
                 return@withContext Result.failure(IOException("Employee is already an active participant in this task"))
             }
 
-            val role = workRoleDao.getWorkRoleById(roleId)
-                ?: return@withContext Result.failure(IOException("Work role not found"))
+            val role = workRoleDao.getWorkRoleById(roleId)?.toDomain()
+                ?: WorkRole(id = roleId, name = "Assignee", code = "STAFF")
 
             val reqs = getTaskRoleRequirements(taskId)
             val req = reqs.find { it.roleId == roleId }
@@ -2169,15 +2226,20 @@ class TaskRepository(
             }
 
             val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
+            if (com.example.core.network.FirebaseSessionHelper.isFirebaseSession(token)) {
+                try {
+                    firestore.collection("tasks").document(taskId)
+                        .update("assigned_user_ids", FieldValue.arrayUnion(resolvedUserUuid)).await()
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to update assigned_user_ids in firestore: ${e.message}")
+                }
+            } else if (!token.isNullOrBlank() && token.split(".").size == 3) {
                 val remoteRes = supabaseClient.assignUserToTask(token, taskId, resolvedUserUuid, roleId)
                 if (remoteRes.isFailure) {
                     val err = remoteRes.exceptionOrNull()
                     return@withContext Result.failure(IOException(err?.message ?: "Failed to assign user on server", err))
                 }
                 syncTasksFromServer(token)
-            } else {
-                return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
             }
 
             val participant = TaskParticipant(
@@ -2213,6 +2275,9 @@ class TaskRepository(
             Result.failure(e)
         }
     }
+
+    suspend fun assignUserToTask(taskId: String, userId: String, roleId: String = "staff"): Result<Unit> =
+        assignEmployee(taskId, userId, roleId)
 
     // Leave Task
     suspend fun leaveTask(taskId: String, reason: String?): Result<Unit> = withContext(Dispatchers.IO) {

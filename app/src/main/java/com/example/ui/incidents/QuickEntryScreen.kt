@@ -322,13 +322,13 @@ fun QuickEntryScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "LAN Selection:",
+                    text = "LAN Selection (Up to LAN 25 or Custom):",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
             }
 
-            val lans = (1..15).map { "LAN $it" }
+            val lans = (1..25).map { "LAN $it" }
             val lanScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -350,6 +350,25 @@ fun QuickEntryScreen(
                     )
                 }
             }
+
+            // Editable LAN field allows typing any LAN up to 20, 25, or custom lab names
+            OutlinedTextField(
+                value = formState.lanName,
+                onValueChange = { viewModel.onLanNameChanged(it) },
+                label = { Text("Selected LAN / Room *") },
+                placeholder = { Text("e.g. LAN 18, LAN 20") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Lan,
+                        contentDescription = "LAN Number",
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("lan_input")
+            )
 
             // IT Manager name
             OutlinedTextField(
@@ -420,7 +439,7 @@ fun QuickEntryScreen(
             SystemNumberField(
                 value = formState.lockedSystemNumber,
                 onValueChange = { viewModel.onLockedSystemNumberChanged(it) },
-                label = "Locked System",
+                label = "Locked System / Seat No.",
                 modifier = Modifier.weight(1f),
                 testTag = "locked_system_input"
             )
@@ -479,7 +498,7 @@ fun QuickEntryScreen(
                 SystemNumberField(
                     value = formState.newlyAllocatedSystemNumber,
                     onValueChange = { viewModel.onNewlyAllocatedSystemNumberChanged(it) },
-                    label = "Newly Allocated System",
+                    label = "Newly Allocated / Seat No.",
                     modifier = Modifier.weight(1f),
                     testTag = "newly_allocated_system_input"
                 )

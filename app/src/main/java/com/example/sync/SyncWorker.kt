@@ -49,6 +49,22 @@ class SyncWorker(
                 syncRequest
             )
         }
+
+        fun schedulePeriodicSync(context: Context) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val periodicRequest = androidx.work.PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(constraints)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                "taskz_periodic_sync_work",
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                periodicRequest
+            )
+        }
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -18,6 +19,28 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+
+data class IncidentFilterState(
+    val searchQuery: String = "",
+    val myReportsOnly: Boolean = false,
+    val shiftedOnly: Boolean = false,
+    val lan: String? = null,
+    val centre: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val zone: String? = null,
+    val dateRange: String? = "all",
+    val reason: String? = null
+)
+
+fun <T, M> StateFlow<T>.mapState(
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    mapper: (T) -> M
+): StateFlow<M> = map { mapper(it) }.stateIn(
+    coroutineScope,
+    SharingStarted.WhileSubscribed(5000),
+    mapper(value)
+)
 
 data class QuickEntryFormState(
     val selectedCentre: TaskGroup? = null,
@@ -57,18 +80,24 @@ class SystemIncidentViewModel(
     private val _availableCentres = MutableStateFlow<List<TaskGroup>>(emptyList())
     val availableCentres: StateFlow<List<TaskGroup>> = _availableCentres.asStateFlow()
 
-    // History filter states
-    private val _searchQuery = MutableStateFlow("")
-    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    // User Profile context for "My Reports" filter
+    val currentUserId = MutableStateFlow("")
+    val currentUserName = MutableStateFlow("")
 
-    private val _filterShiftedOnly = MutableStateFlow(false)
-    val filterShiftedOnly: StateFlow<Boolean> = _filterShiftedOnly.asStateFlow()
+    // Central Filter state
+    private val _filterState = MutableStateFlow(IncidentFilterState())
+    val filterState: StateFlow<IncidentFilterState> = _filterState.asStateFlow()
 
-    private val _filterLan = MutableStateFlow<String?>(null)
-    val filterLan: StateFlow<String?> = _filterLan.asStateFlow()
-
-    private val _filterReason = MutableStateFlow<String?>(null)
-    val filterReason: StateFlow<String?> = _filterReason.asStateFlow()
+    val searchQuery: StateFlow<String> = _filterState.mapState(viewModelScope) { it.searchQuery }
+    val filterMyReportsOnly: StateFlow<Boolean> = _filterState.mapState(viewModelScope) { it.myReportsOnly }
+    val filterShiftedOnly: StateFlow<Boolean> = _filterState.mapState(viewModelScope) { it.shiftedOnly }
+    val filterLan: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.lan }
+    val filterCentre: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.centre }
+    val filterCity: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.city }
+    val filterSelectedState: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.state }
+    val filterZone: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.zone }
+    val filterDateRange: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.dateRange }
+    val filterReason: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.reason }
 
     // Audits for selected incident in detail view
     private val _selectedIncident = MutableStateFlow<SystemIncident?>(null)
@@ -80,53 +109,191 @@ class SystemIncidentViewModel(
     val allIncidents: StateFlow<List<SystemIncident>> = repository.allIncidentsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    companion object {
+        fun getZoneForState(stateName: String): String {
+            val clean = stateName.trim().lowercase(Locale.ROOT)
+            return when {
+                clean.contains("rajasthan") || clean.contains("delhi") || clean.contains("punjab") ||
+                clean.contains("haryana") || clean.contains("uttar pradesh") || clean.contains("up") ||
+                clean.contains("himachal") || clean.contains("uttarakhand") || clean.contains("jammu") ||
+                clean.contains("kashmir") || clean.contains("chandigarh") || clean.contains("ladakh") -> "North Zone"
+
+                clean.contains("maharashtra") || clean.contains("gujarat") || clean.contains("goa") ||
+                clean.contains("mumbai") || clean.contains("pune") || clean.contains("daman") -> "West Zone"
+
+                clean.contains("karnataka") || clean.contains("tamil") || clean.contains("kerala") ||
+                clean.contains("andhra") || clean.contains("telangana") || clean.contains("bengaluru") ||
+                clean.contains("hyderabad") || clean.contains("chennai") || clean.contains("puducherry") -> "South Zone"
+
+                clean.contains("bengal") || clean.contains("kolkata") || clean.contains("bihar") ||
+                clean.contains("odisha") || clean.contains("jharkhand") || clean.contains("assam") ||
+                clean.contains("sikkim") || clean.contains("tripura") || clean.contains("meghalaya") -> "East Zone"
+
+                clean.contains("madhya") || clean.contains("mp") || clean.contains("chhattisgarh") ||
+                clean.contains("bhopal") || clean.contains("indore") || clean.contains("raipur") -> "Central Zone"
+
+                else -> "North Zone"
+            }
+        }
+    }
+
+    val availableLans: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
+        list.map { it.lanName }.distinct().sortedWith(compareBy({ 
+            it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE 
+        }, { it }))
+    }
+
+    val availableCentreNames: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
+        list.map { "${it.centreCode} · ${it.centreName}" }.distinct().sorted()
+    }
+
+    val availableCities: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
+        list.map { it.districtName.ifBlank { "Jaipur" } }.distinct().sorted()
+    }
+
+    val availableStates: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
+        list.map { it.stateName.ifBlank { "Rajasthan" } }.distinct().sorted()
+    }
+
+    val availableZones: List<String> = listOf("North Zone", "West Zone", "South Zone", "East Zone", "Central Zone")
+
     val filteredIncidents: StateFlow<List<SystemIncident>> = combine(
         allIncidents,
-        _searchQuery,
-        _filterShiftedOnly,
-        _filterLan,
-        _filterReason
-    ) { incidents, query, shiftedOnly, lan, reason ->
+        _filterState
+    ) { incidents, filter ->
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        val yesterdayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+
+        val activeUid = currentUserId.value
+        val activeUName = currentUserName.value
+
         incidents.filter { item ->
-            val matchesQuery = query.isBlank() ||
-                item.lockedSystemNumber.contains(query, ignoreCase = true) ||
-                (item.newlyAllocatedSystemNumber?.contains(query, ignoreCase = true) == true) ||
-                item.reason.contains(query, ignoreCase = true) ||
-                item.lanName.contains(query, ignoreCase = true) ||
-                item.centreName.contains(query, ignoreCase = true) ||
-                item.centreCode.contains(query, ignoreCase = true) ||
-                item.itManagerName.contains(query, ignoreCase = true)
+            // Search Query
+            val q = filter.searchQuery
+            val matchesQuery = q.isBlank() ||
+                item.lockedSystemNumber.contains(q, ignoreCase = true) ||
+                (item.newlyAllocatedSystemNumber?.contains(q, ignoreCase = true) == true) ||
+                item.reason.contains(q, ignoreCase = true) ||
+                item.lanName.contains(q, ignoreCase = true) ||
+                item.centreName.contains(q, ignoreCase = true) ||
+                item.centreCode.contains(q, ignoreCase = true) ||
+                item.districtName.contains(q, ignoreCase = true) ||
+                item.stateName.contains(q, ignoreCase = true) ||
+                item.itManagerName.contains(q, ignoreCase = true) ||
+                (item.creatorName?.contains(q, ignoreCase = true) == true)
 
-            val matchesShifted = !shiftedOnly || item.candidateShifted
-            val matchesLan = lan.isNullOrBlank() || item.lanName.equals(lan, ignoreCase = true)
-            val matchesReason = reason.isNullOrBlank() || item.reason.equals(reason, ignoreCase = true)
+            // My Reports Only filter
+            val matchesMyReports = if (filter.myReportsOnly) {
+                (activeUid.isNotBlank() && item.createdBy == activeUid) ||
+                (activeUName.isNotBlank() && item.creatorName?.equals(activeUName, ignoreCase = true) == true) ||
+                (activeUName.isNotBlank() && item.createdBy.equals(activeUName, ignoreCase = true))
+            } else true
 
-            matchesQuery && matchesShifted && matchesLan && matchesReason
+            // Shifted Only
+            val matchesShifted = !filter.shiftedOnly || item.candidateShifted
+
+            // LAN
+            val matchesLan = filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true)
+
+            // Centre
+            val matchesCentre = filter.centre.isNullOrBlank() ||
+                "${item.centreCode} · ${item.centreName}".equals(filter.centre, ignoreCase = true) ||
+                item.centreName.contains(filter.centre, ignoreCase = true) ||
+                item.centreCode.equals(filter.centre, ignoreCase = true)
+
+            // City
+            val matchesCity = filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)
+
+            // State
+            val matchesState = filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)
+
+            // Zone
+            val itemZone = getZoneForState(item.stateName)
+            val matchesZone = filter.zone.isNullOrBlank() || itemZone.equals(filter.zone, ignoreCase = true)
+
+            // Date Range
+            val matchesDate = when (filter.dateRange) {
+                "today" -> item.examDate == todayStr
+                "yesterday" -> item.examDate == yesterdayStr
+                else -> true
+            }
+
+            // Reason
+            val matchesReason = filter.reason.isNullOrBlank() || item.reason.equals(filter.reason, ignoreCase = true)
+
+            matchesQuery && matchesMyReports && matchesShifted && matchesLan &&
+                matchesCentre && matchesCity && matchesState && matchesZone &&
+                matchesDate && matchesReason
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         loadCentresAndInitialize()
+        loadUserProfile()
+    }
+
+    private fun loadUserProfile() {
+        viewModelScope.launch {
+            val uid = repository.getActiveUserId()
+            val uname = repository.getActiveUserName()
+            currentUserId.value = uid
+            currentUserName.value = uname
+        }
+    }
+
+    fun refreshIncidents() {
+        viewModelScope.launch {
+            repository.fetchAndSyncIncidentsFromFirestore()
+        }
+    }
+
+    fun setSearchQuery(query: String) {
+        _filterState.value = _filterState.value.copy(searchQuery = query)
+    }
+
+    fun setFilterMyReportsOnly(myOnly: Boolean) {
+        _filterState.value = _filterState.value.copy(myReportsOnly = myOnly)
+    }
+
+    fun setFilterShiftedOnly(shiftedOnly: Boolean) {
+        _filterState.value = _filterState.value.copy(shiftedOnly = shiftedOnly)
+    }
+
+    fun setFilterLan(lan: String?) {
+        _filterState.value = _filterState.value.copy(lan = lan)
+    }
+
+    fun setFilterCentre(centre: String?) {
+        _filterState.value = _filterState.value.copy(centre = centre)
+    }
+
+    fun setFilterCity(city: String?) {
+        _filterState.value = _filterState.value.copy(city = city)
+    }
+
+    fun setFilterState(state: String?) {
+        _filterState.value = _filterState.value.copy(state = state)
+    }
+
+    fun setFilterZone(zone: String?) {
+        _filterState.value = _filterState.value.copy(zone = zone)
+    }
+
+    fun setFilterDateRange(dateRange: String?) {
+        _filterState.value = _filterState.value.copy(dateRange = dateRange)
+    }
+
+    fun setFilterReason(reason: String?) {
+        _filterState.value = _filterState.value.copy(reason = reason)
+    }
+
+    fun clearAllFilters() {
+        _filterState.value = IncidentFilterState()
     }
 
     fun selectTab(tabIndex: Int) {
         _currentTab.value = tabIndex
-    }
-
-    fun setSearchQuery(query: String) {
-        _searchQuery.value = query
-    }
-
-    fun setFilterShiftedOnly(shiftedOnly: Boolean) {
-        _filterShiftedOnly.value = shiftedOnly
-    }
-
-    fun setFilterLan(lan: String?) {
-        _filterLan.value = lan
-    }
-
-    fun setFilterReason(reason: String?) {
-        _filterReason.value = reason
     }
 
     fun loadCentresAndInitialize() {
@@ -444,6 +611,18 @@ class SystemIncidentViewModel(
     fun syncPending() {
         viewModelScope.launch {
             repository.syncPendingIncidents()
+        }
+    }
+
+    fun deleteIncident(incidentId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            val result = repository.deleteIncident(incidentId)
+            if (result.isSuccess) {
+                if (_selectedIncident.value?.id == incidentId) {
+                    dismissIncidentDetail()
+                }
+                onSuccess()
+            }
         }
     }
 }
