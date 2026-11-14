@@ -248,6 +248,97 @@ with check (
     )
 );
 
+-- Ensure extended tasks columns & response tables exist before policies/functions reference them
+alter table public.tasks
+    add column if not exists creator_id uuid references public.profiles(id) on delete set null,
+    add column if not exists deadline_time timestamptz null,
+    add column if not exists assigned_user_id uuid references public.profiles(id) on delete set null,
+    add column if not exists task_type text not null default 'SIMPLE',
+    add column if not exists importance text not null default 'NORMAL',
+    add column if not exists urgency_type text not null default 'BEFORE_DEADLINE',
+    add column if not exists execution_time timestamptz null,
+    add column if not exists target_percentage integer null default 100,
+    add column if not exists repeat_interval_minutes integer null,
+    add column if not exists alarm_type text not null default 'SOUND_ALERT',
+    add column if not exists advance_reminders_minutes jsonb not null default '[0, 5]'::jsonb,
+    add column if not exists remind_until_completed boolean not null default false,
+    add column if not exists overdue_reminder_interval_minutes integer null default 5,
+    add column if not exists max_overdue_reminders integer null default 3,
+    add column if not exists response_type text not null default 'COMPLETED_NOT_COMPLETED',
+    add column if not exists lan_target_list jsonb not null default '[]'::jsonb,
+    add column if not exists current_progress integer not null default 0,
+    add column if not exists last_progress_update timestamptz null,
+    add column if not exists is_acknowledged boolean not null default false,
+    add column if not exists acknowledged_at timestamptz null,
+    add column if not exists completion_policy text not null default 'SINGLE_ASSIGNEE',
+    add column if not exists response_form_schema jsonb not null default '[]'::jsonb,
+    add column if not exists client_operation_id text unique,
+    add column if not exists sync_status text not null default 'SYNCED';
+
+create table if not exists public.task_responses (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    user_id uuid not null references public.profiles(id) on delete cascade,
+    employee_id text not null,
+    employee_name text null,
+    lan_number text null,
+    response_type text not null default 'COMPLETED_NOT_COMPLETED',
+    response_value text null,
+    percentage_value integer null,
+    numeric_value_1 numeric null,
+    numeric_value_2 numeric null,
+    text_value text null,
+    submitted_at timestamptz not null default now(),
+    idempotency_key text null unique,
+    dynamic_values jsonb null default '{}'::jsonb,
+    device_timestamp timestamptz null,
+    is_late boolean not null default false,
+    delay_seconds integer not null default 0
+);
+alter table public.task_responses
+    add column if not exists dynamic_values jsonb null default '{}'::jsonb,
+    add column if not exists device_timestamp timestamptz null,
+    add column if not exists is_late boolean not null default false,
+    add column if not exists delay_seconds integer not null default 0,
+    add column if not exists idempotency_key text null;
+create index if not exists idx_task_responses_task_id on public.task_responses(task_id);
+create index if not exists idx_task_responses_user_id on public.task_responses(user_id);
+create index if not exists idx_task_responses_lan on public.task_responses(task_id, lan_number);
+alter table public.task_responses enable row level security;
+
+create table if not exists public.task_acknowledgements (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    user_id uuid not null references public.profiles(id) on delete cascade,
+    employee_id text not null,
+    event_id text not null unique,
+    device_timestamp timestamptz not null,
+    acknowledged_at timestamptz not null default now()
+);
+create index if not exists idx_task_ack_task on public.task_acknowledgements(task_id);
+create index if not exists idx_task_ack_user on public.task_acknowledgements(user_id);
+alter table public.task_acknowledgements enable row level security;
+
+create table if not exists public.task_lan_status (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    lan_number text not null,
+    assigned_user_id uuid references public.profiles(id) on delete set null,
+    assigned_employee_id text null,
+    assigned_employee_name text null,
+    status text not null default 'pending',
+    progress integer not null default 0,
+    last_response_time timestamptz null,
+    completed_at timestamptz null,
+    is_overdue boolean not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (task_id, lan_number)
+);
+create index if not exists idx_task_lan_status_task on public.task_lan_status(task_id);
+create index if not exists idx_task_lan_status_lan on public.task_lan_status(task_id, lan_number);
+alter table public.task_lan_status enable row level security;
+
 -- Allow all users who can view a task (creator, assigned participant, group/everyone viewer, admin) to view responses
 drop policy if exists task_responses_select_policy on public.task_responses;
 create policy task_responses_select_policy on public.task_responses
@@ -1285,6 +1376,46 @@ grant execute on function public.acknowledge_task_alarm(uuid, text, timestamptz)
 -- ============================================================
 -- 6. SYSTEM INCIDENTS RLS, DELETE POLICY, GRANTS & VERSION TRIGGER
 -- ============================================================
+
+create table if not exists public.system_incidents (
+    id uuid primary key default gen_random_uuid(),
+    submission_id text not null unique,
+    centre_id uuid null references public.task_groups(id) on delete set null,
+    exam_session_id uuid null references public.shifts(id) on delete set null,
+    state_name text not null default '',
+    district_name text not null default '',
+    centre_code text not null default '',
+    centre_name text not null default '',
+    exam_date date not null default current_date,
+    exam_name text not null default '',
+    shift_name text not null default '',
+    lan_name text not null default '',
+    mac_address text not null,
+    ip_address text not null,
+    locked_system_number text not null,
+    newly_allocated_system_number text null,
+    candidate_shifted boolean not null default false,
+    incident_time timestamptz not null default now(),
+    reason text not null,
+    it_manager_name text not null default '',
+    created_by uuid not null references public.profiles(id) on delete cascade,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    updated_by uuid null references public.profiles(id) on delete set null,
+    version bigint not null default 1
+);
+alter table public.system_incidents enable row level security;
+
+create table if not exists public.system_incident_audit (
+    id uuid primary key default gen_random_uuid(),
+    incident_id uuid not null references public.system_incidents(id) on delete cascade,
+    changed_by uuid not null references public.profiles(id),
+    changed_at timestamptz not null default now(),
+    action text not null,
+    previous_values jsonb null,
+    new_values jsonb null
+);
+alter table public.system_incident_audit enable row level security;
 
 drop policy if exists system_incidents_delete_policy on public.system_incidents;
 create policy system_incidents_delete_policy on public.system_incidents

@@ -14,6 +14,15 @@ begin;
 -- 1. NORMALIZE LEGACY MOBILE ROWS & REBUILD profiles_mobile_check
 -- ============================================================
 
+create or replace function public.normalize_employee_id(p_value text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+    select upper(trim(split_part(coalesce(p_value, ''), '@', 1)));
+$$;
+
 create or replace function public.normalize_mobile(p_value text)
 returns text
 language plpgsql
@@ -76,8 +85,21 @@ create trigger trg_normalize_profile_fields
     for each row
     execute function public.trig_normalize_profile_fields();
 
--- Safely migrate any existing profiles to canonical E.164 format BEFORE recreating constraint
-alter table public.profiles drop constraint if exists profiles_mobile_check;
+-- Drop ALL legacy mobile check constraints (even if named differently) BEFORE normalizing rows
+do $$
+declare
+    c record;
+begin
+    for c in
+        select conname
+        from pg_constraint
+        where conrelid = 'public.profiles'::regclass
+          and contype = 'c'
+          and pg_get_constraintdef(oid) ilike '%mobile%'
+    loop
+        execute format('alter table public.profiles drop constraint if exists %I;', c.conname);
+    end loop;
+end $$;
 
 update public.profiles
 set mobile = public.normalize_mobile(mobile)
@@ -153,6 +175,119 @@ $$;
 
 revoke all on function public.update_my_profile(text, text, text) from public;
 grant execute on function public.update_my_profile(text, text, text) to authenticated;
+
+-- ============================================================
+-- 1B. ENSURE TASK EXTENSIONS, task_responses, task_acknowledgements & task_lan_status EXIST
+-- ============================================================
+
+alter table public.tasks
+    add column if not exists creator_id uuid references public.profiles(id) on delete set null,
+    add column if not exists deadline_time timestamptz null,
+    add column if not exists assigned_user_id uuid references public.profiles(id) on delete set null,
+    add column if not exists task_type text not null default 'SIMPLE',
+    add column if not exists importance text not null default 'NORMAL',
+    add column if not exists urgency_type text not null default 'BEFORE_DEADLINE',
+    add column if not exists execution_time timestamptz null,
+    add column if not exists target_percentage integer null default 100,
+    add column if not exists repeat_interval_minutes integer null,
+    add column if not exists alarm_type text not null default 'SOUND_ALERT',
+    add column if not exists advance_reminders_minutes jsonb not null default '[0, 5]'::jsonb,
+    add column if not exists remind_until_completed boolean not null default false,
+    add column if not exists overdue_reminder_interval_minutes integer null default 5,
+    add column if not exists max_overdue_reminders integer null default 3,
+    add column if not exists response_type text not null default 'COMPLETED_NOT_COMPLETED',
+    add column if not exists lan_target_list jsonb not null default '[]'::jsonb,
+    add column if not exists current_progress integer not null default 0,
+    add column if not exists last_progress_update timestamptz null,
+    add column if not exists is_acknowledged boolean not null default false,
+    add column if not exists acknowledged_at timestamptz null,
+    add column if not exists completion_policy text not null default 'SINGLE_ASSIGNEE',
+    add column if not exists response_form_schema jsonb not null default '[]'::jsonb,
+    add column if not exists client_operation_id text unique,
+    add column if not exists sync_status text not null default 'SYNCED';
+
+alter table public.tasks drop constraint if exists task_status_check;
+alter table public.tasks
+    add constraint task_status_check
+    check (
+        status in (
+            'draft', 'open', 'pending', 'scheduled', 'upcoming',
+            'action_required', 'acknowledged', 'in_progress',
+            'pending_confirmation', 'completed', 'overdue',
+            'cancelled', 'archived'
+        )
+    );
+
+create table if not exists public.task_responses (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    user_id uuid not null references public.profiles(id) on delete cascade,
+    employee_id text not null,
+    employee_name text null,
+    lan_number text null,
+    response_type text not null default 'COMPLETED_NOT_COMPLETED',
+    response_value text null,
+    percentage_value integer null,
+    numeric_value_1 numeric null,
+    numeric_value_2 numeric null,
+    text_value text null,
+    submitted_at timestamptz not null default now(),
+    idempotency_key text null unique,
+    dynamic_values jsonb null default '{}'::jsonb,
+    device_timestamp timestamptz null,
+    is_late boolean not null default false,
+    delay_seconds integer not null default 0
+);
+
+alter table public.task_responses
+    add column if not exists dynamic_values jsonb null default '{}'::jsonb,
+    add column if not exists device_timestamp timestamptz null,
+    add column if not exists is_late boolean not null default false,
+    add column if not exists delay_seconds integer not null default 0,
+    add column if not exists idempotency_key text null;
+
+create index if not exists idx_task_responses_task_id on public.task_responses(task_id);
+create index if not exists idx_task_responses_user_id on public.task_responses(user_id);
+create index if not exists idx_task_responses_lan on public.task_responses(task_id, lan_number);
+create unique index if not exists idx_task_responses_idempotency_unique
+    on public.task_responses(idempotency_key)
+    where idempotency_key is not null;
+alter table public.task_responses enable row level security;
+
+create table if not exists public.task_acknowledgements (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    user_id uuid not null references public.profiles(id) on delete cascade,
+    employee_id text not null,
+    event_id text not null unique,
+    device_timestamp timestamptz not null,
+    acknowledged_at timestamptz not null default now()
+);
+
+create index if not exists idx_task_ack_task on public.task_acknowledgements(task_id);
+create index if not exists idx_task_ack_user on public.task_acknowledgements(user_id);
+alter table public.task_acknowledgements enable row level security;
+
+create table if not exists public.task_lan_status (
+    id uuid primary key default gen_random_uuid(),
+    task_id uuid not null references public.tasks(id) on delete cascade,
+    lan_number text not null,
+    assigned_user_id uuid references public.profiles(id) on delete set null,
+    assigned_employee_id text null,
+    assigned_employee_name text null,
+    status text not null default 'pending',
+    progress integer not null default 0,
+    last_response_time timestamptz null,
+    completed_at timestamptz null,
+    is_overdue boolean not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (task_id, lan_number)
+);
+
+create index if not exists idx_task_lan_status_task on public.task_lan_status(task_id);
+create index if not exists idx_task_lan_status_lan on public.task_lan_status(task_id, lan_number);
+alter table public.task_lan_status enable row level security;
 
 -- ============================================================
 -- 2. REMOVE ALL AMBIGUOUS submit_task_response OVERLOADS
@@ -413,13 +548,188 @@ $$;
 revoke all on function public.submit_task_response(uuid, text, text, integer, numeric, numeric, text, text, text, timestamptz, jsonb) from public;
 grant execute on function public.submit_task_response(uuid, text, text, integer, numeric, numeric, text, text, text, timestamptz, jsonb) to authenticated;
 
+-- Ensure acknowledge_task_alarm & sync_offline_events RPCs are present and up to date
+create or replace function public.acknowledge_task_alarm(
+    p_task_id uuid,
+    p_event_id text,
+    p_device_timestamp timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+    v_user uuid := (select auth.uid());
+    v_prof public.profiles%rowtype;
+    v_task public.tasks%rowtype;
+    v_already_acked boolean := false;
+begin
+    if v_user is null then
+        raise exception 'Authentication required';
+    end if;
+
+    select * into v_prof from public.profiles where id = v_user;
+    if not found or not coalesce(v_prof.is_active, true) then
+        raise exception 'Active profile required to acknowledge alarm';
+    end if;
+
+    select * into v_task from public.tasks where id = p_task_id;
+    if not found then
+        raise exception 'Task not found';
+    end if;
+
+    if not public.can_view_task(p_task_id) and not public.is_admin() then
+        raise exception 'Not authorized to acknowledge alarm for this task';
+    end if;
+
+    select exists (
+        select 1 from public.task_acknowledgements where event_id = p_event_id
+    ) into v_already_acked;
+
+    if v_already_acked then
+        update public.tasks
+        set is_acknowledged = true,
+            acknowledged_at = coalesce(acknowledged_at, now())
+        where id = p_task_id;
+        return true;
+    end if;
+
+    insert into public.task_acknowledgements (
+        task_id, user_id, employee_id, event_id, device_timestamp, acknowledged_at
+    ) values (
+        p_task_id, v_user, v_prof.employee_id, p_event_id, p_device_timestamp, now()
+    );
+
+    update public.tasks
+    set is_acknowledged = true,
+        acknowledged_at = coalesce(acknowledged_at, now())
+    where id = p_task_id;
+
+    insert into public.task_activity_log(task_id, actor_user_id, event_type, message)
+    values (
+        p_task_id,
+        v_user,
+        'ALARM_ACKNOWLEDGED',
+        coalesce(v_prof.full_name, v_prof.employee_id) || ' acknowledged alarm'
+    );
+
+    return true;
+end;
+$$;
+
+revoke all on function public.acknowledge_task_alarm(uuid, text, timestamptz) from public;
+grant execute on function public.acknowledge_task_alarm(uuid, text, timestamptz) to authenticated;
+
+create or replace function public.sync_offline_events(
+    p_events jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+    v_user uuid := (select auth.uid());
+    v_event jsonb;
+    v_results jsonb := '[]'::jsonb;
+    v_op_type text;
+    v_event_id text;
+    v_task_id uuid;
+    v_resp_res jsonb;
+    v_ack_res boolean;
+begin
+    if v_user is null then
+        raise exception 'Authentication required';
+    end if;
+
+    for v_event in select * from jsonb_array_elements(p_events)
+    loop
+        v_op_type := v_event->>'operation_type';
+        v_event_id := v_event->>'event_id';
+        v_task_id := (v_event->>'task_id')::uuid;
+
+        begin
+            if v_op_type in ('TASK_RESPONSE', 'PROGRESS_UPDATE', 'LAN_CONFIRMATION', 'COMPLETION_REQUEST') then
+                v_resp_res := public.submit_task_response(
+                    p_task_id := v_task_id,
+                    p_response_type := coalesce(v_event->>'response_type', 'COMPLETED_NOT_COMPLETED'),
+                    p_response_value := v_event->>'response_value',
+                    p_percentage := (v_event->>'percentage')::integer,
+                    p_numeric_1 := (v_event->>'numeric_1')::numeric,
+                    p_numeric_2 := (v_event->>'numeric_2')::numeric,
+                    p_text := v_event->>'text_value',
+                    p_lan_number := v_event->>'lan_number',
+                    p_idempotency_key := v_event_id,
+                    p_device_timestamp := (v_event->>'device_timestamp')::timestamptz,
+                    p_dynamic_values := coalesce(v_event->'dynamic_values', '{}'::jsonb)
+                );
+
+                v_results := v_results || jsonb_build_object(
+                    'event_id', v_event_id,
+                    'status', 'SYNCED',
+                    'server_result', v_resp_res,
+                    'error', null
+                );
+
+            elsif v_op_type = 'TASK_ACKNOWLEDGEMENT' then
+                v_ack_res := public.acknowledge_task_alarm(
+                    p_task_id := v_task_id,
+                    p_event_id := v_event_id,
+                    p_device_timestamp := coalesce((v_event->>'device_timestamp')::timestamptz, now())
+                );
+
+                v_results := v_results || jsonb_build_object(
+                    'event_id', v_event_id,
+                    'status', 'SYNCED',
+                    'server_result', jsonb_build_object('acknowledged', true),
+                    'error', null
+                );
+            else
+                v_results := v_results || jsonb_build_object(
+                    'event_id', v_event_id,
+                    'status', 'FAILED_PERMANENT',
+                    'error', 'Unsupported offline operation type: ' || coalesce(v_op_type, 'unknown')
+                );
+            end if;
+
+        exception when others then
+            v_results := v_results || jsonb_build_object(
+                'event_id', v_event_id,
+                'status', 'FAILED_RETRYABLE',
+                'error', SQLERRM
+            );
+        end;
+    end loop;
+
+    return jsonb_build_object(
+        'success', true,
+        'synced_count', jsonb_array_length(v_results),
+        'results', v_results
+    );
+end;
+$$;
+
+revoke all on function public.sync_offline_events(jsonb) from public;
+grant execute on function public.sync_offline_events(jsonb) to authenticated;
+
 -- ============================================================
--- 3. ENSURE task_responses & task_acknowledgements INSERT GRANTS & POLICIES
+-- 3. ENSURE task_responses, task_acknowledgements & task_lan_status GRANTS & POLICIES
 -- ============================================================
 
 grant select, insert on public.task_responses to authenticated;
 grant select, insert on public.task_acknowledgements to authenticated;
 grant select, insert, update on public.task_lan_status to authenticated;
+
+drop policy if exists task_responses_select_policy on public.task_responses;
+create policy task_responses_select_policy on public.task_responses
+    for select
+    to authenticated
+    using (
+        user_id = (select auth.uid())
+        or public.can_manage_task(task_id)
+        or public.can_view_task(task_id)
+    );
 
 drop policy if exists task_responses_insert_policy on public.task_responses;
 create policy task_responses_insert_policy on public.task_responses
@@ -434,6 +744,16 @@ create policy task_responses_insert_policy on public.task_responses
         )
     );
 
+drop policy if exists task_ack_select_policy on public.task_acknowledgements;
+create policy task_ack_select_policy on public.task_acknowledgements
+    for select
+    to authenticated
+    using (
+        user_id = (select auth.uid())
+        or public.can_manage_task(task_id)
+        or public.can_view_task(task_id)
+    );
+
 drop policy if exists task_ack_insert_policy on public.task_acknowledgements;
 create policy task_ack_insert_policy on public.task_acknowledgements
     for insert
@@ -445,6 +765,15 @@ create policy task_ack_insert_policy on public.task_acknowledgements
             or public.can_manage_task(task_id)
             or public.is_admin()
         )
+    );
+
+drop policy if exists task_lan_status_select_policy on public.task_lan_status;
+create policy task_lan_status_select_policy on public.task_lan_status
+    for select
+    to authenticated
+    using (
+        public.can_manage_task(task_id)
+        or public.can_view_task(task_id)
     );
 
 commit;
