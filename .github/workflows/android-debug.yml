@@ -29,22 +29,29 @@ jobs:
           TASKZ_KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+
           for var in TASKZ_KEYSTORE_BASE64 TASKZ_KEYSTORE_PASSWORD TASKZ_KEY_ALIAS TASKZ_KEY_PASSWORD; do
             if [ -z "${!var:-}" ]; then
-              echo "::error::Missing required GitHub secret: $var. Configure TASKZ_KEYSTORE_BASE64, TASKZ_KEYSTORE_PASSWORD, TASKZ_KEY_ALIAS, and TASKZ_KEY_PASSWORD in Repository Settings -> Secrets and variables -> Actions."
+              echo "::error::Missing required GitHub secret: $var"
+              echo "Configure all four secrets in Repository Settings -> Secrets and variables -> Actions."
               exit 1
             fi
           done
 
           KEYSTORE_PATH="$RUNNER_TEMP/taskz-signing.jks"
+
           printf '%s' "$TASKZ_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_PATH"
+
           if [ ! -s "$KEYSTORE_PATH" ]; then
             echo "::error::Decoded keystore file is empty."
             exit 1
           fi
 
-          # Validate keystore readability without printing any secret values
-          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$TASKZ_KEYSTORE_PASSWORD" -alias "$TASKZ_KEY_ALIAS" >/dev/null
+          keytool -list \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$TASKZ_KEYSTORE_PASSWORD" \
+            -alias "$TASKZ_KEY_ALIAS" >/dev/null
+
           echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Grant execute permission for gradlew
@@ -61,14 +68,18 @@ jobs:
       - name: Verify APK signature and metadata
         run: |
           set -euo pipefail
+
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
           if [ ! -f "$APK_PATH" ]; then
             echo "::error::Expected APK not found at $APK_PATH"
             exit 1
           fi
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+
           BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+
           if [ -z "$BUILD_TOOLS_DIR" ]; then
             echo "::error::Android build-tools not found under $SDK_ROOT"
             exit 1
@@ -77,9 +88,27 @@ jobs:
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           AAPT2="$BUILD_TOOLS_DIR/aapt2"
 
-          VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$APK_PATH")"
-          BADGING_OUTPUT="$("$AAPT2" dump badging "$APK_PATH")"
-BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "::error::apksigner not found."
+            exit 1
+          fi
+
+          if [ ! -x "$AAPT2" ]; then
+            echo "::error::aapt2 not found."
+            exit 1
+          fi
+
+          if ! VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$APK_PATH")"; then
+            echo "::error::APK signature verification failed."
+            exit 1
+          fi
+
+          if ! BADGING_OUTPUT="$("$AAPT2" dump badging "$APK_PATH")"; then
+            echo "::error::aapt2 could not read APK metadata."
+            exit 1
+          fi
+
+          BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
 
           PKG_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
           VER_CODE="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
@@ -87,6 +116,11 @@ BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
 
           RAW_SHA1="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-1 digest:' | awk '{print toupper($NF)}')"
           RAW_SHA256="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-256 digest:' | awk '{print toupper($NF)}')"
+
+          if [ -z "$RAW_SHA1" ] || [ -z "$RAW_SHA256" ]; then
+            echo "::error::Could not extract signing certificate fingerprints."
+            exit 1
+          fi
 
           FMT_SHA1="$(printf '%s' "$RAW_SHA1" | sed 's/\(..\)/\1:/g; s/:$//')"
           FMT_SHA256="$(printf '%s' "$RAW_SHA256" | sed 's/\(..\)/\1:/g; s/:$//')"
@@ -100,7 +134,7 @@ BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
           echo "Package name   : $PKG_NAME"
           echo "Version code   : $VER_CODE"
           echo "Version name   : $VER_NAME"
-          echo "Signing config : debugConfig (permanent CI keystore)"
+          echo "Signing config : Permanent CI keystore"
           echo "SHA-1          : $FMT_SHA1"
           echo "SHA-256        : $FMT_SHA256"
 
