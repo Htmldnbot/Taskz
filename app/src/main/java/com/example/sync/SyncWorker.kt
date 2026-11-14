@@ -19,10 +19,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.SetOptions
-import kotlinx.coroutines.tasks.await
 
 class SyncWorker(
     appContext: Context,
@@ -104,49 +100,6 @@ class SyncWorker(
         }
 
         var token = tokenRes.getOrThrow()
-        val isFirebaseOrOfflineUser = com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session, token)
-
-        if (isFirebaseOrOfflineUser) {
-            val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
-            for (event in pendingEvents) {
-                if (event.operationType == "SYSTEM_INCIDENT_SUBMISSION") {
-                    val localIncident = db.systemIncidentDao().getIncidentBySubmissionId(event.eventId)
-                    if (localIncident != null) {
-                        try {
-                            TaskzApplication.instance.systemIncidentRepository.syncIncidentToFirestore(localIncident.toDomain())
-                        } catch (_: Exception) {}
-                        db.systemIncidentDao().updateSyncStatus(localIncident.id, "SYNCED", null)
-                    }
-                    outboxDao.markEventSynced(event.id, "INCIDENT_SYNCED", System.currentTimeMillis())
-                } else if (event.operationType == "TASK_CREATION") {
-                    try {
-                        val payload = JSONObject(event.payloadJson)
-                        val firestore = FirebaseFirestore.getInstance()
-                        val taskId = event.taskId ?: payload.optString("id", java.util.UUID.randomUUID().toString())
-                        val taskDoc = mutableMapOf<String, Any>()
-                        val keys = payload.keys()
-                        while (keys.hasNext()) {
-                            val k = keys.next()
-                            taskDoc[k] = payload.get(k)
-                        }
-                        taskDoc["updatedAt"] = FieldValue.serverTimestamp()
-                        firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
-                        outboxDao.markEventSynced(event.id, taskId, System.currentTimeMillis())
-                        db.taskDao().updateTaskStatus(taskId, "open")
-                    } catch (_: Exception) {
-                        outboxDao.markEventSynced(event.id, "OFFLINE_PROCESSED", System.currentTimeMillis())
-                    }
-                } else {
-                    outboxDao.markEventSynced(event.id, "OFFLINE_PROCESSED", System.currentTimeMillis())
-                }
-            }
-            val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
-            if (remaining == 0) {
-                db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
-                db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
-            }
-            return@withContext Result.success()
-        }
 
         // Strictly query pending events for the currently active user to prevent account data leakage
         val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
@@ -168,60 +121,54 @@ class SyncWorker(
             try {
                 when (event.operationType) {
                     "TASK_CREATION" -> {
-                        val payload = JSONObject(event.payloadJson)
-                        if (token.startsWith("firebase_") || token.startsWith("offline_") || token.split(".").size != 3) {
-                            try {
-                                val firestore = FirebaseFirestore.getInstance()
-                                val taskId = event.taskId ?: payload.optString("id", java.util.UUID.randomUUID().toString())
-                                val taskDoc = mutableMapOf<String, Any>()
-                                val keys = payload.keys()
-                                while (keys.hasNext()) {
-                                    val k = keys.next()
-                                    taskDoc[k] = payload.get(k)
-                                }
-                                taskDoc["updatedAt"] = FieldValue.serverTimestamp()
-                                firestore.collection("tasks").document(taskId).set(taskDoc, SetOptions.merge()).await()
-                                outboxDao.markEventSynced(event.id, taskId, System.currentTimeMillis())
+                        val payload = sanitizeTaskPayload(JSONObject(event.payloadJson))
+                        var res = supabaseClient.createTaskAtomic(token, payload)
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.createTaskAtomic(token, payload)
+                            }
+                        }
+
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val isDuplicate = serverObj.optBoolean("is_duplicate", false)
+                            val serverTaskId = serverObj.optString("task_id", event.taskId)
+                            if (isDuplicate) {
+                                Log.i(TAG, "Duplicate task creation detected via client_operation_id; reconciled with server task $serverTaskId")
+                            }
+                            outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
+                            if (!event.taskId.isNullOrBlank()) {
                                 db.taskDao().updateTaskStatus(event.taskId, "open")
-                            } catch (e: Exception) {
-                                outboxDao.markEventFailed(event.id, e.message ?: "Firestore task sync failed", "FAILED_RETRYABLE", System.currentTimeMillis())
-                                hasRetryableFailure = true
                             }
                         } else {
-                            var res = supabaseClient.createTaskAtomic(token, payload)
-                            if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
-                                val forceRes = authRepo.forceRefreshAccessToken()
-                                if (forceRes.isSuccess) {
-                                    token = forceRes.getOrThrow()
-                                    res = supabaseClient.createTaskAtomic(token, payload)
-                                }
-                            }
+                            val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
+                            val isPermanent = err.contains("not authorized", ignoreCase = true) ||
+                                    err.contains("inactive", ignoreCase = true) ||
+                                    err.contains("cannot be blank", ignoreCase = true)
+                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
+                        }
+                    }
 
-                            if (res.isSuccess) {
-                                val serverObj = res.getOrThrow()
-                                val isDuplicate = serverObj.optBoolean("is_duplicate", false)
-                                val serverTaskId = serverObj.optString("task_id", event.taskId)
-                                if (isDuplicate) {
-                                    Log.i(TAG, "Duplicate task creation detected via client_operation_id; reconciled with server task $serverTaskId")
-                                }
-                                outboxDao.markEventSynced(event.id, serverTaskId, System.currentTimeMillis())
-                                db.taskDao().updateTaskStatus(event.taskId, "open")
-                            } else {
-                                val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
-                                val isPermanent = err.contains("not authorized", ignoreCase = true) ||
-                                        err.contains("inactive", ignoreCase = true) ||
-                                        err.contains("cannot be blank", ignoreCase = true)
-                                val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
-                                outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
-                                if (!isPermanent) hasRetryableFailure = true
-                            }
+                    "TASK_DELETION" -> {
+                        val taskId = event.taskId ?: JSONObject(event.payloadJson).optString("task_id")
+                        val res = supabaseClient.deleteTask(token, taskId)
+                        if (res.isSuccess) {
+                            outboxDao.markEventSynced(event.id, "DELETED", System.currentTimeMillis())
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Task deletion sync error"
+                            outboxDao.markEventFailed(event.id, err, "FAILED_RETRYABLE", System.currentTimeMillis())
+                            hasRetryableFailure = true
                         }
                     }
 
                     "GROUP_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
                         var res = supabaseClient.createGroup(token, payload)
-                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                             val forceRes = authRepo.forceRefreshAccessToken()
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
@@ -246,7 +193,7 @@ class SyncWorker(
                     "SHIFT_CREATION" -> {
                         val payload = JSONObject(event.payloadJson)
                         var res = supabaseClient.createShift(token, payload)
-                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                             val forceRes = authRepo.forceRefreshAccessToken()
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
@@ -284,7 +231,7 @@ class SyncWorker(
                             deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() }
                         )
 
-                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                             val forceRes = authRepo.forceRefreshAccessToken()
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
@@ -292,14 +239,14 @@ class SyncWorker(
                                     accessToken = token,
                                     taskId = event.taskId,
                                     responseType = payload.optString("responseType", "COMPLETED_NOT_COMPLETED"),
-                                    responseValue = payload.optString("responseValue").takeIf { it.isNotBlank() },
+                                    responseValue = payload.optString("responseValue").takeIf { it.isNotBlank() && !it.equals("null", true) },
                                     percentage = if (payload.has("percentage") && !payload.isNull("percentage")) payload.getInt("percentage") else null,
                                     numeric1 = if (payload.has("numeric1") && !payload.isNull("numeric1")) payload.getDouble("numeric1") else null,
                                     numeric2 = if (payload.has("numeric2") && !payload.isNull("numeric2")) payload.getDouble("numeric2") else null,
-                                    text = payload.optString("textValue").takeIf { it.isNotBlank() },
-                                    lanNumber = payload.optString("lanNumber").takeIf { it.isNotBlank() },
+                                    text = payload.optString("textValue").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                                    lanNumber = payload.optString("lanNumber").takeIf { it.isNotBlank() && !it.equals("null", true) },
                                     idempotencyKey = event.eventId,
-                                    deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() }
+                                    deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() && !it.equals("null", true) }
                                 )
                             }
                         }
@@ -319,7 +266,8 @@ class SyncWorker(
                             val err = res.exceptionOrNull()?.message ?: "Unknown server error"
                             val isPermanent = err.contains("not found", ignoreCase = true) ||
                                     err.contains("cancelled", ignoreCase = true) ||
-                                    err.contains("not authorized", ignoreCase = true)
+                                    err.contains("not authorized", ignoreCase = true) ||
+                                    err.contains("violates foreign key", ignoreCase = true)
 
                             val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
                             outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
@@ -337,7 +285,7 @@ class SyncWorker(
                             deviceTimestamp = deviceTimestamp
                         )
 
-                        if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                             val forceRes = authRepo.forceRefreshAccessToken()
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
@@ -355,8 +303,10 @@ class SyncWorker(
                             db.taskResponseDao().markAcknowledgementSynced(event.eventId)
                         } else {
                             val err = res.exceptionOrNull()?.message ?: "Unknown ack error"
-                            outboxDao.markEventFailed(event.id, err, "FAILED_RETRYABLE", System.currentTimeMillis())
-                            hasRetryableFailure = true
+                            val isPermanent = err.contains("not found", ignoreCase = true) ||
+                                    err.contains("violates foreign key", ignoreCase = true)
+                            outboxDao.markEventFailed(event.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
                         }
                     }
 
@@ -367,7 +317,7 @@ class SyncWorker(
                                 accessToken = token,
                                 incident = localIncident.toDomain()
                             )
-                            if (res.isFailure && res.exceptionOrNull()?.message?.contains("JWT", ignoreCase = true) == true) {
+                            if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                                 val forceRes = authRepo.forceRefreshAccessToken()
                                 if (forceRes.isSuccess) {
                                     token = forceRes.getOrThrow()
@@ -422,5 +372,48 @@ class SyncWorker(
         } else {
             Result.success()
         }
+    }
+
+    private fun sanitizeTaskPayload(obj: JSONObject): JSONObject {
+        val gid = obj.optString("group_id")
+        if (gid.isNotBlank() && !com.example.core.network.SupabaseConfig.isValidUuid(gid)) {
+            obj.remove("group_id")
+        }
+        val sid = obj.optString("shift_id")
+        if (sid.isNotBlank() && !com.example.core.network.SupabaseConfig.isValidUuid(sid)) {
+            obj.remove("shift_id")
+        }
+        val vis = obj.optString("visibility", "everyone")
+        obj.put("visibility", if (vis.equals("restricted", ignoreCase = true)) "restricted" else "everyone")
+
+        val rawUsers = obj.optJSONArray("assigned_user_ids")
+        if (rawUsers != null) {
+            val cleanUsers = org.json.JSONArray()
+            for (i in 0 until rawUsers.length()) {
+                val u = rawUsers.optString(i)
+                if (com.example.core.network.SupabaseConfig.isValidUuid(u)) cleanUsers.put(u)
+            }
+            obj.put("assigned_user_ids", cleanUsers)
+        }
+
+        val rawReqs = obj.optJSONArray("requirements")
+        if (rawReqs != null) {
+            val cleanReqs = org.json.JSONArray()
+            for (i in 0 until rawReqs.length()) {
+                val reqObj = rawReqs.optJSONObject(i) ?: continue
+                if (com.example.core.network.SupabaseConfig.isValidUuid(reqObj.optString("role_id"))) {
+                    cleanReqs.put(reqObj)
+                }
+            }
+            obj.put("requirements", cleanReqs)
+        }
+        return obj
+    }
+
+    private fun isAuthExpiredError(msg: String?): Boolean {
+        if (msg.isNullOrBlank()) return false
+        return msg.contains("JWT", ignoreCase = true) ||
+            msg.contains("401", ignoreCase = true) ||
+            msg.contains("Unauthorized", ignoreCase = true)
     }
 }

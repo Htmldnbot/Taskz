@@ -31,8 +31,12 @@ class UserPreferencesDataStore(private val context: Context) {
     private val authPrefs: SharedPreferences =
         context.getSharedPreferences(AUTH_PREFS_NAME, Context.MODE_PRIVATE)
 
+    private val accountHintsPrefs: SharedPreferences =
+        context.getSharedPreferences(ACCOUNT_HINTS_PREFS_NAME, Context.MODE_PRIVATE)
+
     companion object {
         private const val AUTH_PREFS_NAME = "taskz_auth_session"
+        private const val ACCOUNT_HINTS_PREFS_NAME = "taskz_account_hints"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_USER_ID = "user_id"
@@ -99,6 +103,34 @@ class UserPreferencesDataStore(private val context: Context) {
 
     suspend fun clearSession() {
         authPrefs.edit().clear().apply()
+    }
+
+    fun saveEmailEmployeeHint(email: String, employeeId: String) {
+        val cleanEmail = email.trim().lowercase()
+        val cleanEmpId = employeeId.trim().uppercase()
+        if (cleanEmail.isNotBlank() && cleanEmpId.isNotBlank()) {
+            accountHintsPrefs.edit().putString("emp_for_$cleanEmail", cleanEmpId).apply()
+        }
+    }
+
+    fun getEmployeeIdForEmail(email: String): String? {
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isBlank()) return null
+        return accountHintsPrefs.getString("emp_for_$cleanEmail", null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun saveEmailAuthMethodHint(email: String, method: String) {
+        val cleanEmail = email.trim().lowercase()
+        val cleanMethod = method.trim().lowercase()
+        if (cleanEmail.isNotBlank() && cleanMethod.isNotBlank()) {
+            accountHintsPrefs.edit().putString("method_for_$cleanEmail", cleanMethod).apply()
+        }
+    }
+
+    fun getEmailAuthMethodHint(email: String): String? {
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isBlank()) return null
+        return accountHintsPrefs.getString("method_for_$cleanEmail", null)?.takeIf { it.isNotBlank() }
     }
 
     // --- Non-sensitive app preferences ---

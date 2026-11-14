@@ -95,6 +95,9 @@ class TasksViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private var responseCollectionJob: kotlinx.coroutines.Job? = null
+    private var lanCollectionJob: kotlinx.coroutines.Job? = null
+
     init {
         refreshTasks()
     }
@@ -102,7 +105,10 @@ class TasksViewModel(
     fun refreshTasks() {
         viewModelScope.launch {
             _isLoading.value = true
-            taskRepository.syncTasks()
+            val res = taskRepository.syncTasks()
+            res.onFailure { err ->
+                _actionEvent.emit("Sync error: ${err.message ?: "Unable to fetch tasks"}")
+            }
             _isLoading.value = false
         }
     }
@@ -172,20 +178,30 @@ class TasksViewModel(
             _taskJoinRequests.value = taskRepository.getTaskJoinRequests(taskId)
             _taskActivityLog.value = taskRepository.getTaskActivityLog(taskId)
 
-            // Collect responses reactively
-            launch {
+            // Collect responses reactively (cancel prior collector when reloading)
+            responseCollectionJob?.cancel()
+            responseCollectionJob = launch {
                 taskRepository.getResponsesForTaskFlow(taskId).collect { resps ->
                     _taskResponses.value = resps
                 }
             }
 
             // Collect LAN progress if task has LAN targets
+            lanCollectionJob?.cancel()
             if (updated != null && updated.lanTargetList.isNotEmpty()) {
-                launch {
+                lanCollectionJob = launch {
                     taskRepository.getLanProgressFlow(taskId, updated.lanTargetList).collect { lans ->
                         _lanProgress.value = lans
                     }
                 }
+            } else {
+                _lanProgress.value = emptyList()
+            }
+
+            // Pull latest responses from server so teammates' responses appear immediately
+            launch {
+                taskRepository.syncTaskResponses(taskId)
+                _selectedTask.value = taskRepository.getTaskById(taskId) ?: _selectedTask.value
             }
 
             _isLoading.value = false
@@ -314,6 +330,11 @@ class TasksViewModel(
     // Phase 3 Operations
     fun acknowledgeAlarm(taskId: String) {
         viewModelScope.launch {
+            val current = _selectedTask.value
+            if (current != null && current.id == taskId && current.isBeforeScheduledExecution()) {
+                _actionEvent.emit("Alarm acknowledgement is locked until the scheduled task time.")
+                return@launch
+            }
             val res = taskRepository.acknowledgeTaskAlarm(taskId)
             res.fold(
                 onSuccess = {
@@ -329,6 +350,11 @@ class TasksViewModel(
 
     fun snoozeAlarm(taskId: String, minutes: Int) {
         viewModelScope.launch {
+            val current = _selectedTask.value
+            if (current != null && current.id == taskId && current.isBeforeScheduledExecution()) {
+                _actionEvent.emit("Snooze is locked until the scheduled task time.")
+                return@launch
+            }
             val res = taskRepository.snoozeAlarm(taskId, minutes)
             res.fold(
                 onSuccess = {
@@ -352,6 +378,11 @@ class TasksViewModel(
         lanNumber: String? = null
     ) {
         viewModelScope.launch {
+            val current = _selectedTask.value
+            if (current != null && current.id == taskId && current.isBeforeScheduledExecution()) {
+                _actionEvent.emit("Task confirmation is locked until the scheduled task time.")
+                return@launch
+            }
             _isLoading.value = true
             val res = taskRepository.submitTaskResponse(
                 taskId = taskId,
@@ -364,8 +395,20 @@ class TasksViewModel(
                 lanNumber = lanNumber
             )
             res.fold(
-                onSuccess = {
-                    _actionEvent.emit("Response submitted successfully")
+                onSuccess = { item ->
+                    val reminderMins = (current?.overdueReminderIntervalMinutes ?: current?.repeatIntervalMinutes ?: 10).coerceAtLeast(1)
+                    val msg = when {
+                        responseType == ResponseType.YES_NO && responseValue.equals("NO", ignoreCase = true) -> {
+                            if (item.isPendingSync) {
+                                "Response 'NO' saved offline. Reminder scheduled in ${reminderMins}m."
+                            } else {
+                                "Response 'NO' synced. Follow-up reminder scheduled in ${reminderMins}m."
+                            }
+                        }
+                        item.isPendingSync -> "Offline: Response saved locally & queued for sync"
+                        else -> "Response synced to server"
+                    }
+                    _actionEvent.emit(msg)
                     loadTaskDetails(taskId)
                 },
                 onFailure = { error ->
@@ -447,7 +490,12 @@ class TasksViewModel(
             )
             res.fold(
                 onSuccess = { task ->
-                    _actionEvent.emit("Task Created Successfully with Alarms")
+                    val msg = if (task.status.equals("pending_sync", ignoreCase = true)) {
+                        "Offline: Task saved locally & queued for sync"
+                    } else {
+                        "Task Created & Synced to Server"
+                    }
+                    _actionEvent.emit(msg)
                     onSuccess(task)
                 },
                 onFailure = { error ->

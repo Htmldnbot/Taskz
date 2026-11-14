@@ -34,11 +34,6 @@ import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
-import com.example.R
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
-import kotlinx.coroutines.tasks.await
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -65,173 +60,36 @@ class SystemIncidentRepository(
 
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private val firestore: FirebaseFirestore by lazy {
-        val dbId = try {
-            context.getString(R.string.firestore_database_id)
-        } catch (_: Exception) {
-            "(default)"
-        }
-        try {
-            FirebaseFirestore.getInstance(dbId)
-        } catch (_: Exception) {
-            FirebaseFirestore.getInstance()
-        }
-    }
-
     private val repoScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     init {
-        // Start background real-time sync with Cloud Firestore
-        setupFirestoreSyncAndListener()
-    }
-
-    private fun setupFirestoreSyncAndListener() {
         repoScope.launch {
             try {
-                fetchAndSyncIncidentsFromFirestore()
-                // Attach real-time Firestore snapshot listener
-                firestore.collection("system_incidents")
-                    .addSnapshotListener { snapshot, error ->
-                        if (error != null) {
-                            Log.w(TAG, "Firestore snapshot listener error: ${error.message}")
-                            return@addSnapshotListener
-                        }
-                        if (snapshot != null && !snapshot.isEmpty) {
-                            repoScope.launch {
-                                val entities = snapshot.documents.mapNotNull { doc ->
-                                    val data = doc.data ?: return@mapNotNull null
-                                    mapFirestoreDocToEntity(doc.id, data)
-                                }
-                                if (entities.isNotEmpty()) {
-                                    systemIncidentDao.insertIncidents(entities)
-                                    Log.d(TAG, "Synced ${entities.size} incidents from Firestore listener into local DB")
-                                }
-                            }
-                        }
-                    }
+                syncIncidentsFromServer()
             } catch (e: Exception) {
-                Log.w(TAG, "Error initializing Firestore sync: ${e.message}")
+                Log.w(TAG, "Initial Supabase incident sync warning: ${e.message}")
             }
         }
     }
 
-    suspend fun fetchAndSyncIncidentsFromFirestore(): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun syncIncidentsFromServer(): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            val snapshot = firestore.collection("system_incidents")
-                .get()
-                .await()
-            val entities = snapshot.documents.mapNotNull { doc ->
-                val data = doc.data ?: return@mapNotNull null
-                mapFirestoreDocToEntity(doc.id, data)
+            if (!networkMonitor.isCurrentlyConnected()) {
+                return@withContext Result.failure(Exception("Offline"))
             }
-            if (entities.isNotEmpty()) {
-                systemIncidentDao.insertIncidents(entities)
-                Log.d(TAG, "Fetched and inserted ${entities.size} incidents from Firestore")
+            val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+                ?: return@withContext Result.failure(Exception("Authentication required"))
+            val res = supabaseClient.fetchSystemIncidents(token)
+            if (res.isFailure) {
+                return@withContext Result.failure(res.exceptionOrNull() ?: Exception("Failed to fetch incidents"))
             }
-            Result.success(entities.size)
+            val remoteList = res.getOrDefault(emptyList())
+            if (remoteList.isNotEmpty()) {
+                systemIncidentDao.insertIncidents(remoteList.map { SystemIncidentEntity.fromDomain(it) })
+            }
+            Result.success(remoteList.size)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch incidents from Firestore: ${e.message}")
-            Result.failure(e)
-        }
-    }
-
-    private fun mapFirestoreDocToEntity(id: String, data: Map<String, Any?>): SystemIncidentEntity {
-        val submissionId = (data["submissionId"] as? String) ?: "SUB-$id"
-        val centreId = data["centreId"] as? String
-        val examSessionId = data["examSessionId"] as? String
-        val stateName = (data["stateName"] as? String)?.ifBlank { "Rajasthan" } ?: "Rajasthan"
-        val districtName = (data["districtName"] as? String)?.ifBlank { "Jaipur" } ?: "Jaipur"
-        val centreCode = (data["centreCode"] as? String)?.ifBlank { "141" } ?: "141"
-        val centreName = (data["centreName"] as? String)?.ifBlank { "Yagyavalkya Institute of Technology" }
-            ?: "Yagyavalkya Institute of Technology"
-        val examDate = (data["examDate"] as? String) ?: SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        val examName = (data["examName"] as? String) ?: "Staff Selection Commission Examination"
-        val shiftName = (data["shiftName"] as? String) ?: "Shift 1"
-        val lanName = (data["lanName"] as? String) ?: "LAN 1"
-        val macAddress = (data["macAddress"] as? String) ?: "AA:BB:CC:DD:EE:FF"
-        val ipAddress = (data["ipAddress"] as? String) ?: "192.168.1.10"
-        val lockedSystemNumber = (data["lockedSystemNumber"] as? String) ?: "C001"
-        val newlyAllocatedSystemNumber = data["newlyAllocatedSystemNumber"] as? String
-        val candidateShifted = (data["candidateShifted"] as? Boolean) ?: (!newlyAllocatedSystemNumber.isNullOrBlank())
-        val incidentTime = (data["incidentTime"] as? String) ?: SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
-        val incidentTimestampMillis = (data["incidentTimestampMillis"] as? Number)?.toLong() ?: System.currentTimeMillis()
-        val reason = (data["reason"] as? String) ?: "System Lock"
-        val itManagerName = (data["itManagerName"] as? String) ?: ""
-        val createdBy = (data["createdBy"] as? String) ?: ""
-        val creatorName = data["creatorName"] as? String
-        val createdAt = (data["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
-        val updatedAt = (data["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
-        val updatedBy = data["updatedBy"] as? String
-        val syncStatus = (data["syncStatus"] as? String) ?: "SYNCED"
-
-        return SystemIncidentEntity(
-            id = id,
-            submissionId = submissionId,
-            centreId = centreId,
-            examSessionId = examSessionId,
-            stateName = stateName,
-            districtName = districtName,
-            centreCode = centreCode,
-            centreName = centreName,
-            examDate = examDate,
-            examName = examName,
-            shiftName = shiftName,
-            lanName = lanName,
-            macAddress = macAddress,
-            ipAddress = ipAddress,
-            lockedSystemNumber = lockedSystemNumber,
-            newlyAllocatedSystemNumber = newlyAllocatedSystemNumber,
-            candidateShifted = candidateShifted,
-            incidentTime = incidentTime,
-            incidentTimestampMillis = incidentTimestampMillis,
-            reason = reason,
-            itManagerName = itManagerName,
-            createdBy = createdBy,
-            creatorName = creatorName,
-            createdAt = createdAt,
-            updatedAt = updatedAt,
-            updatedBy = updatedBy,
-            syncStatus = syncStatus,
-            lastSyncError = null
-        )
-    }
-
-    suspend fun syncIncidentToFirestore(incident: SystemIncident): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val incidentDoc = mapOf(
-                "id" to incident.id,
-                "submissionId" to incident.submissionId,
-                "centreId" to (incident.centreId ?: ""),
-                "examSessionId" to (incident.examSessionId ?: ""),
-                "stateName" to incident.stateName,
-                "districtName" to incident.districtName,
-                "centreCode" to incident.centreCode,
-                "centreName" to incident.centreName,
-                "lockedSystemNumber" to incident.lockedSystemNumber,
-                "newlyAllocatedSystemNumber" to (incident.newlyAllocatedSystemNumber ?: ""),
-                "candidateShifted" to incident.candidateShifted,
-                "macAddress" to incident.macAddress,
-                "ipAddress" to incident.ipAddress,
-                "reason" to incident.reason,
-                "itManagerName" to incident.itManagerName,
-                "examDate" to incident.examDate,
-                "examName" to incident.examName,
-                "shiftName" to incident.shiftName,
-                "lanName" to incident.lanName,
-                "incidentTime" to incident.incidentTime,
-                "incidentTimestampMillis" to incident.incidentTimestampMillis,
-                "createdBy" to (incident.createdBy ?: ""),
-                "creatorName" to (incident.creatorName ?: ""),
-                "createdAt" to incident.createdAt,
-                "updatedAt" to System.currentTimeMillis(),
-                "syncStatus" to "SYNCED"
-            )
-            firestore.collection("system_incidents").document(incident.id)
-                .set(incidentDoc, SetOptions.merge())
-                .await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Log.w(TAG, "Firestore sync error for incident ${incident.id}: ${e.message}")
+            Log.w(TAG, "Failed to sync incidents from Supabase: ${e.message}")
             Result.failure(e)
         }
     }
@@ -320,35 +178,20 @@ class SystemIncidentRepository(
             timestamp = System.currentTimeMillis()
         )
 
-        // Save in local SharedPreferences for fast offline retrieval
+        // Save in SharedPreferences for local & offline lookup
         sharedPrefs.edit()
             .putString("daily_checkin_date_$userId", todayStr)
             .putString("daily_centre_code_$userId", centreCode)
             .putString("daily_centre_name_$userId", centreName)
             .putString("daily_role_$userId", role)
             .putString("daily_lan_$userId", lan ?: "")
+            .putString("daily_user_name_$userId", userName)
+            .putString("daily_emp_id_$userId", employeeId)
             .apply()
 
-        // Sync to Cloud Firestore
-        try {
-            val docData = mapOf(
-                "userId" to userId,
-                "userName" to userName,
-                "employeeId" to employeeId,
-                "centreCode" to centreCode,
-                "centreName" to centreName,
-                "role" to role,
-                "lan" to (if (role == "VCO") "" else (lan ?: "")),
-                "date" to todayStr,
-                "timestamp" to System.currentTimeMillis()
-            )
-            firestore.collection("daily_checkins")
-                .document("${todayStr}_$userId")
-                .set(docData, SetOptions.merge())
-                .await()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to upload daily check-in to Firestore: ${e.message}")
-        }
+        val trackedUsers = sharedPrefs.getStringSet("daily_checkin_users_$todayStr", emptySet())?.toMutableSet() ?: mutableSetOf()
+        trackedUsers.add(userId)
+        sharedPrefs.edit().putStringSet("daily_checkin_users_$todayStr", trackedUsers).apply()
 
         checkin
     }
@@ -361,11 +204,13 @@ class SystemIncidentRepository(
             val name = sharedPrefs.getString("daily_centre_name_$userId", "") ?: ""
             val role = sharedPrefs.getString("daily_role_$userId", "IT_MANAGER") ?: "IT_MANAGER"
             val lan = sharedPrefs.getString("daily_lan_$userId", null)
+            val userName = sharedPrefs.getString("daily_user_name_$userId", "") ?: ""
+            val empId = sharedPrefs.getString("daily_emp_id_$userId", "") ?: ""
             return@withContext DailyDutyCheckin(
                 id = "${todayStr}_$userId",
                 userId = userId,
-                userName = "",
-                employeeId = "",
+                userName = userName,
+                employeeId = empId,
                 date = todayStr,
                 centreCode = code,
                 centreName = name,
@@ -373,72 +218,17 @@ class SystemIncidentRepository(
                 lan = lan.takeIf { !it.isNullOrBlank() }
             )
         }
-
-        // Fallback to Firestore
-        try {
-            val doc = firestore.collection("daily_checkins")
-                .document("${todayStr}_$userId")
-                .get()
-                .await()
-            if (doc.exists()) {
-                val checkin = DailyDutyCheckin(
-                    id = doc.id,
-                    userId = doc.getString("userId") ?: userId,
-                    userName = doc.getString("userName") ?: "",
-                    employeeId = doc.getString("employeeId") ?: "",
-                    date = todayStr,
-                    centreCode = doc.getString("centreCode") ?: "",
-                    centreName = doc.getString("centreName") ?: "",
-                    role = doc.getString("role") ?: "IT_MANAGER",
-                    lan = doc.getString("lan")?.takeIf { it.isNotBlank() }
-                )
-                // Cache locally
-                sharedPrefs.edit()
-                    .putString("daily_checkin_date_$userId", todayStr)
-                    .putString("daily_centre_code_$userId", checkin.centreCode)
-                    .putString("daily_centre_name_$userId", checkin.centreName)
-                    .putString("daily_role_$userId", checkin.role)
-                    .putString("daily_lan_$userId", checkin.lan ?: "")
-                    .apply()
-                return@withContext checkin
-            }
-        } catch (_: Exception) {}
-
         null
     }
 
     suspend fun getTodayCheckinsForCentre(centreCode: String): List<DailyDutyCheckin> = withContext(Dispatchers.IO) {
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val cleanCode = centreCode.trim()
-        val result = mutableListOf<DailyDutyCheckin>()
-
-        try {
-            val snapshot = firestore.collection("daily_checkins")
-                .whereEqualTo("date", todayStr)
-                .whereEqualTo("centreCode", cleanCode)
-                .get()
-                .await()
-
-            for (doc in snapshot.documents) {
-                result.add(
-                    DailyDutyCheckin(
-                        id = doc.id,
-                        userId = doc.getString("userId") ?: "",
-                        userName = doc.getString("userName") ?: "Staff",
-                        employeeId = doc.getString("employeeId") ?: "",
-                        date = todayStr,
-                        centreCode = cleanCode,
-                        centreName = doc.getString("centreName") ?: "",
-                        role = doc.getString("role") ?: "IT_MANAGER",
-                        lan = doc.getString("lan")?.takeIf { it.isNotBlank() }
-                    )
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error fetching checkins for centre $centreCode: ${e.message}")
+        val trackedUsers = sharedPrefs.getStringSet("daily_checkin_users_$todayStr", emptySet()) ?: emptySet()
+        trackedUsers.mapNotNull { uid ->
+            val checkin = getTodayDutyCheckin(uid)
+            if (checkin != null && checkin.centreCode.equals(cleanCode, ignoreCase = true)) checkin else null
         }
-
-        result
     }
 
     suspend fun createCentre(code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
@@ -651,48 +441,21 @@ class SystemIncidentRepository(
                 )
             )
 
-            // 3. Attempt direct sync
-            val isFirebaseOrOffline = (token?.startsWith("firebase_") == true) || 
-                (token?.startsWith("offline_") == true) || 
-                userId.startsWith("phone_user_")
-
-            if (isFirebaseOrOffline) {
-                // Sync to Firestore when connected, and mark locally synced
-                if (networkMonitor.isCurrentlyConnected()) {
-                    syncIncidentToFirestore(finalIncident)
-                }
-                systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
-                outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
-                val now = System.currentTimeMillis()
-                try {
-                    TaskzApplication.instance.database.syncMetadataDao().apply {
-                        val remaining = outboxDao.getPendingEventsForUser(userId).size
-                        if (remaining == 0) {
-                            updateSyncStatus("SYNCED", "Up to date")
-                            updateLastSuccessfulSync(now)
-                        } else {
-                            updateSyncStatus("PENDING", "$remaining pending operations awaiting sync")
-                        }
-                        updateLastServerFetch(now)
-                    }
-                } catch (_: Exception) {}
-                return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
-            } else {
-                if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
-                    val remoteRes = supabaseClient.submitSystemIncident(token, finalIncident)
-                    if (remoteRes.isSuccess) {
-                        systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
-                        outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
-                        return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
-                    } else {
-                        val ex = remoteRes.exceptionOrNull()
-                        Log.w(TAG, "Direct sync failed, keeping as PENDING: ${ex?.message}")
-                        systemIncidentDao.updateSyncStatus(finalIncident.id, "PENDING", ex?.message)
-                        SyncWorker.enqueueSync(context)
-                    }
+            // 3. Attempt direct sync to Supabase
+            if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank() && !token.startsWith("offline_")) {
+                val remoteRes = supabaseClient.submitSystemIncident(token, finalIncident)
+                if (remoteRes.isSuccess) {
+                    systemIncidentDao.updateSyncStatus(finalIncident.id, "SYNCED", null)
+                    outboxDao.markEventSynced(outboxRowId, finalIncident.submissionId, System.currentTimeMillis())
+                    return@withContext Result.success(finalIncident.copy(syncStatus = "SYNCED"))
                 } else {
+                    val ex = remoteRes.exceptionOrNull()
+                    Log.w(TAG, "Direct incident sync failed, keeping as PENDING: ${ex?.message}")
+                    systemIncidentDao.updateSyncStatus(finalIncident.id, "PENDING", ex?.message)
                     SyncWorker.enqueueSync(context)
                 }
+            } else {
+                SyncWorker.enqueueSync(context)
             }
 
             Result.success(finalIncident)
@@ -706,13 +469,12 @@ class SystemIncidentRepository(
         try {
             systemIncidentDao.deleteIncident(id)
             systemIncidentDao.deleteAuditsForIncident(id)
-            try {
-                firestore.collection("system_incidents")
-                    .document(id)
-                    .delete()
-                    .await()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to delete incident from Firestore: ${e.message}")
+            val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            if (!token.isNullOrBlank() && !token.startsWith("offline_") && networkMonitor.isCurrentlyConnected()) {
+                val res = supabaseClient.deleteSystemIncident(token, id)
+                if (res.isFailure) {
+                    Log.w(TAG, "Remote delete incident warning: ${res.exceptionOrNull()?.message}")
+                }
             }
             Result.success(Unit)
         } catch (e: Exception) {
@@ -724,47 +486,22 @@ class SystemIncidentRepository(
     suspend fun syncPendingIncidents(): Int = withContext(Dispatchers.IO) {
         val pending = systemIncidentDao.getPendingIncidents()
         val session = userPrefs.getUserSession()
-        val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull() ?: session.accessToken
+        val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
         val userId = session.userId ?: getActiveUserId()
-        val isFirebaseOrOffline = (token?.startsWith("firebase_") == true) || 
-            (token?.startsWith("offline_") == true) || 
-            userId.startsWith("phone_user_")
 
         var syncedCount = 0
-        for (item in pending) {
-            val domain = item.toDomain()
-            if (isFirebaseOrOffline) {
-                if (networkMonitor.isCurrentlyConnected()) {
-                    syncIncidentToFirestore(domain)
-                }
-                systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
-                outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
-                    outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
-                }
-                syncedCount++
-            } else {
-                if (!token.isNullOrBlank() && networkMonitor.isCurrentlyConnected()) {
-                    val res = supabaseClient.submitSystemIncident(token, domain)
-                    if (res.isSuccess) {
-                        systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
-                        outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
-                            outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
-                        }
-                        syncedCount++
-                    } else {
-                        systemIncidentDao.updateSyncStatus(item.id, "ERROR", res.exceptionOrNull()?.message)
+        if (!token.isNullOrBlank() && !token.startsWith("offline_") && networkMonitor.isCurrentlyConnected()) {
+            for (item in pending) {
+                val domain = item.toDomain()
+                val res = supabaseClient.submitSystemIncident(token, domain)
+                if (res.isSuccess) {
+                    systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
+                    outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
+                        outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
                     }
-                }
-            }
-        }
-
-        // Clean up any lingering outbox events for this user if they are incidents that are now synced
-        if (isFirebaseOrOffline) {
-            val pendingOutbox = outboxDao.getPendingEventsForUser(userId)
-            for (ev in pendingOutbox) {
-                if (ev.operationType == "SYSTEM_INCIDENT_SUBMISSION") {
-                    outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
                     syncedCount++
+                } else {
+                    systemIncidentDao.updateSyncStatus(item.id, "ERROR", res.exceptionOrNull()?.message)
                 }
             }
         }

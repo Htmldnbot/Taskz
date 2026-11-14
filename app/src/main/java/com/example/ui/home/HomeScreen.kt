@@ -83,6 +83,7 @@ fun HomeScreen(
     onNavigateToProfile: () -> Unit,
     onNavigateToAdmin: () -> Unit,
     onNavigateToIncidents: () -> Unit = {},
+    onNavigateToAlarmSettings: () -> Unit = {},
     onSignedOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -122,13 +123,35 @@ fun HomeScreen(
         }
     }
 
+    fun checkFullScreenIntentGranted(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            nm.canUseFullScreenIntent()
+        } else true
+    }
+
+    fun checkExactAlarmGranted(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val am = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+            am.canScheduleExactAlarms()
+        } else true
+    }
+
     var hasOverlayPermission by remember {
         mutableStateOf(android.provider.Settings.canDrawOverlays(context))
     }
+    var hasFullScreenIntentPermission by remember {
+        mutableStateOf(checkFullScreenIntentGranted())
+    }
+    var hasExactAlarmPermission by remember {
+        mutableStateOf(checkExactAlarmGranted())
+    }
 
-    // Refresh overlay permission state whenever screen resumes
+    // Refresh alarm permission states whenever screen resumes
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
         hasOverlayPermission = android.provider.Settings.canDrawOverlays(context)
+        hasFullScreenIntentPermission = checkFullScreenIntentGranted()
+        hasExactAlarmPermission = checkExactAlarmGranted()
         onPauseOrDispose {}
     }
 
@@ -253,8 +276,8 @@ fun HomeScreen(
             }
         }
 
-        // Overlay Permission Banner for Full Screen Alerts
-        if (!hasOverlayPermission) {
+        // Alarm Permissions Banner for Full Screen Alerts & Ringing when closed
+        if (!hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -273,34 +296,76 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Display Over Other Apps Required",
+                            text = "Full-Screen Alarm Permissions Needed",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Mandatory for full-screen emergency alerts and task alarms to appear immediately over other apps and on lockscreen. Please tap below to grant permission.",
+                        text = buildString {
+                            append("Enable the permissions below so high-priority alarms ring and open full-screen even when the app is closed:")
+                            if (!hasFullScreenIntentPermission) append("\n• Full-Screen Intent (Lock-screen & urgent popups)")
+                            if (!hasOverlayPermission) append("\n• Display Over Other Apps (Immediate popup when unlocked)")
+                            if (!hasExactAlarmPermission) append("\n• Exact Alarms (Exact trigger timing)")
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
                     Spacer(modifier = Modifier.height(10.dp))
-                    androidx.compose.material3.Button(
-                        onClick = {
-                            try {
-                                val intent = android.content.Intent(
-                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    android.net.Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            } catch (_: Exception) {}
-                        },
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        ),
-                        shape = RoundedCornerShape(8.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Grant Overlay Permission")
+                        if (!hasFullScreenIntentPermission &&
+                            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                        ) {
+                            androidx.compose.material3.Button(
+                                onClick = {
+                                    try {
+                                        val intent = android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Full-Screen", maxLines = 1)
+                            }
+                        } else if (!hasOverlayPermission) {
+                            androidx.compose.material3.Button(
+                                onClick = {
+                                    try {
+                                        val intent = android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Grant Overlay", maxLines = 1)
+                            }
+                        }
+
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onNavigateToAlarmSettings,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Alarm Settings", maxLines = 1)
+                        }
                     }
                 }
             }

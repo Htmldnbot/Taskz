@@ -57,14 +57,15 @@ class ProfileViewModel(
         newPhotoUri: Uri?
     ) {
         val trimmedName = fullName.trim()
-        val cleanMobile = mobile.trim().replace(Regex("[^0-9]"), "")
+        val normalizedMobile = com.example.ui.auth.AuthViewModel.normalizeMobile(mobile)
+        val mobileDigits = normalizedMobile.filter { it.isDigit() }
 
-        if (trimmedName.isBlank()) {
-            _updateState.value = ProfileUpdateState.Error("Full Name cannot be empty.")
+        if (trimmedName.length < 2) {
+            _updateState.value = ProfileUpdateState.Error("Full Name must be at least 2 characters.")
             return
         }
-        if (cleanMobile.length < 10) {
-            _updateState.value = ProfileUpdateState.Error("Please enter a valid 10-digit mobile number.")
+        if (mobileDigits.length < 10 || !normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
+            _updateState.value = ProfileUpdateState.Error("Please enter a valid 10-digit mobile number (e.g., +919876543210 or 9876543210).")
             return
         }
 
@@ -80,7 +81,7 @@ class ProfileViewModel(
 
             val result = profileRepository.updateProfile(
                 fullName = trimmedName,
-                mobile = cleanMobile,
+                mobile = normalizedMobile,
                 newPhotoBytes = photoBytes,
                 newPhotoFilename = photoFilename
             )

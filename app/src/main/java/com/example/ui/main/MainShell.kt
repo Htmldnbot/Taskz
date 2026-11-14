@@ -1,6 +1,11 @@
 package com.example.ui.main
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -32,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,10 +47,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.core.model.Shift
@@ -53,6 +61,7 @@ import com.example.core.model.TaskItem
 import com.example.ui.admin.AdminScreen
 import com.example.ui.admin.AdminViewModel
 import com.example.ui.admin.WorkRolesViewModel
+import com.example.ui.alarm.AlarmReliabilitySettingsScreen
 import com.example.ui.groups.CreateGroupScreen
 import com.example.ui.groups.EditGroupScreen
 import com.example.ui.groups.GroupDetailScreen
@@ -109,6 +118,7 @@ sealed interface SubRoute {
     data class TaskDetail(val task: TaskItem) : SubRoute
     data class TaskParticipants(val taskId: String) : SubRoute
     data class TaskJoinRequests(val taskId: String) : SubRoute
+    object AlarmReliabilitySettings : SubRoute
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,6 +138,23 @@ fun MainShell(
     var currentTab by rememberSaveable { mutableStateOf(MainTab.HOME) }
     val subRouteStack = remember { mutableStateListOf<SubRoute>() }
     val currentSubRoute = subRouteStack.lastOrNull() ?: SubRoute.None
+
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     val profile by homeViewModel.profileFlow.collectAsStateWithLifecycle()
 
@@ -344,6 +371,11 @@ fun MainShell(
                         onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
                     )
                 }
+                is SubRoute.AlarmReliabilitySettings -> {
+                    AlarmReliabilitySettingsScreen(
+                        onNavigateBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                    )
+                }
                 SubRoute.None -> {
                     when (currentTab) {
                         MainTab.HOME -> HomeScreen(
@@ -353,6 +385,7 @@ fun MainShell(
                             onNavigateToProfile = { currentTab = MainTab.PROFILE },
                             onNavigateToAdmin = { currentTab = MainTab.ADMIN },
                             onNavigateToIncidents = { currentTab = MainTab.INCIDENTS },
+                            onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
                             onSignedOut = onLogoutSuccess
                         )
                         MainTab.TASKS -> TasksScreen(

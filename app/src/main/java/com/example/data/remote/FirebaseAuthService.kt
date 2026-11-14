@@ -2,48 +2,38 @@ package com.example.data.remote
 
 import android.app.Activity
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.TaskzApplication
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.UserProfile
+import com.example.core.network.SupabaseConfig
 import com.example.data.local.dao.ProfileDao
 import com.example.data.local.entity.ProfileEntity
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
-import com.google.firebase.FirebaseException
+import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.PhoneAuthCredential
-import com.google.firebase.auth.PhoneAuthOptions
-import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
-import kotlinx.coroutines.CoroutineScope
+import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.os.Build
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import java.io.IOException
-import java.util.Locale
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 
 class FirebaseAuthService(
     private val context: Context,
@@ -51,349 +41,226 @@ class FirebaseAuthService(
     private val userPrefs: UserPreferencesDataStore
 ) {
     private val auth: FirebaseAuth by lazy { Firebase.auth }
-
-    private val firestore: FirebaseFirestore by lazy {
-        val dbId = context.getString(R.string.firestore_database_id)
-        FirebaseFirestore.getInstance(dbId)
-    }
+    private val supabaseClient get() = TaskzApplication.instance.supabaseClient
+    private val authRepository get() = TaskzApplication.instance.authRepository
 
     val currentUser: FirebaseUser?
         get() = auth.currentUser
 
-    private var resendingToken: PhoneAuthProvider.ForceResendingToken? = null
-
     /**
-     * Send real OTP SMS verification code via Firebase Phone Authentication.
-     */
-    fun sendPhoneOtp(
-        activity: Activity?,
-        phoneNumber: String,
-        onCodeSent: (verificationId: String, dynamicCode: String) -> Unit,
-        onAutoVerified: (UserProfile) -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val formattedNumber = formatPhoneNumber(phoneNumber)
-        Log.i("FirebaseAuth", "Initiating verified phone session for $formattedNumber")
-
-        val fallbackVerificationId = "quota_otp_${formattedNumber}_${System.currentTimeMillis()}"
-        CoroutineScope(Dispatchers.Main).launch {
-            onCodeSent(fallbackVerificationId, "")
-        }
-    }
-
-    /**
-     * Sign in with a phone number in test/demo mode when carrier SMS is restricted by regional policy.
-     */
-    suspend fun signInWithTestPhone(
-        phoneNumber: String,
-        fullName: String? = null
-    ): Result<UserProfile> = withContext(Dispatchers.IO) {
-        try {
-            val formatted = formatPhoneNumber(phoneNumber)
-            val digits = formatted.filter { it.isDigit() }
-            val derivedEmpId = "M-${digits.takeLast(6)}"
-            val resolvedName = fullName?.takeIf { it.isNotBlank() } ?: "User $derivedEmpId"
-            val mockUid = "phone_user_${digits}"
-
-            val profile = UserProfile(
-                id = mockUid,
-                employeeId = derivedEmpId,
-                fullName = resolvedName,
-                mobile = formatted,
-                profilePhotoPath = null,
-                appRole = "employee",
-                isActive = true
-            )
-
-            profileDao.insertProfile(ProfileEntity.fromDomain(profile))
-            userPrefs.saveSession(
-                accessToken = "firebase_token_$mockUid",
-                refreshToken = "firebase_refresh_$mockUid",
-                userId = mockUid,
-                employeeId = derivedEmpId
-            )
-
-            val now = System.currentTimeMillis()
-            try {
-                com.example.TaskzApplication.instance.database.syncMetadataDao().apply {
-                    updateSyncStatus("SYNCED", "Up to date")
-                    updateLastSuccessfulSync(now)
-                    updateLastServerFetch(now)
-                }
-            } catch (_: Exception) {}
-
-            try {
-                val userDoc = mapOf(
-                    "userId" to mockUid,
-                    "employeeId" to derivedEmpId,
-                    "fullName" to resolvedName,
-                    "mobile" to formatted,
-                    "appRole" to "employee",
-                    "isActive" to true,
-                    "authProvider" to "phone_test",
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                firestore.collection("users").document(mockUid).set(userDoc, SetOptions.merge()).await()
-            } catch (_: Exception) {}
-
-            Result.success(profile)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Verify 6-digit SMS OTP code entered by user using Firebase PhoneAuthProvider.
-     */
-    suspend fun verifyOtpAndSignIn(
-        verificationId: String,
-        otpCode: String,
-        fullName: String? = null,
-        phoneNumber: String? = null
-    ): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val trimmedCode = otpCode.trim()
-        if (trimmedCode.length != 6) {
-            return@withContext Result.failure(IOException("Please enter a valid 6-digit verification code."))
-        }
-
-        if (verificationId.startsWith("quota_otp_") || verificationId.startsWith("auth_otp_")) {
-            val phone = phoneNumber?.takeIf { it.isNotBlank() } ?: "User"
-            return@withContext signInWithTestPhone(phone, fullName)
-        }
-
-        try {
-            val credential = PhoneAuthProvider.getCredential(verificationId, trimmedCode)
-            val authResult = auth.signInWithCredential(credential).await()
-            val user = authResult.user ?: throw IOException("Authentication failed. No user returned from Firebase.")
-            val profile = saveUserSessionFromFirebase(user, fullName, "phone", phoneNumber)
-            Result.success(profile)
-        } catch (e: Exception) {
-            val isQuotaOrExpired = e.message?.contains("session-expired", ignoreCase = true) == true ||
-                e.message?.contains("Quota exceeded", ignoreCase = true) == true ||
-                e.message?.contains("BILLING_NOT_ENABLED", ignoreCase = true) == true ||
-                e.message?.contains("17499", ignoreCase = true) == true
-
-            if (isQuotaOrExpired) {
-                Log.i("FirebaseAuth", "Billing/quota SMS restriction; authenticating via verified phone session.")
-                val phone = phoneNumber?.takeIf { it.isNotBlank() } ?: "User"
-                return@withContext signInWithTestPhone(phone, fullName)
-            }
-            Log.w("FirebaseAuth", "Firebase verification failed: ${e.message}")
-            val friendlyMsg = when {
-                e.message?.contains("invalid-verification-code", ignoreCase = true) == true ->
-                    "Invalid verification code. Please check your SMS and enter the correct 6-digit code."
-                else -> e.localizedMessage ?: "Invalid verification code. Please check your SMS and retry."
-            }
-            Result.failure(IOException(friendlyMsg))
-        }
-    }
-
-    /**
-     * Sign In with Email (or Employee ID) & Password.
-     */
-    /**
-     * Sign In with Email (or Employee ID) & Password with explicit existence check.
+     * Sign In with Email + Password (Firebase Auth verification + Supabase session retrieval).
      */
     suspend fun signInWithEmailPassword(
-        emailOrEmpId: String,
+        email: String,
         password: String
     ): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val trimmed = emailOrEmpId.trim()
-        if (trimmed.isBlank()) {
-            return@withContext Result.failure(IOException("Please enter your registered Email or Employee ID."))
+        val trimmed = email.trim()
+        val normalizedEmail = trimmed.lowercase()
+        if (trimmed.isBlank() || !trimmed.contains("@")) {
+            return@withContext Result.failure(IOException("Please enter a valid email address."))
         }
         if (password.isBlank()) {
             return@withContext Result.failure(IOException("Please enter your password."))
         }
 
+        val linkedEmployeeId = userPrefs.getEmployeeIdForEmail(normalizedEmail)
+        val methodHint = userPrefs.getEmailAuthMethodHint(normalizedEmail)
+
         try {
-            if (trimmed.contains("@")) {
-                // Check if user exists in Firestore or Firebase Auth
-                var existsInFirestore = false
-                try {
-                    val userQuery = firestore.collection("users")
-                        .whereEqualTo("email", trimmed)
-                        .limit(1)
-                        .get()
-                        .await()
-                    existsInFirestore = !userQuery.isEmpty
-                } catch (_: Exception) {}
+            var firebaseException: Exception? = null
+            val authResult = try {
+                auth.signInWithEmailAndPassword(normalizedEmail, password).await()
+            } catch (ex: Exception) {
+                firebaseException = ex
+                null
+            }
 
-                // If not in Firestore, check if email exists in Firebase Auth
-                if (!existsInFirestore) {
-                    val signInMethods = try {
-                        auth.fetchSignInMethodsForEmail(trimmed).await().signInMethods
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (signInMethods.isNullOrEmpty()) {
-                        return@withContext Result.failure(
-                            IOException("No account found for $trimmed. Kindly sign up first.")
-                        )
-                    }
-                }
+            if (authResult?.user != null) {
+                val fbUser = authResult.user!!
+                userPrefs.saveEmailAuthMethodHint(normalizedEmail, "email")
 
-                // Attempt sign-in with password
-                try {
-                    val authResult = auth.signInWithEmailAndPassword(trimmed, password).await()
-                    val user = authResult.user ?: throw IOException("Authentication failed. User not returned.")
-                    val profile = saveUserSessionFromFirebase(user, null, "email")
-                    Result.success(profile)
-                } catch (authEx: Exception) {
-                    val msg = authEx.message ?: ""
-                    if (msg.contains("wrong-password", ignoreCase = true) ||
-                        msg.contains("invalid-credential", ignoreCase = true) ||
-                        msg.contains("malformed", ignoreCase = true) ||
-                        msg.contains("expired", ignoreCase = true)
-                    ) {
-                        Result.failure(IOException("Incorrect password for $trimmed. Please verify your password or use Forgot Password."))
-                    } else if (msg.contains("user-not-found", ignoreCase = true)) {
-                        Result.failure(IOException("No account found for $trimmed. Kindly sign up."))
-                    } else {
-                        Result.failure(IOException(authEx.localizedMessage ?: "Sign-in failed. Please check your credentials."))
+                val empIdFromProfile = extractEmployeeIdFromUri(fbUser.photoUrl)
+                val resolvedEmpId = linkedEmployeeId ?: empIdFromProfile
+
+                if (!resolvedEmpId.isNullOrBlank()) {
+                    userPrefs.saveEmailEmployeeHint(normalizedEmail, resolvedEmpId)
+                    val supaRes = authRepository.login(resolvedEmpId, password)
+                    if (supaRes.isSuccess) {
+                        return@withContext supaRes
+                    }
+                    val supaErr = supaRes.exceptionOrNull()
+                    if (supaErr != null && authRepository.isNetworkFailure(supaErr)) {
+                        return@withContext supaRes
                     }
                 }
-            } else {
-                // Sign in with Employee ID (Lookup registered email in Firestore)
-                var targetEmail: String? = null
-                var empDocName: String? = null
-                try {
-                    val snapshot = firestore.collection("users")
-                        .whereEqualTo("employeeId", trimmed)
-                        .limit(1)
-                        .get()
-                        .await()
-                    val doc = snapshot.documents.firstOrNull()
-                    targetEmail = doc?.getString("email")
-                    empDocName = doc?.getString("fullName")
-                } catch (_: Exception) {}
 
-                if (!targetEmail.isNullOrBlank()) {
-                    try {
-                        val authResult = auth.signInWithEmailAndPassword(targetEmail, password).await()
-                        val user = authResult.user ?: throw IOException("User not found")
-                        val profile = saveUserSessionFromFirebase(user, empDocName, "email", customEmpId = trimmed)
-                        Result.success(profile)
-                    } catch (authEx: Exception) {
-                        val msg = authEx.message ?: ""
-                        if (msg.contains("wrong-password", ignoreCase = true) ||
-                            msg.contains("invalid-credential", ignoreCase = true) ||
-                            msg.contains("malformed", ignoreCase = true)
-                        ) {
-                            Result.failure(IOException("Incorrect password for Employee ID: $trimmed. Please try again."))
+                // Fallback: try direct Supabase email login if email was registered directly in Supabase Auth
+                val directSupa = supabaseClient.loginWithEmail(normalizedEmail, password)
+                if (directSupa.isSuccess) {
+                    val session = directSupa.getOrThrow()
+                    return@withContext finalizeSupabaseProfileSession(
+                        session = session,
+                        fallbackEmpId = resolvedEmpId ?: normalizedEmail.substringBefore("@").uppercase(),
+                        fallbackName = fbUser.displayName,
+                        emailForHint = normalizedEmail,
+                        authMethodHint = "email"
+                    )
+                }
+
+                auth.signOut()
+                return@withContext Result.failure(
+                    IOException(
+                        if (!resolvedEmpId.isNullOrBlank()) {
+                            "Email verified, but password did not match Employee ID ($resolvedEmpId) on server. " +
+                                "Please sign in via the 'Employee ID' tab with your original password."
                         } else {
-                            Result.failure(IOException(authEx.localizedMessage ?: "Invalid password for Employee ID: $trimmed."))
+                            "Email verified, but this device is not yet linked to your Employee ID. " +
+                                "Please sign in once using the 'Employee ID' tab."
                         }
-                    }
-                } else {
-                    // Check local SQLite cached profile fallback
-                    val cached = profileDao.findProfileByIdOrEmployeeId(trimmed)?.toDomain()
-                    if (cached != null) {
-                        userPrefs.saveSession(
-                            accessToken = "firebase_token_${cached.id}",
-                            refreshToken = "firebase_refresh_${cached.id}",
-                            userId = cached.id,
-                            employeeId = cached.employeeId
-                        )
-                        Result.success(cached)
-                    } else {
-                        Result.failure(IOException("No account found for Employee ID: $trimmed. Kindly sign up."))
-                    }
+                    )
+                )
+            }
+
+            // Firebase sign-in did not succeed: check Supabase directly before failing!
+            // This handles accounts created directly in Supabase Auth or synced via Employee ID.
+            val directSupa = supabaseClient.loginWithEmail(normalizedEmail, password)
+            if (directSupa.isSuccess) {
+                val session = directSupa.getOrThrow()
+                return@withContext finalizeSupabaseProfileSession(
+                    session = session,
+                    fallbackEmpId = linkedEmployeeId ?: normalizedEmail.substringBefore("@").uppercase(),
+                    fallbackName = null,
+                    emailForHint = normalizedEmail,
+                    authMethodHint = "email"
+                )
+            }
+
+            if (!linkedEmployeeId.isNullOrBlank()) {
+                val empSupaRes = authRepository.login(linkedEmployeeId, password)
+                if (empSupaRes.isSuccess) {
+                    userPrefs.saveEmailAuthMethodHint(normalizedEmail, "email")
+                    return@withContext empSupaRes
                 }
             }
+
+            val ex = firebaseException
+            if (ex is FirebaseNetworkException || (ex != null && authRepository.isNetworkFailure(ex))) {
+                return@withContext Result.failure(
+                    IOException("Unable to reach authentication server. Please check your internet connection.")
+                )
+            }
+
+            if (methodHint == "google") {
+                return@withContext Result.failure(
+                    IOException("This email ($trimmed) is registered with Google Sign-In. Please tap 'Sign in with Google' below.")
+                )
+            }
+
+            val errorMsg = when (ex) {
+                is FirebaseAuthInvalidUserException ->
+                    "No email/password account found for $trimmed. Kindly Create Account, or tap 'Sign in with Google' if you registered with Google."
+                is FirebaseAuthInvalidCredentialsException -> {
+                    when (ex.errorCode) {
+                        "ERROR_USER_NOT_FOUND" ->
+                            "No email/password account found for $trimmed. Kindly Create Account, or tap 'Sign in with Google' if you registered with Google."
+                        "ERROR_WRONG_PASSWORD" ->
+                            "Incorrect password for $trimmed. Please verify or tap 'Forgot Password?'."
+                        "ERROR_INVALID_EMAIL" ->
+                            "Please enter a valid email address."
+                        else -> {
+                            // NOTE: When Firebase Email Enumeration Protection is enabled (default since 2023),
+                            // signInWithEmailAndPassword throws ERROR_INVALID_CREDENTIAL and fetchSignInMethodsForEmail
+                            // returns an empty list even for existing accounts. Never infer 'No account found' from an empty list!
+                            val methods = try {
+                                auth.fetchSignInMethodsForEmail(normalizedEmail).await().signInMethods
+                            } catch (_: Exception) {
+                                null
+                            }
+                            when {
+                                methods != null && methods.isNotEmpty() && !methods.contains("password") ->
+                                    "This email ($trimmed) is registered with Google Sign-In. Please tap 'Sign in with Google' below."
+                                methods != null && methods.contains("password") ->
+                                    "Incorrect password for $trimmed. Please verify or tap 'Forgot Password?'."
+                                !linkedEmployeeId.isNullOrBlank() ->
+                                    "Incorrect password for $trimmed (Employee ID: $linkedEmployeeId). Verify your password, tap 'Forgot Password?', or sign in via the 'Employee ID' tab."
+                                else ->
+                                    "Invalid password or sign-in method for $trimmed. If you registered with Google, tap 'Sign in with Google'; otherwise check your password, try 'Employee ID', or Create Account."
+                            }
+                        }
+                    }
+                }
+                else -> ex?.localizedMessage ?: "Sign-in failed. Please check your credentials."
+            }
+            Result.failure(IOException(errorMsg))
         } catch (e: Exception) {
-            Log.e("FirebaseAuth", "Sign-in error", e)
+            Log.e("FirebaseAuth", "Email sign-in error", e)
             Result.failure(IOException(e.localizedMessage ?: "Sign-in failed. Please check credentials."))
         }
     }
 
     /**
-     * Register new user with full details and duplicate validation (Email, Phone, Employee ID).
+     * Create Firebase Email/Password account without altering Supabase session storage.
+     * Stores full name & normalized Employee ID metadata on the Firebase user so email sign-in works across devices.
      */
-    suspend fun signUpWithEmailPassword(
+    suspend fun createFirebaseEmailAccount(
         email: String,
         password: String,
-        fullName: String,
-        mobile: String,
+        fullName: String = "",
         employeeId: String = ""
-    ): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val trimmedEmail = email.trim()
-        val trimmedName = fullName.trim()
-        val trimmedMobile = mobile.trim()
-        val trimmedEmpId = employeeId.trim().ifBlank { "EMP${System.currentTimeMillis().toString().takeLast(6)}" }
-
-        // 1. Check if Email already registered in Firestore
+    ): Result<FirebaseUser> = withContext(Dispatchers.IO) {
+        val trimmedEmail = email.trim().lowercase()
         try {
-            val emailCheck = firestore.collection("users")
-                .whereEqualTo("email", trimmedEmail)
-                .limit(1)
-                .get()
-                .await()
-            if (!emailCheck.isEmpty) {
-                return@withContext Result.failure(
-                    IOException("Email address '$trimmedEmail' is already registered. Kindly sign in instead.")
-                )
-            }
-        } catch (_: Exception) {}
-
-        // 2. Check if Employee ID already registered in Firestore
-        try {
-            val empCheck = firestore.collection("users")
-                .whereEqualTo("employeeId", trimmedEmpId)
-                .limit(1)
-                .get()
-                .await()
-            if (!empCheck.isEmpty) {
-                return@withContext Result.failure(
-                    IOException("Employee ID '$trimmedEmpId' is already registered. Kindly sign in.")
-                )
-            }
-        } catch (_: Exception) {}
-
-        // 3. Check if Mobile number already registered in Firestore
-        try {
-            val mobileCheck = firestore.collection("users")
-                .whereEqualTo("mobile", trimmedMobile)
-                .limit(1)
-                .get()
-                .await()
-            if (!mobileCheck.isEmpty) {
-                return@withContext Result.failure(
-                    IOException("Mobile number '$trimmedMobile' is already registered. Kindly sign in.")
-                )
-            }
-        } catch (_: Exception) {}
-
-        try {
-            val authResult = try {
-                auth.createUserWithEmailAndPassword(trimmedEmail, password).await()
-            } catch (createEx: Exception) {
-                if (createEx.message?.contains("email-already-in-use", ignoreCase = true) == true) {
-                    return@withContext Result.failure(
-                        IOException("Email address '$trimmedEmail' is already registered in Firebase. Kindly sign in.")
-                    )
-                } else {
-                    throw createEx
+            val res = auth.createUserWithEmailAndPassword(trimmedEmail, password).await()
+            val user = res.user ?: return@withContext Result.failure(IOException("Firebase registration failed"))
+            val normalizedEmp = if (employeeId.isNotBlank()) SupabaseConfig.normalizeEmployeeId(employeeId) else ""
+            if (fullName.isNotBlank() || normalizedEmp.isNotBlank()) {
+                runCatching {
+                    val profileUpdates = userProfileChangeRequest {
+                        if (fullName.isNotBlank()) {
+                            displayName = fullName.trim()
+                        }
+                        if (normalizedEmp.isNotBlank()) {
+                            photoUri = Uri.parse("https://taskz.app/emp/$normalizedEmp")
+                        }
+                    }
+                    user.updateProfile(profileUpdates).await()
                 }
             }
-            val user = authResult.user ?: throw IOException("Registration failed")
-            val profile = saveUserSessionFromFirebase(
-                user = user,
-                customName = trimmedName,
-                provider = "email",
-                customMobile = trimmedMobile,
-                customEmpId = trimmedEmpId
+            Result.success(user)
+        } catch (ex: FirebaseAuthUserCollisionException) {
+            Result.failure(
+                IOException("Email address '$trimmedEmail' is already registered. Kindly sign in (or tap 'Sign in with Google' if you used Google).")
             )
-            Result.success(profile)
         } catch (e: Exception) {
-            Log.e("FirebaseAuth", "Online sign-up error", e)
-            Result.failure(IOException(e.localizedMessage ?: "Registration failed. Please try again."))
+            val msg = e.message.orEmpty()
+            if (msg.contains("email-already-in-use", ignoreCase = true)) {
+                Result.failure(
+                    IOException("Email address '$trimmedEmail' is already registered. Kindly sign in (or tap 'Sign in with Google' if you used Google).")
+                )
+            } else {
+                Result.failure(IOException(e.localizedMessage ?: "Email registration failed."))
+            }
+        }
+    }
+
+    /**
+     * Rollback helper if Supabase signup fails after creating a Firebase Email account.
+     */
+    suspend fun rollbackFirebaseEmailAccount(email: String) = withContext(Dispatchers.IO) {
+        try {
+            val current = auth.currentUser
+            if (current != null && current.email.equals(email.trim(), ignoreCase = true)) {
+                current.delete().await()
+            }
+        } catch (e: Exception) {
+            Log.w("FirebaseAuth", "Rollback Firebase email user warning: ${e.message}")
         }
     }
 
     /**
      * Interactive Google Sign-In using Credential Manager.
-     * Identifies whether user is existing or needs first-time profile completion.
+     * Exchanges Firebase Auth Google credential for an authoritative Supabase session.
+     * Returns an incomplete UserProfile (employeeId = "") for first-time Google users so the UI collects profile details once.
      */
     suspend fun signInWithGoogle(activity: Activity): Result<UserProfile> = withContext(Dispatchers.IO) {
         val clientId = try {
@@ -416,46 +283,7 @@ class FirebaseAuthService(
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
                 val authResult = auth.signInWithCredential(authCredential).await()
                 val user = authResult.user ?: throw IOException("Google Sign-In returned null user")
-
-                // Check if user has an existing complete profile in Firestore
-                var existingEmpId: String? = null
-                var existingMobile: String? = null
-                var existingName: String? = null
-                var isComplete = false
-
-                try {
-                    val userDocSnap = firestore.collection("users").document(user.uid).get().await()
-                    if (userDocSnap.exists()) {
-                        existingEmpId = userDocSnap.getString("employeeId")
-                        existingMobile = userDocSnap.getString("mobile")
-                        existingName = userDocSnap.getString("fullName")
-                        isComplete = userDocSnap.getBoolean("isProfileComplete") == true ||
-                            (!existingEmpId.isNullOrBlank() && existingEmpId.all { it.isDigit() })
-                    }
-                } catch (_: Exception) {}
-
-                if (isComplete && !existingEmpId.isNullOrBlank()) {
-                    // Existing registered user: proceed directly to app
-                    val profile = saveUserSessionFromFirebase(
-                        user = user,
-                        customName = existingName ?: user.displayName,
-                        provider = "google",
-                        customMobile = existingMobile,
-                        customEmpId = existingEmpId
-                    )
-                    Result.success(profile)
-                } else {
-                    // First-time Google user: Return profile with empty employeeId to trigger profile completion modal
-                    val pendingProfile = UserProfile(
-                        id = user.uid,
-                        employeeId = "", // signals profile completion required
-                        fullName = user.displayName ?: "Google User",
-                        mobile = existingMobile ?: "",
-                        appRole = "employee",
-                        isActive = true
-                    )
-                    Result.success(pendingProfile)
-                }
+                resolveGoogleUserInSupabase(user, user.displayName)
             } else {
                 Result.failure(IOException("Unexpected credential type: ${credential.type}"))
             }
@@ -480,95 +308,7 @@ class FirebaseAuthService(
     }
 
     /**
-     * Complete first-time user profile for Google Sign-In users.
-     */
-    suspend fun completeGoogleProfile(
-        uid: String,
-        fullName: String,
-        mobile: String,
-        employeeId: String,
-        appRole: String = "employee"
-    ): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val trimmedName = fullName.trim()
-        val trimmedMobile = mobile.trim()
-        val trimmedEmpId = employeeId.trim()
-
-        // Validate uniqueness of Employee ID
-        try {
-            val empCheck = firestore.collection("users")
-                .whereEqualTo("employeeId", trimmedEmpId)
-                .limit(1)
-                .get()
-                .await()
-            val doc = empCheck.documents.firstOrNull()
-            if (doc != null && doc.id != uid) {
-                return@withContext Result.failure(
-                    IOException("Employee ID '$trimmedEmpId' is already registered with another account.")
-                )
-            }
-        } catch (_: Exception) {}
-
-        // Validate uniqueness of Mobile
-        try {
-            val mobCheck = firestore.collection("users")
-                .whereEqualTo("mobile", trimmedMobile)
-                .limit(1)
-                .get()
-                .await()
-            val doc = mobCheck.documents.firstOrNull()
-            if (doc != null && doc.id != uid) {
-                return@withContext Result.failure(
-                    IOException("Mobile number '$trimmedMobile' is already registered with another account.")
-                )
-            }
-        } catch (_: Exception) {}
-
-        val currentUser = auth.currentUser
-        val email = currentUser?.email ?: ""
-        val profile = UserProfile(
-            id = uid,
-            employeeId = trimmedEmpId,
-            fullName = trimmedName,
-            mobile = trimmedMobile,
-            appRole = appRole,
-            isActive = true
-        )
-
-        // Save locally in Room
-        profileDao.insertProfile(ProfileEntity.fromDomain(profile))
-
-        // Save session in DataStore
-        userPrefs.saveSession(
-            accessToken = "firebase_token_$uid",
-            refreshToken = "firebase_refresh_$uid",
-            userId = uid,
-            employeeId = trimmedEmpId
-        )
-
-        // Write to Firestore /users/{uid}
-        try {
-            val userDoc = mapOf(
-                "userId" to uid,
-                "employeeId" to trimmedEmpId,
-                "fullName" to trimmedName,
-                "mobile" to trimmedMobile,
-                "email" to email,
-                "appRole" to appRole,
-                "isActive" to true,
-                "isProfileComplete" to true,
-                "authProvider" to "google",
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            firestore.collection("users").document(uid).set(userDoc, SetOptions.merge()).await()
-        } catch (e: Exception) {
-            Log.w("FirebaseAuth", "Failed to update Firestore profile: ${e.message}")
-        }
-
-        Result.success(profile)
-    }
-
-    /**
-     * Sign in with Google ID token received from Google Play Services or CredentialManager.
+     * Sign in with Google ID token received from CredentialManager / Play Services.
      */
     suspend fun signInWithGoogleIdToken(
         idToken: String,
@@ -579,12 +319,225 @@ class FirebaseAuthService(
             val authCredential = GoogleAuthProvider.getCredential(idToken, null)
             val authResult = auth.signInWithCredential(authCredential).await()
             val user = authResult.user ?: throw IOException("Google Sign-In returned null user")
-            val profile = saveUserSessionFromFirebase(user, displayName ?: user.displayName, "google")
-            Result.success(profile)
+            resolveGoogleUserInSupabase(user, displayName ?: user.displayName)
         } catch (e: Exception) {
             Log.e("FirebaseAuth", "Google ID token sign-in failed", e)
             Result.failure(IOException(e.localizedMessage ?: "Google Sign-In failed"))
         }
+    }
+
+    /**
+     * Resolves whether the Firebase Google user already has a Supabase Taskz account + profile.
+     * - Existing user: saves real Supabase JWT + UUID session and proceeds directly into the app.
+     * - First-time Google user: returns pending UserProfile with empty employeeId to trigger profile completion.
+     */
+    private suspend fun resolveGoogleUserInSupabase(
+        user: FirebaseUser,
+        displayName: String?
+    ): Result<UserProfile> {
+        val bridgeEmail = SupabaseConfig.toGoogleAuthEmail(user.uid)
+        val bridgeSecret = SupabaseConfig.toGoogleBridgeSecret(user.uid)
+
+        val supaLogin = supabaseClient.loginWithEmail(bridgeEmail, bridgeSecret)
+        if (supaLogin.isSuccess) {
+            val session = supaLogin.getOrThrow()
+            val profileRes = supabaseClient.fetchProfileById(session.accessToken, session.userId)
+            val remoteProfile = profileRes.getOrNull()
+
+            if (remoteProfile != null && remoteProfile.employeeId.isNotBlank()) {
+                if (!remoteProfile.isActive) {
+                    auth.signOut()
+                    return Result.failure(
+                        IOException("Your Taskz account is currently inactive. Please contact the administrator.")
+                    )
+                }
+                return finalizeSupabaseProfileSession(
+                    session = session,
+                    fallbackEmpId = remoteProfile.employeeId,
+                    fallbackName = displayName ?: remoteProfile.fullName,
+                    emailForHint = user.email,
+                    preloadedProfile = remoteProfile,
+                    authMethodHint = "google"
+                )
+            }
+        } else {
+            val err = supaLogin.exceptionOrNull()
+            if (err != null && authRepository.isNetworkFailure(err)) {
+                return Result.failure(
+                    IOException("Unable to reach Taskz server for Google Sign-In. Please check your internet connection.")
+                )
+            }
+        }
+
+        if (!user.email.isNullOrBlank()) {
+            userPrefs.saveEmailAuthMethodHint(user.email!!, "google")
+        }
+
+        // First-time Google user: profile not registered on Supabase yet
+        return Result.success(
+            UserProfile(
+                id = user.uid,
+                employeeId = "", // Signals GoogleProfileCompletionDialog is required
+                fullName = displayName?.takeIf { it.isNotBlank() } ?: "Google User",
+                mobile = "",
+                appRole = "employee",
+                isActive = true
+            )
+        )
+    }
+
+    /**
+     * Complete first-time user profile for Google Sign-In users.
+     * Creates the authoritative Supabase Auth account and public.profiles row once.
+     */
+    suspend fun completeGoogleProfile(
+        uid: String,
+        fullName: String,
+        mobile: String,
+        employeeId: String,
+        appRole: String = "employee"
+    ): Result<UserProfile> = withContext(Dispatchers.IO) {
+        val currentUser = auth.currentUser
+        if (currentUser == null || currentUser.uid != uid) {
+            return@withContext Result.failure(
+                IOException("Google Sign-In session expired. Please tap Continue with Google again.")
+            )
+        }
+
+        val trimmedName = fullName.trim()
+        val normalizedMobile = normalizeMobile(mobile)
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val bridgeEmail = SupabaseConfig.toGoogleAuthEmail(uid)
+        val bridgeSecret = SupabaseConfig.toGoogleBridgeSecret(uid)
+
+        // Check if Supabase bridge account already exists; if not, sign up once
+        var sessionResult = supabaseClient.signUpWithEmail(
+            email = bridgeEmail,
+            password = bridgeSecret,
+            employeeId = normalizedEmpId,
+            fullName = trimmedName,
+            mobile = normalizedMobile
+        )
+
+        if (sessionResult.isFailure) {
+            val errMsg = sessionResult.exceptionOrNull()?.message.orEmpty()
+            if (errMsg.contains("already registered", ignoreCase = true) ||
+                errMsg.contains("User already exists", ignoreCase = true)
+            ) {
+                sessionResult = supabaseClient.loginWithEmail(bridgeEmail, bridgeSecret)
+            } else {
+                return@withContext Result.failure(
+                    IOException(errMsg.ifBlank { "Failed to create Google profile on server." })
+                )
+            }
+        }
+
+        var session = sessionResult.getOrElse {
+            return@withContext Result.failure(it)
+        }
+
+        if (session.accessToken.isBlank()) {
+            val loginRetry = supabaseClient.loginWithEmail(bridgeEmail, bridgeSecret)
+            if (loginRetry.isSuccess) {
+                session = loginRetry.getOrThrow()
+            } else {
+                return@withContext Result.failure(
+                    IOException(
+                        "SUPABASE_EMAIL_CONFIRMATION_REQUIRED: Account created on server, but email confirmation is enabled in Supabase."
+                    )
+                )
+            }
+        }
+
+        // Confirm profile row in Supabase (created by handle_new_auth_user trigger)
+        var remoteProfile = supabaseClient.fetchProfileById(session.accessToken, session.userId).getOrNull()
+        if (remoteProfile == null) {
+            delay(400)
+            remoteProfile = supabaseClient.fetchProfileById(session.accessToken, session.userId).getOrNull()
+        }
+
+        val resolvedProfile = remoteProfile ?: UserProfile(
+            id = session.userId,
+            employeeId = normalizedEmpId,
+            fullName = trimmedName,
+            mobile = normalizedMobile,
+            profilePhotoPath = null,
+            appRole = "employee",
+            isActive = true
+        )
+
+        if (remoteProfile == null) {
+            supabaseClient.upsertProfile(session.accessToken, resolvedProfile)
+        }
+
+        finalizeSupabaseProfileSession(
+            session = session,
+            fallbackEmpId = resolvedProfile.employeeId.ifBlank { normalizedEmpId },
+            fallbackName = trimmedName,
+            emailForHint = currentUser.email,
+            preloadedProfile = resolvedProfile,
+            authMethodHint = "google"
+        )
+    }
+
+    private suspend fun finalizeSupabaseProfileSession(
+        session: AuthSessionResponse,
+        fallbackEmpId: String,
+        fallbackName: String?,
+        emailForHint: String?,
+        preloadedProfile: UserProfile? = null,
+        authMethodHint: String? = null
+    ): Result<UserProfile> {
+        val remoteProfile = preloadedProfile
+            ?: supabaseClient.fetchProfileById(session.accessToken, session.userId).getOrNull()
+            ?: UserProfile(
+                id = session.userId,
+                employeeId = fallbackEmpId,
+                fullName = fallbackName?.takeIf { it.isNotBlank() } ?: "Employee $fallbackEmpId",
+                mobile = "",
+                appRole = "employee",
+                isActive = true
+            )
+
+        if (!remoteProfile.isActive) {
+            auth.signOut()
+            return Result.failure(
+                IOException("Your Taskz account is currently inactive. Please contact the administrator.")
+            )
+        }
+
+        val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(session.accessToken, remoteProfile.profilePhotoPath).getOrNull()
+        } else {
+            null
+        }
+        val finalProfile = remoteProfile.copy(avatarSignedUrl = signedUrl)
+
+        profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
+        userPrefs.saveSession(
+            accessToken = session.accessToken,
+            refreshToken = session.refreshToken,
+            userId = session.userId,
+            employeeId = finalProfile.employeeId,
+            mustChangePassword = finalProfile.mustChangePassword
+        )
+        if (!emailForHint.isNullOrBlank() && finalProfile.employeeId.isNotBlank()) {
+            userPrefs.saveEmailEmployeeHint(emailForHint, finalProfile.employeeId)
+        }
+        if (!emailForHint.isNullOrBlank() && !authMethodHint.isNullOrBlank()) {
+            userPrefs.saveEmailAuthMethodHint(emailForHint, authMethodHint)
+        }
+
+        val now = System.currentTimeMillis()
+        try {
+            TaskzApplication.instance.database.syncMetadataDao().apply {
+                updateSyncStatus("SYNCED", "Up to date")
+                updateLastSuccessfulSync(now)
+                updateLastServerFetch(now)
+            }
+        } catch (_: Exception) {}
+
+        return Result.success(finalProfile)
     }
 
     /**
@@ -606,87 +559,10 @@ class FirebaseAuthService(
         auth.signOut()
     }
 
-    private suspend fun saveUserSessionFromFirebase(
-        user: FirebaseUser,
-        customName: String?,
-        provider: String,
-        customMobile: String? = null,
-        customEmpId: String? = null
-    ): UserProfile {
-        val tokenResult = try {
-            user.getIdToken(false).await()
-        } catch (_: Exception) {
-            null
-        }
-        val accessToken = tokenResult?.token ?: "firebase_token_${user.uid}"
-
-        val resolvedMobile = user.phoneNumber ?: customMobile ?: ""
-        val resolvedEmail = user.email ?: ""
-        val derivedEmpId = when {
-            !customEmpId.isNullOrBlank() -> customEmpId
-            resolvedEmail.isNotBlank() -> resolvedEmail.substringBefore("@").uppercase()
-            resolvedMobile.isNotBlank() -> "M-${resolvedMobile.takeLast(6)}"
-            else -> "USR-${user.uid.take(6).uppercase()}"
-        }
-        val resolvedName = customName?.takeIf { it.isNotBlank() }
-            ?: user.displayName?.takeIf { it.isNotBlank() }
-            ?: "User $derivedEmpId"
-
-        val profile = UserProfile(
-            id = user.uid,
-            employeeId = derivedEmpId,
-            fullName = resolvedName,
-            mobile = resolvedMobile,
-            profilePhotoPath = user.photoUrl?.toString(),
-            appRole = if (derivedEmpId.startsWith("ADMIN")) "admin" else "employee",
-            isActive = true
-        )
-
-        // Save to Room cache
-        profileDao.insertProfile(ProfileEntity.fromDomain(profile))
-
-        // Save session in DataStore
-        userPrefs.saveSession(
-            accessToken = accessToken,
-            refreshToken = "firebase_refresh_${user.uid}",
-            userId = user.uid,
-            employeeId = derivedEmpId
-        )
-
-        val now = System.currentTimeMillis()
-        try {
-            com.example.TaskzApplication.instance.database.syncMetadataDao().apply {
-                updateSyncStatus("SYNCED", "Up to date")
-                updateLastSuccessfulSync(now)
-                updateLastServerFetch(now)
-            }
-        } catch (_: Exception) {}
-
-        // Sync user document to Firestore (scoped under /users/{userId})
-        try {
-            val userDoc = mapOf(
-                "userId" to user.uid,
-                "employeeId" to derivedEmpId,
-                "fullName" to resolvedName,
-                "mobile" to resolvedMobile,
-                "email" to resolvedEmail,
-                "appRole" to profile.appRole,
-                "isActive" to true,
-                "authProvider" to provider,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            firestore.collection("users").document(user.uid).set(userDoc, SetOptions.merge()).await()
-        } catch (e: Exception) {
-            Log.w("FirebaseAuth", "Failed to sync user doc to Firestore: ${e.message}")
-        }
-
-        return profile
-    }
-
-    private fun formatPhoneNumber(rawNumber: String): String {
-        val trimmed = rawNumber.trim().replace(" ", "").replace("-", "")
-        if (trimmed.startsWith("+")) return trimmed
-        val digits = trimmed.replace("+", "")
+    private fun normalizeMobile(rawNumber: String): String {
+        val cleaned = rawNumber.trim().replace(Regex("[^0-9+]"), "")
+        if (cleaned.startsWith("+")) return cleaned
+        val digits = cleaned.replace("+", "")
         return when {
             digits.length == 10 && digits[0] in '6'..'9' -> "+91$digits"
             digits.length == 10 -> "+1$digits"
@@ -694,5 +570,14 @@ class FirebaseAuthService(
             digits.length == 12 && digits.startsWith("91") -> "+$digits"
             else -> "+$digits"
         }
+    }
+
+    internal fun extractEmployeeIdFromUri(uri: Uri?): String? {
+        if (uri == null || uri.host != "taskz.app") return null
+        val segments = uri.pathSegments ?: return null
+        if (segments.size >= 2 && segments[0] == "emp") {
+            return segments[1].trim().uppercase().takeIf { it.isNotBlank() }
+        }
+        return null
     }
 }

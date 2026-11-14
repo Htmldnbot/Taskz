@@ -19,10 +19,10 @@ interface OutboxDao {
     @Query("SELECT * FROM outbox_events WHERE syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE') ORDER BY createdAt ASC")
     suspend fun getPendingEvents(): List<OutboxEventEntity>
 
-    @Query("SELECT COUNT(*) FROM outbox_events WHERE userId = :userId AND syncStatus != 'SYNCED'")
+    @Query("SELECT COUNT(*) FROM outbox_events WHERE userId = :userId AND syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE')")
     fun getPendingCountFlowForUser(userId: String): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM outbox_events WHERE syncStatus != 'SYNCED'")
+    @Query("SELECT COUNT(*) FROM outbox_events WHERE syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE')")
     fun getPendingCountFlow(): Flow<Int>
 
     @Query("SELECT * FROM outbox_events WHERE eventId = :eventId LIMIT 1")

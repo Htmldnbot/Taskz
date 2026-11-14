@@ -308,7 +308,7 @@ fun CreateTaskScreen(
             title = title.trim(),
             description = description.trim().takeIf { it.isNotBlank() },
             location = resolvedLocation,
-            startsAt = java.time.Instant.now().toString(),
+            startsAt = scheduledIso,
             dueAt = scheduledIso,
             priority = selectedPriority.priorityString,
             visibility = if (whoCanJoinScope == "National") "everyone" else whoCanJoinScope.lowercase(),
@@ -321,7 +321,7 @@ fun CreateTaskScreen(
             executionTime = scheduledIso,
             targetPercentage = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) targetPercentage else 100,
             alarmType = selectedPriority.alarmType,
-            advanceRemindersMinutes = listOf(0, resolvedSnoozeMinutes),
+            advanceRemindersMinutes = listOf(0),
             remindUntilCompleted = true,
             overdueReminderIntervalMinutes = resolvedSnoozeMinutes,
             responseType = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) ResponseType.PERCENTAGE else ResponseType.YES_NO,
@@ -921,8 +921,10 @@ fun CreateTaskScreen(
                                 else -> alarmHour
                             }
                             val amPm = if (alarmHour >= 12) "PM" else "AM"
+                            val chosenLocal = java.time.LocalTime.of(alarmHour, alarmMinute)
+                            val dayLabel = if (chosenLocal.isBefore(java.time.LocalTime.now())) "Tomorrow" else "Today"
                             Text(
-                                text = String.format("Alarm set for exact time: %02d:%02d %s Today", displayH, alarmMinute, amPm),
+                                text = String.format("Alarm set for exact time: %02d:%02d %s %s", displayH, alarmMinute, amPm, dayLabel),
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )

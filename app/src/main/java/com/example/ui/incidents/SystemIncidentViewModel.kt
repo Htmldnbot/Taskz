@@ -244,7 +244,7 @@ class SystemIncidentViewModel(
 
     fun refreshIncidents() {
         viewModelScope.launch {
-            repository.fetchAndSyncIncidentsFromFirestore()
+            repository.syncIncidentsFromServer()
         }
     }
 

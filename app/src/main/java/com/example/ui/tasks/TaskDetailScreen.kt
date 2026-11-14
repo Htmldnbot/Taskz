@@ -153,12 +153,28 @@ fun TaskDetailScreen(
     var responseYesNo by remember { mutableStateOf("YES") }
     var selectedLanForResponse by remember { mutableStateOf(currentTask.lanTargetList.firstOrNull() ?: "LAN 1") }
 
-    LaunchedEffect(currentTask.id) {
+    var currentTimeMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(currentTask.id, currentTask.executionTime, currentTask.dueAt) {
         viewModel.loadTaskDetails(currentTask.id)
         viewModel.actionEvent.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg)
         }
     }
+
+    LaunchedEffect(currentTask.id, currentTask.executionTime, currentTask.dueAt, currentTask.startsAt) {
+        currentTimeMillis = System.currentTimeMillis()
+        while (true) {
+            kotlinx.coroutines.delay(5_000L)
+            currentTimeMillis = System.currentTimeMillis()
+        }
+    }
+
+    val scheduledMillis = currentTask.scheduledExecutionMillis()
+    val isLockedBeforeTime = currentTask.isBeforeScheduledExecution(currentTimeMillis)
+    val unlockTimeText = scheduledMillis?.let {
+        TaskItem.formatForDisplay(java.time.Instant.ofEpochMilli(it).toString())
+    } ?: (currentTask.executionTime ?: currentTask.dueAt ?: "")
 
     BackHandler(onBack = onBackClick)
 
@@ -295,14 +311,15 @@ fun TaskDetailScreen(
                     }
 
                     // Execution or Start / Due Time
-                    val timeStr = currentTask.executionTime ?: "${currentTask.startsAt ?: ""} → ${currentTask.dueAt ?: ""}".trim()
-                    if (timeStr.isNotBlank()) {
+                    val rawTime = currentTask.executionTime ?: currentTask.dueAt ?: currentTask.startsAt
+                    val formattedTime = rawTime?.let { TaskItem.formatForDisplay(it) ?: it }
+                    if (!formattedTime.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(imageVector = Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Execution / Schedule: $timeStr",
+                                text = "Scheduled Time: $formattedTime",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
                             )
                         }
@@ -314,7 +331,14 @@ fun TaskDetailScreen(
 
             // ============================================================
             // TIME-CRITICAL ALARM & ACKNOWLEDGEMENT CARD
+            // PERCENTAGE tasks keep BOTH Acknowledge Alarm & Progress Response.
+            // YES/NO & other non-percentage tasks use direct Task Response below.
             // ============================================================
+            val isPercentageTask = currentTask.responseType == ResponseType.PERCENTAGE
+            val effectiveReminderMins = (currentTask.overdueReminderIntervalMinutes
+                ?: currentTask.repeatIntervalMinutes
+                ?: 10).coerceAtLeast(1)
+
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
@@ -334,13 +358,17 @@ fun TaskDetailScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = if (currentTask.isAcknowledged) Icons.Default.CheckCircle else Icons.Default.Alarm,
+                                imageVector = if (currentTask.isAcknowledged && isPercentageTask) Icons.Default.CheckCircle else Icons.Default.Alarm,
                                 contentDescription = null,
-                                tint = if (currentTask.isAcknowledged) TaskzSuccess else MaterialTheme.colorScheme.primary
+                                tint = if (currentTask.isAcknowledged && isPercentageTask) TaskzSuccess else MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (currentTask.isAcknowledged) "Alarm Acknowledged" else "Alarm & Device Schedule",
+                                text = when {
+                                    isPercentageTask && currentTask.isAcknowledged -> "Alarm Acknowledged"
+                                    isPercentageTask -> "Alarm & Acknowledgement"
+                                    else -> "Alarm & Device Schedule"
+                                },
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                             )
                         }
@@ -359,6 +387,8 @@ fun TaskDetailScreen(
                                     putExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION, currentTask.description ?: "")
                                     putExtra(TaskAlarmScheduler.EXTRA_LOCATION, currentTask.location ?: "")
                                     putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, currentTask.taskType.name)
+                                    putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, currentTask.responseType.name)
+                                    putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, effectiveReminderMins)
                                 }
                                 context.startActivity(alarmIntent)
                             }
@@ -374,42 +404,85 @@ fun TaskDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    if (!currentTask.isAcknowledged) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = { viewModel.acknowledgeAlarm(currentTask.id) },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier
-                                    .weight(1.5f)
-                                    .testTag("btn_acknowledge_alarm")
-                            ) {
-                                Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Acknowledge Alarm")
+                    if (isPercentageTask) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (!currentTask.isAcknowledged) {
+                            if (isLockedBeforeTime) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = TaskzWarning.copy(alpha = 0.14f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 10.dp)
+                                        .testTag("alarm_locked_banner")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.HourglassTop,
+                                            contentDescription = null,
+                                            tint = TaskzWarning,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Locked until scheduled time ($unlockTimeText). Acknowledge & Snooze unlock automatically at alarm time.",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = TaskzWarning
+                                        )
+                                    }
+                                }
                             }
-
-                            OutlinedButton(
-                                onClick = { viewModel.snoozeAlarm(currentTask.id, 5) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("btn_snooze_detail")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(imageVector = Icons.Default.Snooze, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Snooze 5m")
+                                Button(
+                                    onClick = { viewModel.acknowledgeAlarm(currentTask.id) },
+                                    enabled = !isLockedBeforeTime,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier
+                                        .weight(1.5f)
+                                        .testTag("btn_acknowledge_alarm")
+                                ) {
+                                    Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(if (isLockedBeforeTime) "Locked Until Time" else "Acknowledge Alarm")
+                                }
+
+                                OutlinedButton(
+                                    onClick = { viewModel.snoozeAlarm(currentTask.id, 5) },
+                                    enabled = !isLockedBeforeTime,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("btn_snooze_detail")
+                                ) {
+                                    Icon(imageVector = Icons.Default.Snooze, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Snooze 5m")
+                                }
                             }
+                        } else {
+                            val ackDisplay = currentTask.acknowledgedAt?.let { TaskItem.formatForDisplay(it) ?: it } ?: "device"
+                            Text(
+                                text = "✓ Acknowledged on $ackDisplay. Update your percentage progress below.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TaskzSuccess,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     } else {
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "✓ Acknowledged on ${currentTask.acknowledgedAt ?: "device"}. Task completion remains separate.",
+                            text = if (currentTask.responseType == ResponseType.YES_NO) {
+                                "Direct confirmation mode: Respond YES to complete, or NO to re-remind in ${effectiveReminderMins}m."
+                            } else {
+                                "Direct response mode: Submit your response directly in the Task Response section below."
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = TaskzSuccess,
-                            fontWeight = FontWeight.SemiBold
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -433,6 +506,35 @@ fun TaskDetailScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    if (isLockedBeforeTime) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = TaskzWarning.copy(alpha = 0.14f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .testTag("response_locked_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = TaskzWarning,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Task confirmation is locked until scheduled time ($unlockTimeText).",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = TaskzWarning
+                                )
+                            }
+                        }
+                    }
+
                     when (currentTask.responseType) {
                         ResponseType.PERCENTAGE -> {
                             Text(
@@ -454,6 +556,7 @@ fun TaskDetailScreen(
                             Slider(
                                 value = responsePercentage,
                                 onValueChange = { responsePercentage = it },
+                                enabled = !isLockedBeforeTime,
                                 valueRange = 0f..100f,
                                 steps = 19
                             )
@@ -466,6 +569,7 @@ fun TaskDetailScreen(
                                     FilterChip(
                                         selected = responsePercentage.toInt() == p.toInt(),
                                         onClick = { responsePercentage = p },
+                                        enabled = !isLockedBeforeTime,
                                         label = { Text("${p.toInt()}%") }
                                     )
                                 }
@@ -480,6 +584,7 @@ fun TaskDetailScreen(
                                         percentage = responsePercentage.toInt()
                                     )
                                 },
+                                enabled = !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -493,14 +598,14 @@ fun TaskDetailScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             TaskzTextField(
                                 value = responseNumeric1,
-                                onValueChange = { responseNumeric1 = it },
+                                onValueChange = { if (!isLockedBeforeTime) responseNumeric1 = it },
                                 label = "Registered Candidates Count",
                                 placeholder = "e.g., 250"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             TaskzTextField(
                                 value = responseNumeric2,
-                                onValueChange = { responseNumeric2 = it },
+                                onValueChange = { if (!isLockedBeforeTime) responseNumeric2 = it },
                                 label = "Pending / Absent Candidates Count",
                                 placeholder = "e.g., 12"
                             )
@@ -516,6 +621,7 @@ fun TaskDetailScreen(
                                     responseNumeric1 = ""
                                     responseNumeric2 = ""
                                 },
+                                enabled = !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Submit Count Update")
@@ -525,6 +631,9 @@ fun TaskDetailScreen(
                         ResponseType.YES_NO -> {
                             val hasConfirmedYes = currentTask.status.equals("completed", ignoreCase = true) ||
                                 taskResponses.any { it.responseValue.equals("YES", ignoreCase = true) }
+                            val latestResponse = taskResponses.firstOrNull()
+                            val hasRecentNo = !hasConfirmedYes &&
+                                latestResponse?.responseValue.equals("NO", ignoreCase = true)
 
                             if (hasConfirmedYes) {
                                 Surface(
@@ -558,7 +667,37 @@ fun TaskDetailScreen(
                                     }
                                 }
                             } else {
-                                Text("Confirm operational readiness:", style = MaterialTheme.typography.bodySmall)
+                                if (hasRecentNo) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = TaskzWarning.copy(alpha = 0.14f),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 10.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Snooze,
+                                                contentDescription = null,
+                                                tint = TaskzWarning,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Last response: NO — follow-up reminder scheduled in ${effectiveReminderMins}m. Tap YES once completed.",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = TaskzWarning
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = "Confirm operational readiness (NO schedules a ${effectiveReminderMins}m reminder):",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -572,8 +711,11 @@ fun TaskDetailScreen(
                                                 responseValue = "YES"
                                             )
                                         },
+                                        enabled = !isLockedBeforeTime,
                                         colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("btn_response_yes")
                                     ) {
                                         Icon(imageVector = Icons.Default.Check, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -587,12 +729,15 @@ fun TaskDetailScreen(
                                                 responseValue = "NO"
                                             )
                                         },
+                                        enabled = !isLockedBeforeTime,
                                         colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("btn_response_no")
                                     ) {
                                         Icon(imageVector = Icons.Default.Close, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("NO / ISSUE")
+                                        Text("NO (${effectiveReminderMins}m)")
                                     }
                                 }
                             }
@@ -601,7 +746,7 @@ fun TaskDetailScreen(
                         ResponseType.TEXT_RESPONSE -> {
                             TaskzTextField(
                                 value = responseText,
-                                onValueChange = { responseText = it },
+                                onValueChange = { if (!isLockedBeforeTime) responseText = it },
                                 label = "Operational Status Report",
                                 placeholder = "Enter brief status report..."
                             )
@@ -615,6 +760,7 @@ fun TaskDetailScreen(
                                     )
                                     responseText = ""
                                 },
+                                enabled = !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Submit Report")
@@ -631,6 +777,7 @@ fun TaskDetailScreen(
                                         FilterChip(
                                             selected = selectedLanForResponse == lan,
                                             onClick = { selectedLanForResponse = lan },
+                                            enabled = !isLockedBeforeTime,
                                             label = { Text(lan) }
                                         )
                                     }
@@ -647,6 +794,7 @@ fun TaskDetailScreen(
                                         lanNumber = if (currentTask.lanTargetList.isNotEmpty()) selectedLanForResponse else null
                                     )
                                 },
+                                enabled = !isLockedBeforeTime,
                                 colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -674,6 +822,7 @@ fun TaskDetailScreen(
                                             )
                                         }
                                     },
+                                    enabled = !isLockedBeforeTime,
                                     colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
                                     modifier = Modifier.weight(1f)
                                 ) {

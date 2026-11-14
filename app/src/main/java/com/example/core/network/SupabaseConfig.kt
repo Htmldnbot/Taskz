@@ -68,4 +68,37 @@ object SupabaseConfig {
         val prefix = if (readable.isNotEmpty()) "emp_${readable}_" else "emp_"
         return "$prefix$hash@taskzapp.com"
     }
+
+    /**
+     * Deterministic Supabase Auth identity email for Google-authenticated Firebase users.
+     */
+    fun toGoogleAuthEmail(firebaseUid: String): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(firebaseUid.trim().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(24)
+        return "ggl$hash@taskzapp.org"
+    }
+
+    /**
+     * Deterministic bridge credential tied to the Firebase UID so an authenticated Google user
+     * consistently obtains a valid Supabase JWT and stable profiles.id UUID across logins.
+     */
+    fun toGoogleBridgeSecret(firebaseUid: String): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest("taskz_google_bridge_${firebaseUid.trim()}".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(32)
+        return "TzkG!$hash"
+    }
+
+    fun isValidUuid(value: String?): Boolean {
+        if (value.isNullOrBlank()) return false
+        return try {
+            java.util.UUID.fromString(value.trim())
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 }

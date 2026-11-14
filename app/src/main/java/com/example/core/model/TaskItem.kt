@@ -120,6 +120,17 @@ data class TaskItem(
     val isPendingApproval: Boolean
         get() = currentUserJoinStatus == "pending"
 
+    fun scheduledExecutionMillis(): Long? =
+        executionTime?.let { parseIsoToMillis(it) }
+            ?: dueAt?.let { parseIsoToMillis(it) }
+            ?: startsAt?.let { parseIsoToMillis(it) }
+
+    fun isBeforeScheduledExecution(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        if (taskType == TaskType.IMMEDIATE) return false
+        val targetMillis = scheduledExecutionMillis() ?: return false
+        return nowMillis < targetMillis
+    }
+
     val displayStatus: TaskStatus
         get() {
             if (status.equals("cancelled", ignoreCase = true)) return TaskStatus.CANCELLED
@@ -129,14 +140,19 @@ data class TaskItem(
             if (isAcknowledged) return TaskStatus.ACKNOWLEDGED
             if (taskType == TaskType.IMMEDIATE) return TaskStatus.ACTION_REQUIRED
 
-            // Check if overdue
-            val dueMillis = dueAt?.let { parseIsoToMillis(it) } ?: executionTime?.let { parseIsoToMillis(it) }
             val now = System.currentTimeMillis()
-            if (dueMillis != null && dueMillis < now && !status.equals("completed", ignoreCase = true)) {
+            val execMillis = executionTime?.let { parseIsoToMillis(it) }
+            val dueMillis = dueAt?.let { parseIsoToMillis(it) } ?: execMillis
+            if (dueMillis != null && dueMillis < now) {
                 return TaskStatus.OVERDUE
             }
 
-            val startMillis = startsAt?.let { parseIsoToMillis(it) } ?: executionTime?.let { parseIsoToMillis(it) }
+            // If executionTime is in the future, do not mark ACTION_REQUIRED even if startsAt was set earlier
+            if (execMillis != null && execMillis > now) {
+                return if (execMillis - now <= 30 * 60 * 1000L) TaskStatus.UPCOMING else TaskStatus.SCHEDULED
+            }
+
+            val startMillis = execMillis ?: startsAt?.let { parseIsoToMillis(it) } ?: dueMillis
             if (startMillis != null) {
                 if (startMillis <= now) return TaskStatus.ACTION_REQUIRED
                 if (startMillis - now <= 30 * 60 * 1000L) return TaskStatus.UPCOMING

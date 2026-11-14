@@ -41,7 +41,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -85,6 +87,7 @@ fun TasksScreen(
     var taskToDelete by remember { mutableStateOf<TaskItem?>(null) }
 
     LaunchedEffect(Unit) {
+        viewModel.refreshTasks()
         viewModel.actionEvent.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg)
         }
@@ -158,20 +161,42 @@ fun TasksScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Search Bar
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Search tasks, groups, locations...") },
-                leadingIcon = {
-                    Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                shape = RoundedCornerShape(12.dp),
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("tasks_search_field")
-            )
+            // Search Bar & Refresh Action
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { viewModel.setSearchQuery(it) },
+                    placeholder = { Text("Search tasks, groups, locations...") },
+                    leadingIcon = {
+                        Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("tasks_search_field")
+                )
+
+                IconButton(
+                    onClick = { viewModel.refreshTasks() },
+                    enabled = !isLoading,
+                    modifier = Modifier.testTag("btn_refresh_tasks")
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh Tasks",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -378,7 +403,9 @@ fun TaskCard(
                     }
                 }
 
-                if (!task.dueAt.isNullOrBlank() || !task.startsAt.isNullOrBlank()) {
+                val rawScheduleTime = task.executionTime ?: task.dueAt ?: task.startsAt
+                if (!rawScheduleTime.isNullOrBlank()) {
+                    val formattedTime = TaskItem.formatForDisplay(rawScheduleTime) ?: rawScheduleTime
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.AccessTime,
@@ -388,7 +415,7 @@ fun TaskCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = task.dueAt ?: task.startsAt ?: "",
+                            text = formattedTime,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -434,6 +461,15 @@ fun TaskCard(
 
                 // Current user participation tag
                 when {
+                    task.status.equals("pending_sync", ignoreCase = true) -> {
+                        Surface(shape = RoundedCornerShape(6.dp), color = TaskzWarning.copy(alpha = 0.2f)) {
+                            Text(
+                                text = "PENDING SYNC",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TaskzWarning),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                     task.status == "completed" -> {
                         Surface(shape = RoundedCornerShape(6.dp), color = TaskzSuccess.copy(alpha = 0.15f)) {
                             Text(
@@ -473,7 +509,7 @@ fun TaskCard(
                     else -> {
                         Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                             Text(
-                                text = task.status.uppercase(),
+                                text = task.displayStatus.label.uppercase(),
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )

@@ -9,9 +9,11 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.core.datastore.UserPreferencesDataStore
@@ -136,6 +138,8 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val description = intent.getStringExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION) ?: ""
         val location = intent.getStringExtra(TaskAlarmScheduler.EXTRA_LOCATION) ?: ""
         val taskType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE) ?: "SIMPLE"
+        val responseType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE) ?: "COMPLETED_NOT_COMPLETED"
+        val reminderInterval = intent.getIntExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, 10)
 
         createNotificationChannels(context)
 
@@ -151,10 +155,39 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val alarmType = runCatching { AlarmType.valueOf(alarmTypeStr) }.getOrDefault(AlarmType.SOUND_ALERT)
         val importance = runCatching { TaskImportance.valueOf(importanceStr) }.getOrDefault(TaskImportance.NORMAL)
 
+        val shouldFullScreen = alarmType == AlarmType.FULL_SCREEN_ALARM ||
+            importance == TaskImportance.CRITICAL ||
+            importance == TaskImportance.HIGH
+        val useForegroundAlarmService = shouldFullScreen || alarmType == AlarmType.SOUND_ALERT
+
+        if (useForegroundAlarmService) {
+            val serviceIntent = Intent(context, TaskAlarmService::class.java).apply {
+                action = TaskAlarmService.ACTION_START_ALARM
+                putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)
+                putExtra(TaskAlarmScheduler.EXTRA_TASK_TITLE, title)
+                putExtra(TaskAlarmScheduler.EXTRA_IMPORTANCE, importanceStr)
+                putExtra(TaskAlarmScheduler.EXTRA_ALARM_TYPE, alarmTypeStr)
+                putExtra(TaskAlarmScheduler.EXTRA_REMINDER_LABEL, reminderLabel)
+                putExtra(TaskAlarmScheduler.EXTRA_SCHEDULED_TIME, scheduledTime)
+                putExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION, description)
+                putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
+                putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
+                putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseType)
+                putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
+                putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
+            }
+            try {
+                ContextCompat.startForegroundService(context, serviceIntent)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Foreground service start failed, falling back to notification + overlay launch: ${e.message}")
+            }
+        }
+
         val channelId = when {
             alarmType == AlarmType.SILENT -> CHANNEL_ID_SILENT
-            importance == TaskImportance.CRITICAL || alarmType == AlarmType.FULL_SCREEN_ALARM -> CHANNEL_ID_CRITICAL_ALARM
-            importance == TaskImportance.HIGH || alarmType == AlarmType.SOUND_ALERT -> CHANNEL_ID_HIGH_ALARM
+            shouldFullScreen -> CHANNEL_ID_CRITICAL_ALARM
+            alarmType == AlarmType.SOUND_ALERT -> CHANNEL_ID_HIGH_ALARM
             else -> CHANNEL_ID_NORMAL
         }
 
@@ -201,7 +234,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
 
         val subtext = "[$importanceStr] $reminderLabel"
         val bodyText = buildString {
-            if (location.isNotBlank()) append("📍 $location • ")
+            if (location.isNotBlank()) append("Location: $location • ")
             if (description.isNotBlank()) append(description) else append("Immediate action required.")
         }
 
@@ -212,23 +245,22 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setSubText(subtext)
             .setStyle(NotificationCompat.BigTextStyle().bigText("$bodyText\nScheduled: $scheduledTime"))
             .setPriority(
-                if (importance == TaskImportance.CRITICAL || alarmType == AlarmType.FULL_SCREEN_ALARM)
-                    NotificationCompat.PRIORITY_MAX
-                else if (importance == TaskImportance.HIGH)
-                    NotificationCompat.PRIORITY_HIGH
-                else
-                    NotificationCompat.PRIORITY_DEFAULT
+                if (shouldFullScreen) NotificationCompat.PRIORITY_MAX
+                else if (alarmType == AlarmType.SOUND_ALERT) NotificationCompat.PRIORITY_HIGH
+                else NotificationCompat.PRIORITY_DEFAULT
             )
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openAppPendingIntent)
             .setAutoCancel(true)
             .addAction(R.mipmap.ic_launcher, "Acknowledge", ackPendingIntent)
             .addAction(R.mipmap.ic_launcher, "Snooze 5m", snoozePendingIntent)
 
         // If Full-Screen Alarm, add FullScreenIntent to launch TaskAlarmActivity
-        if (alarmType == AlarmType.FULL_SCREEN_ALARM || importance == TaskImportance.CRITICAL) {
+        var directFullScreenIntent: Intent? = null
+        if (shouldFullScreen) {
             val fullScreenIntent = Intent(context, TaskAlarmActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)
                 putExtra(TaskAlarmScheduler.EXTRA_TASK_TITLE, title)
                 putExtra(TaskAlarmScheduler.EXTRA_IMPORTANCE, importanceStr)
@@ -238,8 +270,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 putExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION, description)
                 putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
                 putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
+                putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseType)
+                putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
                 putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
             }
+            directFullScreenIntent = fullScreenIntent
             val fullScreenPendingIntent = PendingIntent.getActivity(
                 context,
                 alarmId * 10 + 4,
@@ -252,13 +287,16 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         try {
             val notificationManager = NotificationManagerCompat.from(context)
             notificationManager.notify(alarmId, builder.build())
+            if (directFullScreenIntent != null && Settings.canDrawOverlays(context)) {
+                runCatching { context.startActivity(directFullScreenIntent) }
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "Notification permission missing: ${e.message}")
         }
     }
 
     private fun handleAcknowledge(context: Context, taskId: String, alarmId: Int) {
-        // Cancel notification
+        TaskAlarmService.stopAlarm(context)
         val notificationManager = NotificationManagerCompat.from(context)
         notificationManager.cancel(alarmId)
 
@@ -319,6 +357,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         alarmType: String,
         alarmId: Int
     ) {
+        TaskAlarmService.stopAlarm(context)
         val notificationManager = NotificationManagerCompat.from(context)
         notificationManager.cancel(alarmId)
 
@@ -333,6 +372,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private fun handleComplete(context: Context, taskId: String, alarmId: Int) {
+        TaskAlarmService.stopAlarm(context)
         val notificationManager = NotificationManagerCompat.from(context)
         notificationManager.cancel(alarmId)
 

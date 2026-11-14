@@ -4,6 +4,7 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
@@ -15,6 +16,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -110,29 +112,56 @@ enum class AlarmActionState {
 
 class TaskAlarmActivity : ComponentActivity() {
 
+    private var mediaPlayer: MediaPlayer? = null
     private var ringtone: Ringtone? = null
     private var vibrator: Vibrator? = null
+    private var activeAlarmId: Int = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setupLockScreenFlags()
-        startAlarmAudioAndVibration()
 
         val taskId = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_ID) ?: ""
         val title = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TITLE) ?: "Task Action Required"
         val importance = intent.getStringExtra(TaskAlarmScheduler.EXTRA_IMPORTANCE) ?: "NORMAL"
+        val alarmType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_ALARM_TYPE) ?: "FULL_SCREEN_ALARM"
         val reminderLabel = intent.getStringExtra(TaskAlarmScheduler.EXTRA_REMINDER_LABEL) ?: "Scheduled Alarm"
         val scheduledTime = intent.getStringExtra(TaskAlarmScheduler.EXTRA_SCHEDULED_TIME) ?: ""
         val description = intent.getStringExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION) ?: ""
         val location = intent.getStringExtra(TaskAlarmScheduler.EXTRA_LOCATION) ?: ""
         val taskType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE) ?: "SIMPLE"
+        val initialResponseType = runCatching {
+            ResponseType.valueOf(intent.getStringExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE) ?: ResponseType.COMPLETED_NOT_COMPLETED.name)
+        }.getOrDefault(ResponseType.COMPLETED_NOT_COMPLETED)
+        val initialReminderInterval = intent.getIntExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, 10).coerceAtLeast(1)
+        activeAlarmId = intent.getIntExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, -1)
+
+        if (!TaskAlarmService.isRinging) {
+            startAlarmAudioAndVibration(importance, alarmType)
+        }
 
         setContent {
             MyApplicationTheme {
                 var actionState by remember { mutableStateOf(AlarmActionState.IDLE) }
                 var statusMessage by remember { mutableStateOf("") }
+                var resolvedResponseType by remember { mutableStateOf(initialResponseType) }
+                var resolvedReminderInterval by remember { mutableStateOf(initialReminderInterval) }
                 val coroutineScope = rememberCoroutineScope()
+
+                androidx.compose.runtime.LaunchedEffect(taskId) {
+                    if (taskId.isNotBlank()) {
+                        val cached = withContext(Dispatchers.IO) {
+                            TaskzDatabase.getInstance(applicationContext).taskDao().getTaskById(taskId)?.toDomain()
+                        }
+                        if (cached != null) {
+                            resolvedResponseType = cached.responseType
+                            resolvedReminderInterval = (cached.overdueReminderIntervalMinutes
+                                ?: cached.repeatIntervalMinutes
+                                ?: 10).coerceAtLeast(1)
+                        }
+                    }
+                }
 
                 TaskAlarmScreen(
                     title = title,
@@ -142,22 +171,42 @@ class TaskAlarmActivity : ComponentActivity() {
                     description = description,
                     location = location,
                     taskType = taskType,
+                    responseType = resolvedResponseType,
+                    reminderIntervalMinutes = resolvedReminderInterval,
                     actionState = actionState,
                     statusMessage = statusMessage,
                     onAcknowledge = {
-                        stopAlarmAudioAndVibration()
+                        stopAllAlarmOutputs()
                         coroutineScope.launch {
                             recordAcknowledgement(taskId)
                             finish()
                         }
                     },
+                    onYesNoResponse = { value ->
+                        stopAllAlarmOutputs()
+                        actionState = AlarmActionState.PROCESSING
+                        coroutineScope.launch {
+                            handleYesNoAction(
+                                taskId = taskId,
+                                title = title,
+                                importance = importance,
+                                alarmType = alarmType,
+                                reminderIntervalMinutes = resolvedReminderInterval,
+                                value = value,
+                                onStateChange = { newState, msg ->
+                                    actionState = newState
+                                    statusMessage = msg
+                                }
+                            )
+                        }
+                    },
                     onSnooze = { minutes ->
-                        stopAlarmAudioAndVibration()
+                        stopAllAlarmOutputs()
                         snoozeAlarm(taskId, title, importance, minutes)
                         finish()
                     },
                     onOpenTask = {
-                        stopAlarmAudioAndVibration()
+                        stopAllAlarmOutputs()
                         val mainIntent = Intent(this@TaskAlarmActivity, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                             putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)
@@ -166,7 +215,7 @@ class TaskAlarmActivity : ComponentActivity() {
                         finish()
                     },
                     onMarkCompleted = {
-                        stopAlarmAudioAndVibration()
+                        stopAllAlarmOutputs()
                         actionState = AlarmActionState.PROCESSING
                         coroutineScope.launch {
                             handleCompleteAction(
@@ -179,7 +228,7 @@ class TaskAlarmActivity : ComponentActivity() {
                         }
                     },
                     onDismiss = {
-                        stopAlarmAudioAndVibration()
+                        stopAllAlarmOutputs()
                         finish()
                     }
                 )
@@ -205,44 +254,86 @@ class TaskAlarmActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    private fun startAlarmAudioAndVibration() {
+    private fun startAlarmAudioAndVibration(importance: String, alarmType: String) {
+        val shouldPlaySound = !alarmType.equals("SILENT", ignoreCase = true) &&
+            !alarmType.equals("NORMAL_NOTIFICATION", ignoreCase = true) &&
+            (importance.equals("CRITICAL", ignoreCase = true) ||
+                alarmType.equals("SOUND_ALERT", ignoreCase = true) ||
+                (alarmType.equals("FULL_SCREEN_ALARM", ignoreCase = true) && !importance.equals("HIGH", ignoreCase = true)))
+        val shouldVibrate = !alarmType.equals("SILENT", ignoreCase = true)
+
         try {
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)?.apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    isLooping = true
-                }
-                audioAttributes = AudioAttributes.Builder()
+            if (shouldPlaySound) {
+                val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val attrs = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
-                play()
+
+                if (alarmUri != null) {
+                    try {
+                        mediaPlayer = MediaPlayer().apply {
+                            setAudioAttributes(attrs)
+                            setDataSource(applicationContext, alarmUri)
+                            isLooping = true
+                            prepare()
+                            start()
+                        }
+                    } catch (_: Exception) {
+                        ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)?.apply {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                isLooping = true
+                            }
+                            audioAttributes = attrs
+                            play()
+                        }
+                    }
+                }
             }
 
-            vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                vibratorManager.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
+            if (shouldVibrate) {
+                vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                    vibratorManager.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                }
 
-            val pattern = longArrayOf(0, 500, 200, 500, 200, 500)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator?.vibrate(pattern, 0)
+                val pattern = longArrayOf(0, 500, 200, 500, 200, 500)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(pattern, 0)
+                }
             }
         } catch (_: Exception) {}
     }
 
     private fun stopAlarmAudioAndVibration() {
         try {
+            mediaPlayer?.stop()
+        } catch (_: Exception) {}
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+        mediaPlayer = null
+
+        try {
             ringtone?.stop()
             vibrator?.cancel()
         } catch (_: Exception) {}
+    }
+
+    private fun stopAllAlarmOutputs() {
+        stopAlarmAudioAndVibration()
+        TaskAlarmService.stopAlarm(this)
+        if (activeAlarmId != -1) {
+            runCatching { NotificationManagerCompat.from(this).cancel(activeAlarmId) }
+        }
     }
 
     private suspend fun recordAcknowledgement(taskId: String) = withContext(Dispatchers.IO) {
@@ -283,8 +374,16 @@ class TaskAlarmActivity : ComponentActivity() {
         )
         db.outboxDao().enqueueEvent(outboxEvent)
 
-        // Attempt instant sync if token available
-        val token = session.accessToken
+        // Attempt instant sync with valid refreshed Supabase token if available
+        val token = com.example.TaskzApplication.instance.authRepository
+            .getValidAccessToken()
+            .getOrNull()
+            ?: session.accessToken?.takeIf {
+                it.isNotBlank() &&
+                    !it.startsWith("firebase_") &&
+                    !it.startsWith("offline_") &&
+                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+            }
         if (!token.isNullOrBlank()) {
             val res = SupabaseClient().acknowledgeTaskAlarm(token, taskId, eventId, nowIso)
             if (res.isSuccess) {
@@ -375,13 +474,21 @@ class TaskAlarmActivity : ComponentActivity() {
             )
         )
 
-        // 3. Attempt network submission if token available
-        val token = session.accessToken
+        // 3. Attempt network submission with valid refreshed Supabase token if available
+        val authRepo = com.example.TaskzApplication.instance.authRepository
+        var token = authRepo.getValidAccessToken().getOrNull()
+            ?: session.accessToken?.takeIf {
+                it.isNotBlank() &&
+                    !it.startsWith("firebase_") &&
+                    !it.startsWith("offline_") &&
+                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+            }
         var isServerConfirmed = false
         var serverStatus: String? = null
 
         if (!token.isNullOrBlank()) {
-            val res = SupabaseClient().submitTaskResponse(
+            val client = SupabaseClient()
+            var res = client.submitTaskResponse(
                 accessToken = token,
                 taskId = taskId,
                 responseType = ResponseType.COMPLETED_NOT_COMPLETED.name,
@@ -391,6 +498,25 @@ class TaskAlarmActivity : ComponentActivity() {
                 idempotencyKey = idempotencyKey,
                 deviceTimestamp = nowIso
             )
+            if (res.isFailure) {
+                val err = res.exceptionOrNull()?.message.orEmpty()
+                if (err.contains("JWT", true) || err.contains("401", true) || err.contains("Unauthorized", true)) {
+                    val refreshed = authRepo.forceRefreshAccessToken().getOrNull()
+                    if (!refreshed.isNullOrBlank()) {
+                        token = refreshed
+                        res = client.submitTaskResponse(
+                            accessToken = token,
+                            taskId = taskId,
+                            responseType = ResponseType.COMPLETED_NOT_COMPLETED.name,
+                            responseValue = "COMPLETED",
+                            percentage = 100,
+                            text = "Marked completed from alarm",
+                            idempotencyKey = idempotencyKey,
+                            deviceTimestamp = nowIso
+                        )
+                    }
+                }
+            }
 
             if (res.isSuccess) {
                 isServerConfirmed = true
@@ -404,6 +530,10 @@ class TaskAlarmActivity : ComponentActivity() {
                 } else if (serverStatus.equals("completed", ignoreCase = true)) {
                     db.taskDao().updateTaskStatus(taskId, "completed")
                     TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
+                }
+                if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
+                    db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
+                    db.syncMetadataDao().updateSyncStatus("SYNCED", "Verified with Server")
                 }
             } else {
                 SyncWorker.enqueueSync(applicationContext)
@@ -427,8 +557,169 @@ class TaskAlarmActivity : ComponentActivity() {
         }
     }
 
+    private suspend fun handleYesNoAction(
+        taskId: String,
+        title: String,
+        importance: String,
+        alarmType: String,
+        reminderIntervalMinutes: Int,
+        value: String,
+        onStateChange: (AlarmActionState, String) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val db = TaskzDatabase.getInstance(applicationContext)
+        val userPrefs = UserPreferencesDataStore(applicationContext)
+        val session = userPrefs.getUserSession()
+        val profile = db.profileDao().getCachedProfile()
+
+        val userId = session.userId ?: profile?.id
+        if (userId.isNullOrBlank()) {
+            withContext(Dispatchers.Main) {
+                onStateChange(AlarmActionState.ERROR, "Authentication required")
+            }
+            return@withContext
+        }
+
+        val empId = profile?.employeeId ?: ""
+        val empName = profile?.fullName ?: empId
+        val nowIso = java.time.Instant.now().toString()
+        val idempotencyKey = UUID.randomUUID().toString()
+        val isYes = value.equals("YES", ignoreCase = true)
+
+        val localResponse = TaskResponseEntity(
+            id = idempotencyKey,
+            taskId = taskId,
+            userId = userId,
+            employeeId = empId,
+            employeeName = empName,
+            lanNumber = null,
+            responseType = ResponseType.YES_NO.name,
+            responseValue = if (isYes) "YES" else "NO",
+            percentageValue = if (isYes) 100 else null,
+            numericValue1 = null,
+            numericValue2 = null,
+            textValue = if (isYes) "Confirmed from alarm" else "NO — follow-up reminder in ${reminderIntervalMinutes}m",
+            dynamicValuesJson = "{}",
+            submittedAt = nowIso,
+            syncStatus = "PENDING_SYNC"
+        )
+        db.taskResponseDao().insertResponse(localResponse)
+
+        val payload = JSONObject().apply {
+            put("responseType", ResponseType.YES_NO.name)
+            put("responseValue", if (isYes) "YES" else "NO")
+            if (isYes) put("percentage", 100)
+            put("textValue", localResponse.textValue)
+            put("deviceTimestamp", nowIso)
+        }
+        val outboxId = db.outboxDao().enqueueEvent(
+            OutboxEventEntity(
+                eventId = idempotencyKey,
+                userId = userId,
+                taskId = taskId,
+                operationType = "TASK_RESPONSE",
+                payloadJson = payload.toString(),
+                syncStatus = "PENDING",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+
+        val scheduler = TaskAlarmScheduler(applicationContext)
+        if (isYes) {
+            db.taskDao().updateTaskStatus(taskId, "completed")
+            db.taskDao().updateTaskProgress(taskId, 100, nowIso)
+            scheduler.cancelAlarmsForTask(taskId)
+        } else {
+            db.taskDao().updateTaskStatus(taskId, "in_progress")
+            scheduler.scheduleSnoozeAlarm(
+                taskId = taskId,
+                taskTitle = title,
+                importance = importance,
+                alarmType = alarmType,
+                snoozeMinutes = reminderIntervalMinutes,
+                userId = userId
+            )
+        }
+
+        val authRepo = com.example.TaskzApplication.instance.authRepository
+        var token = authRepo.getValidAccessToken().getOrNull()
+            ?: session.accessToken?.takeIf {
+                it.isNotBlank() &&
+                    !it.startsWith("firebase_") &&
+                    !it.startsWith("offline_") &&
+                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+            }
+        var isServerConfirmed = false
+
+        if (!token.isNullOrBlank()) {
+            val client = SupabaseClient()
+            var res = client.submitTaskResponse(
+                accessToken = token,
+                taskId = taskId,
+                responseType = ResponseType.YES_NO.name,
+                responseValue = if (isYes) "YES" else "NO",
+                percentage = if (isYes) 100 else null,
+                text = localResponse.textValue,
+                idempotencyKey = idempotencyKey,
+                deviceTimestamp = nowIso
+            )
+            if (res.isFailure) {
+                val err = res.exceptionOrNull()?.message.orEmpty()
+                if (err.contains("JWT", true) || err.contains("401", true) || err.contains("Unauthorized", true)) {
+                    val refreshed = authRepo.forceRefreshAccessToken().getOrNull()
+                    if (!refreshed.isNullOrBlank()) {
+                        token = refreshed
+                        res = client.submitTaskResponse(
+                            accessToken = token,
+                            taskId = taskId,
+                            responseType = ResponseType.YES_NO.name,
+                            responseValue = if (isYes) "YES" else "NO",
+                            percentage = if (isYes) 100 else null,
+                            text = localResponse.textValue,
+                            idempotencyKey = idempotencyKey,
+                            deviceTimestamp = nowIso
+                        )
+                    }
+                }
+            }
+
+            if (res.isSuccess) {
+                isServerConfirmed = true
+                db.outboxDao().markEventSynced(outboxId, idempotencyKey, System.currentTimeMillis())
+                db.taskResponseDao().markResponseSynced(idempotencyKey)
+                if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
+                    db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
+                    db.syncMetadataDao().updateSyncStatus("SYNCED", "Verified with Server")
+                }
+            } else {
+                SyncWorker.enqueueSync(applicationContext)
+            }
+        } else {
+            SyncWorker.enqueueSync(applicationContext)
+        }
+
+        withContext(Dispatchers.Main) {
+            if (isYes) {
+                if (isServerConfirmed) {
+                    onStateChange(AlarmActionState.SERVER_CONFIRMED, "CONFIRMED: YES SYNCED")
+                } else {
+                    onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "YES SAVED\nPENDING SYNC")
+                }
+            } else {
+                if (isServerConfirmed) {
+                    onStateChange(AlarmActionState.SERVER_CONFIRMED, "NO RECORDED • REMINDER IN ${reminderIntervalMinutes}m")
+                } else {
+                    onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "NO SAVED • REMINDER IN ${reminderIntervalMinutes}m")
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
-        stopAlarmAudioAndVibration()
+        if (isFinishing) {
+            stopAllAlarmOutputs()
+        } else {
+            stopAlarmAudioAndVibration()
+        }
         super.onDestroy()
     }
 }
@@ -442,9 +733,12 @@ fun TaskAlarmScreen(
     description: String,
     location: String,
     taskType: String,
+    responseType: ResponseType,
+    reminderIntervalMinutes: Int,
     actionState: AlarmActionState,
     statusMessage: String,
     onAcknowledge: () -> Unit,
+    onYesNoResponse: (String) -> Unit,
     onSnooze: (Int) -> Unit,
     onOpenTask: () -> Unit,
     onMarkCompleted: () -> Unit,
@@ -628,8 +922,13 @@ fun TaskAlarmScreen(
                                 AlarmActionState.SERVER_CONFIRMED -> {
                                     Icon(Icons.Default.CheckCircle, contentDescription = null, tint = TaskzSuccess, modifier = Modifier.size(32.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    Text("SERVER CONFIRMED", fontWeight = FontWeight.Bold, color = TaskzSuccess)
-                                    Text("Task completion confirmed by server", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        text = statusMessage.ifBlank { "SERVER CONFIRMED" },
+                                        fontWeight = FontWeight.Bold,
+                                        color = TaskzSuccess,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text("Synced with server", style = MaterialTheme.typography.bodySmall)
                                 }
                                 AlarmActionState.PENDING_CREATOR_CONFIRMATION -> {
                                     Icon(Icons.Default.HourglassTop, contentDescription = null, tint = TaskzWarning, modifier = Modifier.size(32.dp))
@@ -640,7 +939,11 @@ fun TaskAlarmScreen(
                                 AlarmActionState.RESPONSE_SAVED_PENDING_SYNC -> {
                                     Icon(Icons.Default.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    Text("RESPONSE SAVED\nPENDING SYNC", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                                    Text(
+                                        text = statusMessage.ifBlank { "RESPONSE SAVED\nPENDING SYNC" },
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
                                     Text("Offline response stored. Will sync automatically when connected.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
                                 }
                                 AlarmActionState.ERROR -> {
@@ -675,34 +978,93 @@ fun TaskAlarmScreen(
                         Text(text = "DISMISS", fontWeight = FontWeight.Bold)
                     }
                 } else {
-                    // Acknowledge Button
-                    Button(
-                        onClick = onAcknowledge,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("alarm_btn_acknowledge")
-                    ) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "ACKNOWLEDGE ALARM", fontWeight = FontWeight.Bold)
-                    }
+                    when (responseType) {
+                        ResponseType.PERCENTAGE -> {
+                            // Percentage tasks keep BOTH Acknowledge Alarm AND Response actions
+                            Button(
+                                onClick = onAcknowledge,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("alarm_btn_acknowledge")
+                            ) {
+                                Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = "ACKNOWLEDGE ALARM", fontWeight = FontWeight.Bold)
+                            }
 
-                    // Mark Completed Button
-                    OutlinedButton(
-                        onClick = onMarkCompleted,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TaskzSuccess),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("alarm_btn_complete")
-                    ) {
-                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "MARK TASK COMPLETED", fontWeight = FontWeight.SemiBold)
+                            OutlinedButton(
+                                onClick = onOpenTask,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = TaskzSuccess),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("alarm_btn_update_progress")
+                            ) {
+                                Icon(imageVector = Icons.Default.OpenInNew, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = "UPDATE PROGRESS (%)", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        ResponseType.YES_NO -> {
+                            // YES/NO tasks use direct confirmation instead of Acknowledge Alarm
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = { onYesNoResponse("YES") },
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(54.dp)
+                                        .testTag("alarm_btn_yes")
+                                ) {
+                                    Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(text = "YES / DONE", fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { onYesNoResponse("NO") },
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(54.dp)
+                                        .testTag("alarm_btn_no")
+                                ) {
+                                    Icon(imageVector = Icons.Default.Close, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(text = "NO (${reminderIntervalMinutes}m)", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        else -> {
+                            // Other non-percentage tasks: direct Response / Completion without Acknowledge button
+                            Button(
+                                onClick = if (responseType == ResponseType.COMPLETED_NOT_COMPLETED) onMarkCompleted else onOpenTask,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("alarm_btn_complete")
+                            ) {
+                                Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (responseType == ResponseType.COMPLETED_NOT_COMPLETED) "MARK TASK COMPLETED" else "SUBMIT RESPONSE NOW",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
 
                     // Snooze & Open Task row

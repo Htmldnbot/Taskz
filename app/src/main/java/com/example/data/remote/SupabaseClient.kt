@@ -40,6 +40,18 @@ class SupabaseClient(
     private fun baseUrl(): String = SupabaseConfig.getActiveUrl().trimEnd('/')
     private fun anonKey(): String = SupabaseConfig.getActiveKey()
 
+    fun getAuthBearer(accessToken: String): String {
+        val trimmed = accessToken.trim()
+        if (trimmed.isBlank() ||
+            trimmed.startsWith("offline_") ||
+            trimmed.startsWith("firebase_") ||
+            com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(trimmed)
+        ) {
+            return ""
+        }
+        return trimmed
+    }
+
     private fun checkConfig() {
         if (!SupabaseConfig.isConfigured) {
             throw IOException("Supabase is not configured. Please configure SUPABASE_URL and SUPABASE_ANON_KEY.")
@@ -202,6 +214,127 @@ class SupabaseClient(
     }
 
     /**
+     * Sign up with an explicit auth email (used for Google Sign-In bridge) and normalized Employee ID.
+     */
+    suspend fun signUpWithEmail(
+        email: String,
+        password: String,
+        employeeId: String,
+        fullName: String,
+        mobile: String
+    ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+            val jsonBody = JSONObject().apply {
+                put("email", email.trim().lowercase())
+                put("password", password)
+                put("data", JSONObject().apply {
+                    put("employee_id", normalizedEmpId)
+                    put("full_name", fullName.trim())
+                    put("mobile", mobile.trim())
+                })
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/auth/v1/signup")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
+                .addHeader("Content-Type", "application/json")
+                .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                val errorMsg = parseErrorMessage(responseBody, "Sign up failed (${response.code})")
+                if (errorMsg.contains("already registered", ignoreCase = true) ||
+                    errorMsg.contains("User already exists", ignoreCase = true)
+                ) {
+                    return@withContext Result.failure(IOException("Account is already registered. Kindly sign in."))
+                }
+                if (errorMsg.contains("Database error saving new user", ignoreCase = true)) {
+                    return@withContext Result.failure(
+                        IOException("Employee ID '$normalizedEmpId' may already be registered or profile fields failed validation.")
+                    )
+                }
+                return@withContext Result.failure(IOException(errorMsg))
+            }
+
+            val json = JSONObject(responseBody)
+            val accessToken = json.optString("access_token")
+            val refreshToken = json.optString("refresh_token")
+            val userObj = json.optJSONObject("user")
+            val userId = userObj?.optString("id") ?: json.optString("id")
+
+            if (userId.isNullOrBlank()) {
+                return@withContext Result.failure(IOException("Invalid response from auth server: user ID missing"))
+            }
+
+            Result.success(
+                AuthSessionResponse(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken.takeIf { it.isNotBlank() },
+                    userId = userId,
+                    employeeId = normalizedEmpId
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Log in with an explicit auth email and password to obtain a Supabase Auth session.
+     */
+    suspend fun loginWithEmail(
+        email: String,
+        password: String
+    ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val jsonBody = JSONObject().apply {
+                put("email", email.trim().lowercase())
+                put("password", password)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/auth/v1/token?grant_type=password")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
+                .addHeader("Content-Type", "application/json")
+                .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                val errMsg = parseErrorMessage(responseBody, "Login failed")
+                return@withContext Result.failure(IOException(errMsg))
+            }
+
+            val json = JSONObject(responseBody)
+            val accessToken = json.getString("access_token")
+            val refreshToken = json.optString("refresh_token")
+            val userObj = json.getJSONObject("user")
+            val userId = userObj.getString("id")
+
+            Result.success(
+                AuthSessionResponse(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken.takeIf { it.isNotBlank() },
+                    userId = userId,
+                    employeeId = ""
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Refresh auth session.
      */
     suspend fun refreshSession(refreshToken: String): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
@@ -254,7 +387,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/auth/v1/logout")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post("{}".toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -278,7 +411,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url(url)
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -326,7 +459,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/profiles")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Prefer", "return=representation")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -376,7 +509,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Prefer", "return=representation")
                 .patch(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -415,7 +548,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url(uploadUrl)
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("x-upsert", "true")
                 .post(imageBytes.toRequestBody(JPEG_MEDIA_TYPE))
                 .build()
@@ -450,7 +583,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url(signUrl)
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -487,7 +620,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url(deleteUrl)
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .delete(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -509,7 +642,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/record_server_fetch")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post("{}".toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -578,7 +711,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/profiles?select=*&order=created_at.desc")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -617,7 +750,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/profiles?id=eq.$profileId")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .patch(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -641,7 +774,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/password_reset_requests?select=*&order=created_at.desc")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -683,7 +816,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/functions/v1/admin-reset-password")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -704,9 +837,7 @@ class SupabaseClient(
 
     /**
      * Submit task response via RPC function: public.submit_task_response()
-     */
-    /**
-     * Submit task response via RPC function: public.submit_task_response()
+     * Falls back cleanly to 9-param signature (003) and PostgREST tables when schema/RPC mismatches occur.
      */
     suspend fun submitTaskResponse(
         accessToken: String,
@@ -724,7 +855,12 @@ class SupabaseClient(
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val body = JSONObject().apply {
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+
+            fun buildRpcBody(includeExtendedParams: Boolean): JSONObject = JSONObject().apply {
                 put("p_task_id", taskId)
                 put("p_response_type", responseType)
                 if (responseValue != null) put("p_response_value", responseValue)
@@ -734,25 +870,339 @@ class SupabaseClient(
                 if (text != null) put("p_text", text)
                 if (lanNumber != null) put("p_lan_number", lanNumber)
                 if (idempotencyKey != null) put("p_idempotency_key", idempotencyKey)
-                if (deviceTimestamp != null) put("p_device_timestamp", deviceTimestamp)
-                if (dynamicValues != null && dynamicValues.isNotEmpty()) {
-                    put("p_dynamic_values", JSONObject(dynamicValues))
+                if (includeExtendedParams) {
+                    if (deviceTimestamp != null) put("p_device_timestamp", deviceTimestamp)
+                    if (dynamicValues != null && dynamicValues.isNotEmpty()) {
+                        put("p_dynamic_values", JSONObject(dynamicValues))
+                    }
                 }
             }
 
-            val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/rpc/submit_task_response")
+            fun executeRpc(body: JSONObject): Pair<Int, String> {
+                val request = Request.Builder()
+                    .url("${baseUrl()}/rest/v1/rpc/submit_task_response")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer $bearer")
+                    .addHeader("Content-Type", "application/json")
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+                val response = okHttpClient.newCall(request).execute()
+                val respStr = response.body?.string() ?: ""
+                return response.code to respStr
+            }
+
+            var (code, responseBody) = executeRpc(buildRpcBody(includeExtendedParams = true))
+
+            if (code !in 200..299) {
+                if (code == 401) {
+                    val parsed = parseErrorMessage(responseBody, "401 Unauthorized")
+                    val msg = if (parsed.contains("401")) parsed else "$parsed (401)"
+                    return@withContext Result.failure(IOException(msg))
+                }
+
+                val isMissingOrMismatchedRpc = code == 404 ||
+                    responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true)
+
+                if (isMissingOrMismatchedRpc) {
+                    val retry = executeRpc(buildRpcBody(includeExtendedParams = false))
+                    code = retry.first
+                    responseBody = retry.second
+                    if (code in 200..299) {
+                        return@withContext Result.success(JSONObject(responseBody))
+                    }
+                }
+
+                val shouldUseRestFallback = code == 404 ||
+                    responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true) ||
+                    responseBody.contains("not authorized", ignoreCase = true) ||
+                    responseBody.contains("User profile not found", ignoreCase = true)
+
+                if (shouldUseRestFallback) {
+                    Log.w(TAG, "RPC submit_task_response unavailable or blocked ($responseBody); falling back to PostgREST")
+                    return@withContext submitTaskResponseViaRestFallback(
+                        bearer = bearer,
+                        taskId = taskId,
+                        responseType = responseType,
+                        responseValue = responseValue,
+                        percentage = percentage,
+                        numeric1 = numeric1,
+                        numeric2 = numeric2,
+                        text = text,
+                        lanNumber = lanNumber,
+                        idempotencyKey = idempotencyKey,
+                        deviceTimestamp = deviceTimestamp
+                    )
+                }
+
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(responseBody, "Submit response failed ($code)"))
+                )
+            }
+
+            Result.success(JSONObject(responseBody))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun submitTaskResponseViaRestFallback(
+        bearer: String,
+        taskId: String,
+        responseType: String,
+        responseValue: String?,
+        percentage: Int?,
+        numeric1: Double?,
+        numeric2: Double?,
+        text: String?,
+        lanNumber: String?,
+        idempotencyKey: String?,
+        deviceTimestamp: String?
+    ): Result<JSONObject> {
+        val userId = extractUserIdFromJwt(bearer)
+            ?: return Result.failure(IOException("401 Authentication required: invalid user session"))
+
+        // 1. Check idempotency key if present
+        if (!idempotencyKey.isNullOrBlank()) {
+            val encodedKey = java.net.URLEncoder.encode(idempotencyKey, "UTF-8")
+            val checkReq = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_responses?idempotency_key=eq.$encodedKey&select=id&limit=1")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
-                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
+                .build()
+            runCatching {
+                okHttpClient.newCall(checkReq).execute().use { resp ->
+                    val b = resp.body?.string() ?: "[]"
+                    if (resp.isSuccessful) {
+                        val arr = JSONArray(b)
+                        if (arr.length() > 0) {
+                            val existingId = arr.getJSONObject(0).optString("id", idempotencyKey)
+                            return Result.success(JSONObject().apply {
+                                put("success", true)
+                                put("response_id", existingId)
+                                put("task_id", taskId)
+                                put("is_duplicate", true)
+                            })
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch employee_id & full_name from profiles
+        var employeeId = "EMP"
+        var fullName: String? = null
+        val profReq = Request.Builder()
+            .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId&select=employee_id,full_name&limit=1")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .get()
+            .build()
+        runCatching {
+            okHttpClient.newCall(profReq).execute().use { resp ->
+                val b = resp.body?.string() ?: "[]"
+                if (resp.isSuccessful) {
+                    val obj = JSONArray(b).optJSONObject(0)
+                    if (obj != null) {
+                        employeeId = obj.optString("employee_id").ifBlank { "EMP" }
+                        fullName = obj.optString("full_name").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                    }
+                }
+            }
+        }
+
+        // 3. Insert into public.task_responses
+        val insertBody = JSONObject().apply {
+            put("task_id", taskId)
+            put("user_id", userId)
+            put("employee_id", employeeId)
+            if (!fullName.isNullOrBlank()) put("employee_name", fullName)
+            if (!lanNumber.isNullOrBlank()) put("lan_number", lanNumber)
+            put("response_type", responseType)
+            if (!responseValue.isNullOrBlank()) put("response_value", responseValue)
+            if (percentage != null) put("percentage_value", percentage)
+            if (numeric1 != null) put("numeric_value_1", numeric1)
+            if (numeric2 != null) put("numeric_value_2", numeric2)
+            if (!text.isNullOrBlank()) put("text_value", text)
+            if (!idempotencyKey.isNullOrBlank()) put("idempotency_key", idempotencyKey)
+        }
+
+        val insertReq = Request.Builder()
+            .url("${baseUrl()}/rest/v1/task_responses")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Prefer", "return=representation")
+            .post(insertBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val insertResp = okHttpClient.newCall(insertReq).execute()
+        val insertRespBody = insertResp.body?.string() ?: ""
+
+        if (!insertResp.isSuccessful) {
+            if (insertResp.code == 409) {
+                return Result.success(JSONObject().apply {
+                    put("success", true)
+                    put("response_id", idempotencyKey ?: java.util.UUID.randomUUID().toString())
+                    put("task_id", taskId)
+                    put("is_duplicate", true)
+                })
+            }
+            val parsed = parseErrorMessage(insertRespBody, "Failed to insert response (${insertResp.code})")
+            val msg = if (insertResp.code == 401 && !parsed.contains("401")) "$parsed (401)" else parsed
+            return Result.failure(IOException(msg))
+        }
+
+        val createdObj = runCatching { JSONArray(insertRespBody).optJSONObject(0) }.getOrNull()
+        val responseId = createdObj?.optString("id")?.takeIf { it.isNotBlank() }
+            ?: idempotencyKey
+            ?: java.util.UUID.randomUUID().toString()
+
+        // 4. Inspect task completion policy & update tasks table status best-effort
+        var targetPct = 100
+        var completionPolicy = "SINGLE_ASSIGNEE"
+        var hasMultiLanTargets = false
+        val taskReq = Request.Builder()
+            .url("${baseUrl()}/rest/v1/tasks?id=eq.$taskId&select=completion_policy,target_percentage,lan_target_list&limit=1")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .get()
+            .build()
+        runCatching {
+            okHttpClient.newCall(taskReq).execute().use { resp ->
+                val b = resp.body?.string() ?: "[]"
+                if (resp.isSuccessful) {
+                    val obj = JSONArray(b).optJSONObject(0)
+                    if (obj != null) {
+                        completionPolicy = obj.optString("completion_policy", "SINGLE_ASSIGNEE")
+                        targetPct = obj.optInt("target_percentage", 100)
+                        val lans = obj.optJSONArray("lan_target_list")
+                        hasMultiLanTargets = lans != null && lans.length() > 0
+                    }
+                }
+            }
+        }
+
+        val isPositiveCompletion = (percentage != null && percentage >= targetPct) ||
+            responseValue.equals("YES", ignoreCase = true) ||
+            responseValue.equals("COMPLETED", ignoreCase = true)
+
+        val newStatus = when {
+            !lanNumber.isNullOrBlank() && completionPolicy == "ALL_SELECTED_LANS" && hasMultiLanTargets -> "in_progress"
+            isPositiveCompletion && completionPolicy == "CREATOR_CONFIRMATION" -> "pending_confirmation"
+            isPositiveCompletion -> "completed"
+            else -> "in_progress"
+        }
+
+        val patchBody = JSONObject().apply {
+            put("status", newStatus)
+            put("last_progress_update", deviceTimestamp ?: java.time.Instant.now().toString())
+            if (percentage != null) {
+                put("current_progress", percentage)
+            } else if (newStatus == "completed") {
+                put("current_progress", 100)
+            }
+        }
+        val patchReq = Request.Builder()
+            .url("${baseUrl()}/rest/v1/tasks?id=eq.$taskId")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Prefer", "return=minimal")
+            .patch(patchBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        runCatching { okHttpClient.newCall(patchReq).execute().close() }
+
+        return Result.success(JSONObject().apply {
+            put("success", true)
+            put("response_id", responseId)
+            put("task_id", taskId)
+            put("task_status", newStatus)
+        })
+    }
+
+    /**
+     * Fetch task responses from Supabase PostgREST for real-time visibility across users.
+     */
+    suspend fun fetchTaskResponses(
+        accessToken: String,
+        taskId: String? = null
+    ): Result<List<com.example.core.model.TaskResponseItem>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+
+            val url = if (!taskId.isNullOrBlank()) {
+                val encoded = java.net.URLEncoder.encode(taskId, "UTF-8")
+                "${baseUrl()}/rest/v1/task_responses?task_id=eq.$encoded&select=*&order=submitted_at.desc&limit=200"
+            } else {
+                "${baseUrl()}/rest/v1/task_responses?select=*&order=submitted_at.desc&limit=500"
+            }
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
+
             if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Submit response failed (${response.code})")))
+                val parsed = parseErrorMessage(responseBody, "Failed to fetch task responses (${response.code})")
+                val msg = if (response.code == 401 && !parsed.contains("401")) "$parsed (401)" else parsed
+                return@withContext Result.failure(IOException(msg))
             }
-            Result.success(JSONObject(responseBody))
+
+            val array = JSONArray(responseBody)
+            val list = mutableListOf<com.example.core.model.TaskResponseItem>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                fun optClean(k: String): String? {
+                    if (!obj.has(k) || obj.isNull(k)) return null
+                    return obj.optString(k, "").trim().takeIf { it.isNotEmpty() && !it.equals("null", true) }
+                }
+
+                val dynMap = mutableMapOf<String, String>()
+                val dynObj = obj.optJSONObject("dynamic_values")
+                if (dynObj != null) {
+                    dynObj.keys().forEach { key ->
+                        val v = dynObj.optString(key, "")
+                        if (v.isNotBlank() && !v.equals("null", true)) dynMap[key] = v
+                    }
+                }
+
+                list.add(
+                    com.example.core.model.TaskResponseItem(
+                        id = obj.optString("id"),
+                        taskId = obj.optString("task_id"),
+                        userId = obj.optString("user_id"),
+                        employeeId = obj.optString("employee_id"),
+                        employeeName = optClean("employee_name"),
+                        lanNumber = optClean("lan_number"),
+                        responseType = runCatching {
+                            com.example.core.model.ResponseType.valueOf(obj.optString("response_type"))
+                        }.getOrDefault(com.example.core.model.ResponseType.COMPLETED_NOT_COMPLETED),
+                        responseValue = optClean("response_value"),
+                        percentageValue = if (obj.has("percentage_value") && !obj.isNull("percentage_value")) obj.getInt("percentage_value") else null,
+                        numericValue1 = if (obj.has("numeric_value_1") && !obj.isNull("numeric_value_1")) obj.getDouble("numeric_value_1") else null,
+                        numericValue2 = if (obj.has("numeric_value_2") && !obj.isNull("numeric_value_2")) obj.getDouble("numeric_value_2") else null,
+                        textValue = optClean("text_value"),
+                        dynamicValues = dynMap,
+                        submittedAt = obj.optString("submitted_at"),
+                        isPendingSync = false,
+                        isLate = obj.optBoolean("is_late", false),
+                        delaySeconds = obj.optInt("delay_seconds", 0)
+                    )
+                )
+            }
+            Result.success(list)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -760,6 +1210,7 @@ class SupabaseClient(
 
     /**
      * Acknowledge task alarm via RPC function: public.acknowledge_task_alarm()
+     * Falls back cleanly to PostgREST tables if RPC is unavailable.
      */
     suspend fun acknowledgeTaskAlarm(
         accessToken: String,
@@ -769,6 +1220,11 @@ class SupabaseClient(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+
             val body = JSONObject().apply {
                 put("p_task_id", taskId)
                 put("p_event_id", eventId)
@@ -778,13 +1234,75 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/acknowledge_task_alarm")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
             if (!response.isSuccessful) {
+                if (response.code == 401) {
+                    val parsed = parseErrorMessage(responseBody, "401 Unauthorized")
+                    val msg = if (parsed.contains("401")) parsed else "$parsed (401)"
+                    return@withContext Result.failure(IOException(msg))
+                }
+                val isMissingRpc = response.code == 404 ||
+                    responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true)
+                if (isMissingRpc) {
+                    val userId = extractUserIdFromJwt(bearer)
+                        ?: return@withContext Result.failure(IOException("401 Authentication required"))
+                    var employeeId = "EMP"
+                    runCatching {
+                        val profReq = Request.Builder()
+                            .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId&select=employee_id&limit=1")
+                            .addHeader("apikey", anonKey())
+                            .addHeader("Authorization", "Bearer $bearer")
+                            .get()
+                            .build()
+                        okHttpClient.newCall(profReq).execute().use { r ->
+                            val b = r.body?.string() ?: "[]"
+                            if (r.isSuccessful) {
+                                employeeId = JSONArray(b).optJSONObject(0)?.optString("employee_id")?.ifBlank { "EMP" } ?: "EMP"
+                            }
+                        }
+                    }
+                    val ackPayload = JSONObject().apply {
+                        put("task_id", taskId)
+                        put("user_id", userId)
+                        put("employee_id", employeeId)
+                        put("event_id", eventId)
+                        put("device_timestamp", deviceTimestamp)
+                    }
+                    val ackReq = Request.Builder()
+                        .url("${baseUrl()}/rest/v1/task_acknowledgements")
+                        .addHeader("apikey", anonKey())
+                        .addHeader("Authorization", "Bearer $bearer")
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("Prefer", "resolution=ignore-duplicates,return=minimal")
+                        .post(ackPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    val ackResp = okHttpClient.newCall(ackReq).execute()
+                    val ackBody = ackResp.body?.string() ?: ""
+                    if (!ackResp.isSuccessful && ackResp.code != 409) {
+                        val parsed = parseErrorMessage(ackBody, "Acknowledge alarm failed (${ackResp.code})")
+                        return@withContext Result.failure(IOException(parsed))
+                    }
+                    val patchReq = Request.Builder()
+                        .url("${baseUrl()}/rest/v1/tasks?id=eq.$taskId")
+                        .addHeader("apikey", anonKey())
+                        .addHeader("Authorization", "Bearer $bearer")
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("Prefer", "return=minimal")
+                        .patch(JSONObject().apply {
+                            put("is_acknowledged", true)
+                            put("acknowledged_at", deviceTimestamp)
+                        }.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    runCatching { okHttpClient.newCall(patchReq).execute().close() }
+                    return@withContext Result.success(Unit)
+                }
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Acknowledge alarm failed (${response.code})")))
             }
             Result.success(Unit)
@@ -809,7 +1327,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/sync_offline_events")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -840,7 +1358,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/get_task_operations_dashboard")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -921,8 +1439,33 @@ class SupabaseClient(
     // BATCH 1: SERVER-BACKED TASKS, GROUPS, SHIFTS & MULTI-USER API
     // ==========================================
 
+    private fun extractUserIdFromJwt(bearer: String): String? {
+        return try {
+            val parts = bearer.split(".")
+            if (parts.size < 2) return null
+            var b64 = parts[1].replace('-', '+').replace('_', '/')
+            while (b64.length % 4 != 0) b64 += "="
+            val decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            val json = JSONObject(String(decoded, Charsets.UTF_8))
+            json.optString("sub").takeIf { SupabaseConfig.isValidUuid(it) }
+        } catch (_: Throwable) {
+            try {
+                val parts = bearer.split(".")
+                if (parts.size < 2) return null
+                var b64 = parts[1].replace('-', '+').replace('_', '/')
+                while (b64.length % 4 != 0) b64 += "="
+                val decoded = java.util.Base64.getDecoder().decode(b64)
+                val json = JSONObject(String(decoded, Charsets.UTF_8))
+                json.optString("sub").takeIf { SupabaseConfig.isValidUuid(it) }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
     /**
      * Atomically creates task on Supabase with idempotency via client_operation_id.
+     * Falls back cleanly to PostgREST table inserts if the create_task_atomic RPC has not been deployed.
      */
     suspend fun createTaskAtomic(
         accessToken: String,
@@ -930,6 +1473,11 @@ class SupabaseClient(
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+
             val requestBody = JSONObject().apply {
                 put("p_task", taskPayload)
             }
@@ -937,7 +1485,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/create_task_atomic")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer $bearer")
                 .addHeader("Content-Type", "application/json")
                 .post(requestBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -946,7 +1494,16 @@ class SupabaseClient(
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to create task on server (${response.code})")))
+                val isMissingRpc = response.code == 404 ||
+                    responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true)
+                if (isMissingRpc) {
+                    Log.w(TAG, "RPC create_task_atomic unavailable ($responseBody); falling back to PostgREST tables")
+                    return@withContext createTaskViaRestFallback(bearer, taskPayload)
+                }
+                val parsed = parseErrorMessage(responseBody, "Failed to create task on server (${response.code})")
+                val msg = if (response.code == 401 && !parsed.contains("401")) "$parsed (401)" else parsed
+                return@withContext Result.failure(IOException(msg))
             }
 
             val json = JSONObject(responseBody)
@@ -956,17 +1513,189 @@ class SupabaseClient(
         }
     }
 
+    private fun createTaskViaRestFallback(
+        bearer: String,
+        taskPayload: JSONObject
+    ): Result<JSONObject> {
+        val creatorId = extractUserIdFromJwt(bearer)
+            ?: return Result.failure(IOException("401 Authentication required: invalid user session"))
+
+        // 1. Ensure a valid UUID group exists on server
+        var groupId = taskPayload.optString("group_id").takeIf { SupabaseConfig.isValidUuid(it) }
+        if (groupId == null) {
+            val lookupReq = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_groups?select=id&limit=1")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
+                .build()
+            val lookupResp = okHttpClient.newCall(lookupReq).execute()
+            val lookupBody = lookupResp.body?.string() ?: "[]"
+            if (lookupResp.isSuccessful) {
+                val arr = JSONArray(lookupBody)
+                if (arr.length() > 0) {
+                    groupId = arr.getJSONObject(0).optString("id").takeIf { SupabaseConfig.isValidUuid(it) }
+                }
+            }
+            if (groupId == null) {
+                val newGroupId = java.util.UUID.randomUUID().toString()
+                val grpPayload = JSONObject().apply {
+                    put("id", newGroupId)
+                    put("title", "General Operations")
+                    put("code", "GEN-OPS")
+                    put("description", "Default operations group for standalone tasks")
+                    put("status", "active")
+                    put("visibility", "everyone")
+                    put("allow_self_join", true)
+                    put("created_by", creatorId)
+                }
+                val createGrpReq = Request.Builder()
+                    .url("${baseUrl()}/rest/v1/task_groups")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer $bearer")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Prefer", "return=representation")
+                    .post(grpPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+                val createGrpResp = okHttpClient.newCall(createGrpReq).execute()
+                val createGrpBody = createGrpResp.body?.string() ?: ""
+                if (!createGrpResp.isSuccessful) {
+                    val msg = parseErrorMessage(createGrpBody, "Failed to ensure task group (${createGrpResp.code})")
+                    return Result.failure(IOException(msg))
+                }
+                val createdArr = runCatching { JSONArray(createGrpBody) }.getOrNull()
+                groupId = createdArr?.optJSONObject(0)?.optString("id")?.takeIf { SupabaseConfig.isValidUuid(it) }
+                    ?: newGroupId
+            }
+        }
+
+        // 2. Insert into public.tasks
+        val taskId = taskPayload.optString("id").takeIf { SupabaseConfig.isValidUuid(it) }
+            ?: java.util.UUID.randomUUID().toString()
+
+        fun buildInsertBody(includeClientOpId: Boolean): JSONObject = JSONObject().apply {
+            put("id", taskId)
+            put("group_id", groupId)
+            val shiftId = taskPayload.optString("shift_id")
+            if (SupabaseConfig.isValidUuid(shiftId)) put("shift_id", shiftId)
+            put("title", taskPayload.optString("title", "Untitled Task"))
+            if (taskPayload.has("description")) put("description", taskPayload.opt("description"))
+            if (taskPayload.has("location")) put("location", taskPayload.opt("location"))
+            if (taskPayload.has("starts_at")) put("starts_at", taskPayload.opt("starts_at"))
+            if (taskPayload.has("due_at")) put("due_at", taskPayload.opt("due_at"))
+            put("priority", taskPayload.optString("priority", "normal"))
+            put("status", "open")
+            put("visibility", taskPayload.optString("visibility", "everyone"))
+            put("allow_self_join", taskPayload.optBoolean("allow_self_join", true))
+            put("join_requires_approval", taskPayload.optBoolean("join_requires_approval", true))
+            put("notify_creator_on_join", taskPayload.optBoolean("notify_creator_on_join", true))
+            put("requires_completion_confirmation", taskPayload.optBoolean("requires_completion_confirmation", false))
+            if (taskPayload.has("max_participants")) put("max_participants", taskPayload.opt("max_participants"))
+            put("created_by", creatorId)
+            put("task_type", taskPayload.optString("task_type", "SIMPLE"))
+            put("importance", taskPayload.optString("importance", "NORMAL"))
+            put("urgency_type", taskPayload.optString("urgency_type", "BEFORE_DEADLINE"))
+            if (taskPayload.has("execution_time")) put("execution_time", taskPayload.opt("execution_time"))
+            if (taskPayload.has("target_percentage")) put("target_percentage", taskPayload.opt("target_percentage"))
+            if (taskPayload.has("repeat_interval_minutes")) put("repeat_interval_minutes", taskPayload.opt("repeat_interval_minutes"))
+            put("alarm_type", taskPayload.optString("alarm_type", "SOUND_ALERT"))
+            if (taskPayload.has("advance_reminders_minutes")) put("advance_reminders_minutes", taskPayload.optJSONArray("advance_reminders_minutes"))
+            put("remind_until_completed", taskPayload.optBoolean("remind_until_completed", false))
+            if (taskPayload.has("overdue_reminder_interval_minutes")) put("overdue_reminder_interval_minutes", taskPayload.opt("overdue_reminder_interval_minutes"))
+            if (taskPayload.has("max_overdue_reminders")) put("max_overdue_reminders", taskPayload.opt("max_overdue_reminders"))
+            put("response_type", taskPayload.optString("response_type", "COMPLETED_NOT_COMPLETED"))
+            if (taskPayload.has("lan_target_list")) put("lan_target_list", taskPayload.optJSONArray("lan_target_list"))
+            put("completion_policy", taskPayload.optString("completion_policy", "SINGLE_ASSIGNEE"))
+            if (taskPayload.has("response_form_schema")) put("response_form_schema", taskPayload.opt("response_form_schema"))
+            if (includeClientOpId && taskPayload.has("client_operation_id")) {
+                put("client_operation_id", taskPayload.optString("client_operation_id"))
+            }
+        }
+
+        fun postTask(bodyObj: JSONObject): okhttp3.Response {
+            val req = Request.Builder()
+                .url("${baseUrl()}/rest/v1/tasks")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=representation")
+                .post(bodyObj.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            return okHttpClient.newCall(req).execute()
+        }
+
+        var taskResp = postTask(buildInsertBody(includeClientOpId = true))
+        var taskRespBody = taskResp.body?.string() ?: ""
+        if (!taskResp.isSuccessful && taskRespBody.contains("client_operation_id", ignoreCase = true)) {
+            taskResp = postTask(buildInsertBody(includeClientOpId = false))
+            taskRespBody = taskResp.body?.string() ?: ""
+        }
+
+        if (!taskResp.isSuccessful) {
+            val parsed = parseErrorMessage(taskRespBody, "Failed to insert task (${taskResp.code})")
+            val msg = if (taskResp.code == 401 && !parsed.contains("401")) "$parsed (401)" else parsed
+            return Result.failure(IOException(msg))
+        }
+
+        val insertedTaskObj = runCatching { JSONArray(taskRespBody).optJSONObject(0) }.getOrNull()
+        val confirmedTaskId = insertedTaskObj?.optString("id")?.takeIf { SupabaseConfig.isValidUuid(it) } ?: taskId
+
+        // 3. Insert participants (creator + assigned employees)
+        val participantsArr = JSONArray()
+        participantsArr.put(JSONObject().apply {
+            put("task_id", confirmedTaskId)
+            put("user_id", creatorId)
+            put("status", "active")
+            put("source", "creator")
+        })
+        val assignedUsers = taskPayload.optJSONArray("assigned_user_ids")
+        if (assignedUsers != null) {
+            val seen = mutableSetOf(creatorId)
+            for (i in 0 until assignedUsers.length()) {
+                val uid = assignedUsers.optString(i)
+                if (SupabaseConfig.isValidUuid(uid) && seen.add(uid)) {
+                    participantsArr.put(JSONObject().apply {
+                        put("task_id", confirmedTaskId)
+                        put("user_id", uid)
+                        put("status", "active")
+                        put("source", "assigned")
+                        put("assigned_by", creatorId)
+                    })
+                }
+            }
+        }
+        val partReq = Request.Builder()
+            .url("${baseUrl()}/rest/v1/task_participants")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Prefer", "resolution=ignore-duplicates,return=minimal")
+            .post(participantsArr.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        runCatching { okHttpClient.newCall(partReq).execute().close() }
+
+        return Result.success(JSONObject().apply {
+            put("success", true)
+            put("task_id", confirmedTaskId)
+            if (insertedTaskObj != null) put("task", insertedTaskObj)
+        })
+    }
+
     /**
      * Fetch all tasks visible to current user (creator, assigned, or group member) from Supabase.
      */
     suspend fun fetchTasks(accessToken: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
             val url = "${baseUrl()}/rest/v1/tasks?select=*,task_participants(*),task_role_requirements(*),task_groups(id,title),shifts(id,name)&order=created_at.desc"
             val request = Request.Builder()
                 .url(url)
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer $bearer")
                 .get()
                 .build()
 
@@ -974,7 +1703,9 @@ class SupabaseClient(
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to fetch tasks (${response.code})")))
+                val parsed = parseErrorMessage(responseBody, "Failed to fetch tasks (${response.code})")
+                val msg = if (response.code == 401 && !parsed.contains("401")) "$parsed (401)" else parsed
+                return@withContext Result.failure(IOException(msg))
             }
 
             val array = JSONArray(responseBody)
@@ -1005,7 +1736,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/search_employee_directory")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1018,7 +1749,7 @@ class SupabaseClient(
                 val fallbackReq = Request.Builder()
                     .url("${baseUrl()}/rest/v1/profiles?select=*&is_active=eq.true&order=full_name.asc&limit=100")
                     .addHeader("apikey", anonKey())
-                    .addHeader("Authorization", "Bearer $accessToken")
+                    .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                     .get()
                     .build()
                 val fallbackResp = okHttpClient.newCall(fallbackReq).execute()
@@ -1083,7 +1814,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/profiles?employee_id=eq.$encodedEmpId&select=id,is_active&limit=1")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -1121,7 +1852,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/task_groups?select=*,group_members(*)&order=created_at.desc")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -1155,7 +1886,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/task_groups")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Prefer", "return=representation")
                 .post(groupPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
@@ -1192,7 +1923,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/task_groups?id=eq.$groupId")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .patch(groupPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1217,7 +1948,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/shifts?select=*&order=starts_at.asc")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -1251,7 +1982,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/shifts")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Prefer", "return=representation")
                 .post(shiftPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
@@ -1288,7 +2019,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/shifts?id=eq.$shiftId")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .patch(shiftPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1328,7 +2059,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/copy_shift")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1357,18 +2088,19 @@ class SupabaseClient(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
+            val bearer = getAuthBearer(accessToken)
             val body = JSONObject().apply {
-                put("p_task", taskId)
-                put("p_user", userId)
-                if (!roleId.isNullOrBlank()) {
-                    put("p_role", roleId)
+                put("p_task_id", taskId)
+                put("p_user_id", userId)
+                if (SupabaseConfig.isValidUuid(roleId)) {
+                    put("p_role_id", roleId)
                 }
             }
 
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/assign_user_to_task")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer $bearer")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1376,8 +2108,34 @@ class SupabaseClient(
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 val responseBody = response.body?.string() ?: ""
+                if (responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("p_task", ignoreCase = true)
+                ) {
+                    val legacyBody = JSONObject().apply {
+                        put("p_task", taskId)
+                        put("p_user", userId)
+                        if (SupabaseConfig.isValidUuid(roleId)) {
+                            put("p_role", roleId)
+                        }
+                    }
+                    val legacyReq = Request.Builder()
+                        .url("${baseUrl()}/rest/v1/rpc/assign_user_to_task")
+                        .addHeader("apikey", anonKey())
+                        .addHeader("Authorization", "Bearer $bearer")
+                        .addHeader("Content-Type", "application/json")
+                        .post(legacyBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    val legacyResp = okHttpClient.newCall(legacyReq).execute()
+                    if (legacyResp.isSuccessful) {
+                        legacyResp.close()
+                        return@withContext Result.success(Unit)
+                    }
+                    val legacyErrBody = legacyResp.body?.string() ?: ""
+                    return@withContext Result.failure(IOException(parseErrorMessage(legacyErrBody, "Failed to assign user to task")))
+                }
                 return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to assign user to task")))
             }
+            response.close()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -1404,7 +2162,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/request_task_join")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1439,7 +2197,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/review_task_join")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1473,7 +2231,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/leave_task")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1507,7 +2265,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/rpc/remove_task_participant")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -1578,8 +2336,8 @@ class SupabaseClient(
             val payload = JSONObject().apply {
                 put("id", incident.id)
                 put("submission_id", incident.submissionId)
-                if (!incident.centreId.isNullOrBlank()) put("centre_id", incident.centreId)
-                if (!incident.examSessionId.isNullOrBlank()) put("exam_session_id", incident.examSessionId)
+                if (SupabaseConfig.isValidUuid(incident.centreId)) put("centre_id", incident.centreId)
+                if (SupabaseConfig.isValidUuid(incident.examSessionId)) put("exam_session_id", incident.examSessionId)
                 put("state_name", incident.stateName)
                 put("district_name", incident.districtName)
                 put("centre_code", incident.centreCode)
@@ -1600,13 +2358,13 @@ class SupabaseClient(
                 put("incident_time", java.time.Instant.ofEpochMilli(incident.incidentTimestampMillis).toString())
                 put("reason", incident.reason)
                 put("it_manager_name", incident.itManagerName)
-                put("created_by", incident.createdBy)
+                if (SupabaseConfig.isValidUuid(incident.createdBy)) put("created_by", incident.createdBy)
             }
 
             val request = Request.Builder()
                 .url("${baseUrl()}/rest/v1/system_incidents")
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Prefer", "resolution=merge-duplicates,return=representation")
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
@@ -1643,7 +2401,7 @@ class SupabaseClient(
             val request = Request.Builder()
                 .url(urlBuilder.toString())
                 .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
                 .build()
 
@@ -1708,4 +2466,92 @@ class SupabaseClient(
             syncStatus = "SYNCED"
         )
     }
+
+    /**
+     * Delete a system incident on Supabase PostgREST.
+     */
+    suspend fun deleteSystemIncident(accessToken: String, incidentId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val encodedId = java.net.URLEncoder.encode(incidentId, "UTF-8")
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/system_incidents?id=eq.$encodedId")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
+                .delete()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(body, "Failed to delete incident on server (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete a task on Supabase PostgREST.
+     */
+    suspend fun deleteTask(accessToken: String, taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val encodedId = java.net.URLEncoder.encode(taskId, "UTF-8")
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/tasks?id=eq.$encodedId")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
+                .delete()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(body, "Failed to delete task on server (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Upsert user profile into Supabase profiles table.
+     */
+    suspend fun upsertProfile(accessToken: String, profile: UserProfile): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("id", profile.id)
+                put("employee_id", SupabaseConfig.normalizeEmployeeId(profile.employeeId))
+                put("full_name", profile.fullName)
+                put("mobile", profile.mobile)
+                if (!profile.profilePhotoPath.isNullOrBlank()) {
+                    put("profile_photo_path", profile.profilePhotoPath)
+                }
+                put("app_role", profile.appRole)
+                put("is_active", profile.isActive)
+            }
+
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/profiles")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
+                .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val respBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to upsert profile (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
+

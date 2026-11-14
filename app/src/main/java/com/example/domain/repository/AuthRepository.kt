@@ -171,21 +171,21 @@ class AuthRepository(
         val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
         val loginResult = supabaseClient.login(trimmedEmpId, password)
         val session = loginResult.getOrElse { networkErr ->
-            val cached = profileDao.getCachedProfile()?.toDomain()
-            if (cached != null && cached.employeeId.equals(trimmedEmpId, ignoreCase = true)) {
-                if (!cached.isActive) {
-                    return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
-                }
-                userPrefs.saveSession(
-                    accessToken = "offline_demo_token_${System.currentTimeMillis()}",
-                    refreshToken = null,
-                    userId = cached.id,
-                    employeeId = cached.employeeId,
-                    mustChangePassword = cached.mustChangePassword
-                )
-                return Result.success(cached)
-            }
             if (isNetworkFailure(networkErr)) {
+                val cached = profileDao.getCachedProfile()?.toDomain()
+                if (cached != null && cached.employeeId.equals(trimmedEmpId, ignoreCase = true)) {
+                    if (!cached.isActive) {
+                        return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
+                    }
+                    userPrefs.saveSession(
+                        accessToken = "offline_demo_token_${System.currentTimeMillis()}",
+                        refreshToken = null,
+                        userId = cached.id,
+                        employeeId = cached.employeeId,
+                        mustChangePassword = cached.mustChangePassword
+                    )
+                    return Result.success(cached)
+                }
                 return Result.failure(IOException("Server is unreachable. Please check connection or switch to 'Create Account' to use Taskz offline."))
             }
             return Result.failure(networkErr)
@@ -232,12 +232,8 @@ class AuthRepository(
      */
     fun isTokenExpired(token: String?, bufferSeconds: Long = 60L): Boolean {
         if (token.isNullOrBlank()) return true
-        if (token.startsWith("offline_demo_token_") ||
-            token.startsWith("firebase_token_") ||
-            token.startsWith("firebase_")
-        ) {
-            val parts = token.split(".")
-            if (parts.size < 2) return false
+        if (token.startsWith("offline_demo_token_")) {
+            return false
         }
         return try {
             val parts = token.split(".")
@@ -284,26 +280,8 @@ class AuthRepository(
             return Result.success(currentToken)
         }
 
-        // Firebase-managed authentication session
-        if (com.example.core.network.FirebaseSessionHelper.isFirebaseSession(session, currentToken)) {
-            val fbUser = try {
-                Firebase.auth.currentUser
-            } catch (_: Exception) {
-                null
-            }
-            if (fbUser != null) {
-                try {
-                    val tokenResult = fbUser.getIdToken(false).await()
-                    val newToken = tokenResult.token ?: currentToken
-                    userPrefs.updateAccessToken(newToken, "firebase_refresh_${fbUser.uid}")
-                    return Result.success(newToken)
-                } catch (e: Exception) {
-                    if (isNetworkFailure(e)) {
-                        return Result.success(currentToken)
-                    }
-                }
-            }
-            return Result.success(currentToken)
+        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, currentToken)) {
+            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again to sync with server."))
         }
 
         // If current access token is not expired (with 60-second safety window), return it
@@ -348,27 +326,11 @@ class AuthRepository(
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
-        if (session.accessToken?.startsWith("firebase_") == true ||
-            session.accessToken?.startsWith("offline_") == true ||
-            refreshToken.startsWith("firebase_") ||
-            session.userId?.startsWith("phone_user_") == true
-        ) {
-            val fbUser = try { Firebase.auth.currentUser } catch (_: Exception) { null }
-            if (fbUser != null) {
-                return try {
-                    val tokenResult = fbUser.getIdToken(true).await()
-                    val newToken = tokenResult.token ?: session.accessToken ?: "firebase_token_${fbUser.uid}"
-                    userPrefs.updateAccessToken(newToken, "firebase_refresh_${fbUser.uid}")
-                    Result.success(newToken)
-                } catch (e: Exception) {
-                    if (isNetworkFailure(e)) {
-                        Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", e))
-                    } else {
-                        Result.success(session.accessToken ?: "firebase_token_${fbUser.uid}")
-                    }
-                }
-            }
-            return Result.success(session.accessToken ?: "firebase_token_${session.userId}")
+        if (session.accessToken?.startsWith("offline_") == true) {
+            return Result.success(session.accessToken)
+        }
+        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, session.accessToken)) {
+            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again."))
         }
 
         Log.i("TaskzAuth", "Forcing session token refresh...")
@@ -400,11 +362,11 @@ class AuthRepository(
 
         val cachedProfile = profileDao.getCachedProfile()?.toDomain()
 
-        if (session.accessToken?.startsWith("offline_demo_token_") == true ||
-            session.accessToken?.startsWith("firebase_") == true ||
-            session.userId?.startsWith("phone_user_") == true
-        ) {
+        if (session.accessToken?.startsWith("offline_demo_token_") == true) {
             return Result.success(cachedProfile)
+        }
+        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, session.accessToken)) {
+            return Result.failure(SessionExpiredException("Please sign in again to refresh your Supabase session."))
         }
 
         // Obtain valid token (or refresh if expired)
@@ -463,6 +425,7 @@ class AuthRepository(
         if (!session.accessToken.isNullOrBlank()) {
             supabaseClient.logout(session.accessToken)
         }
+        runCatching { Firebase.auth.signOut() }
         userPrefs.clearSession()
         profileDao.clearProfile()
         syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Signed out")

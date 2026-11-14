@@ -32,15 +32,6 @@ sealed interface ResetRequestUiState {
     data class Error(val message: String) : ResetRequestUiState
 }
 
-sealed interface PhoneVerificationState {
-    object Idle : PhoneVerificationState
-    object SendingCode : PhoneVerificationState
-    data class CodeSent(val verificationId: String, val phoneNumber: String, val dynamicCode: String = "") : PhoneVerificationState
-    object VerifyingCode : PhoneVerificationState
-    data class Success(val profile: UserProfile) : PhoneVerificationState
-    data class Error(val message: String) : PhoneVerificationState
-}
-
 class AuthViewModel(
     private val authRepository: AuthRepository,
     private val firebaseAuthService: com.example.data.remote.FirebaseAuthService = com.example.TaskzApplication.instance.firebaseAuthService
@@ -54,9 +45,6 @@ class AuthViewModel(
 
     private val _resetRequestState = MutableStateFlow<ResetRequestUiState>(ResetRequestUiState.Idle)
     val resetRequestState: StateFlow<ResetRequestUiState> = _resetRequestState.asStateFlow()
-
-    private val _phoneVerificationState = MutableStateFlow<PhoneVerificationState>(PhoneVerificationState.Idle)
-    val phoneVerificationState: StateFlow<PhoneVerificationState> = _phoneVerificationState.asStateFlow()
 
     fun login(employeeId: String, password: String) {
         val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
@@ -265,98 +253,7 @@ class AuthViewModel(
     }
 
     // ----------------------------------------------------
-    // Firebase Phone Authentication (Phone No. + OTP)
-    // ----------------------------------------------------
-
-    fun sendPhoneOtp(activity: Activity? = null, rawPhoneNumber: String) {
-        val trimmed = rawPhoneNumber.trim()
-        val digits = trimmed.filter { it.isDigit() }
-        val tenDigits = if (digits.length == 12 && digits.startsWith("91")) digits.takeLast(10) else digits
-
-        if (tenDigits.length != 10 || tenDigits[0] !in '6'..'9') {
-            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.")
-            return
-        }
-
-        val fullIndianNumber = "+91$tenDigits"
-        _phoneVerificationState.value = PhoneVerificationState.SendingCode
-        firebaseAuthService.sendPhoneOtp(
-            activity = activity,
-            phoneNumber = fullIndianNumber,
-            onCodeSent = { verificationId, dynamicCode ->
-                _phoneVerificationState.value = PhoneVerificationState.CodeSent(
-                    verificationId = verificationId,
-                    phoneNumber = tenDigits,
-                    dynamicCode = dynamicCode
-                )
-            },
-            onAutoVerified = { profile ->
-                _phoneVerificationState.value = PhoneVerificationState.Success(profile)
-                _loginState.value = AuthUiState.Success(profile)
-            },
-            onError = { errMsg ->
-                _phoneVerificationState.value = PhoneVerificationState.Error(errMsg)
-            }
-        )
-    }
-
-    fun verifyPhoneOtp(
-        verificationId: String,
-        otpCode: String,
-        fullName: String? = null,
-        phoneNumber: String? = null
-    ) {
-        val trimmedOtp = otpCode.trim()
-        if (trimmedOtp.length != 6) {
-            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter the 6-digit verification code.")
-            return
-        }
-
-        viewModelScope.launch {
-            _phoneVerificationState.value = PhoneVerificationState.VerifyingCode
-            val result = firebaseAuthService.verifyOtpAndSignIn(verificationId, trimmedOtp, fullName, phoneNumber)
-            result.fold(
-                onSuccess = { profile ->
-                    _phoneVerificationState.value = PhoneVerificationState.Success(profile)
-                    _loginState.value = AuthUiState.Success(profile)
-                },
-                onFailure = { error ->
-                    _phoneVerificationState.value = PhoneVerificationState.Error(error.message ?: "Verification failed. Please retry.")
-                }
-            )
-        }
-    }
-
-    fun resetPhoneVerification() {
-        _phoneVerificationState.value = PhoneVerificationState.Idle
-    }
-
-    /**
-     * Fallback login when live carrier SMS is restricted by Firebase SMS Region Policy.
-     */
-    fun signInWithTestPhone(phoneNumber: String, fullName: String? = null) {
-        val trimmed = phoneNumber.trim()
-        if (trimmed.length < 8) {
-            _phoneVerificationState.value = PhoneVerificationState.Error("Please enter a valid phone number.")
-            return
-        }
-        viewModelScope.launch {
-            _phoneVerificationState.value = PhoneVerificationState.VerifyingCode
-            val result = firebaseAuthService.signInWithTestPhone(trimmed, fullName)
-            result.fold(
-                onSuccess = { profile ->
-                    _phoneVerificationState.value = PhoneVerificationState.Success(profile)
-                    _loginState.value = AuthUiState.Success(profile)
-                },
-                onFailure = { error ->
-                    _phoneVerificationState.value = PhoneVerificationState.Error(error.message ?: "Test login failed.")
-                }
-            )
-        }
-    }
-
-    // ----------------------------------------------------
-    // Firebase Email & Password Authentication
+    // Email & Employee ID Authentication
     // ----------------------------------------------------
 
     fun loginWithEmailPassword(emailOrEmpId: String, password: String) {
@@ -367,6 +264,12 @@ class AuthViewModel(
         }
         if (password.isBlank()) {
             _loginState.value = AuthUiState.Error("Please enter your password.")
+            return
+        }
+
+        // If it does NOT contain '@', it is an Employee ID: authenticate via Supabase
+        if (!trimmed.contains("@")) {
+            login(trimmed, password)
             return
         }
 
@@ -406,7 +309,8 @@ class AuthViewModel(
         val trimmedEmail = email.trim()
         val trimmedName = fullName.trim()
         val trimmedMobile = mobile.trim()
-        val trimmedEmpId = employeeId.trim()
+        val normalizedMobile = normalizeMobile(trimmedMobile)
+        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
 
         if (trimmedName.length < 2) {
             _signUpState.value = AuthUiState.Error("Please enter your full name.")
@@ -431,19 +335,56 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _signUpState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signUpWithEmailPassword(
+
+            // 1. Check local SQLite cache for duplicate Employee ID
+            val localProfile = com.example.TaskzApplication.instance.database.profileDao().findProfileByIdOrEmployeeId(trimmedEmpId)
+            if (localProfile != null) {
+                _signUpState.value = AuthUiState.Error("Employee ID '$trimmedEmpId' is already registered. Kindly sign in.")
+                return@launch
+            }
+
+            // 2. Enforce email uniqueness & register email/password in Firebase Auth first
+            val firebaseCreateRes = firebaseAuthService.createFirebaseEmailAccount(
                 email = trimmedEmail,
                 password = password,
                 fullName = trimmedName,
-                mobile = trimmedMobile,
                 employeeId = trimmedEmpId
             )
+            if (firebaseCreateRes.isFailure) {
+                _signUpState.value = AuthUiState.Error(
+                    firebaseCreateRes.exceptionOrNull()?.message ?: "Email address '$trimmedEmail' is already registered. Kindly sign in."
+                )
+                return@launch
+            }
+
+            // 3. Primary registration in Supabase (the single authoritative backend for Taskz)
+            val result = authRepository.signUp(
+                employeeId = trimmedEmpId,
+                password = password,
+                fullName = trimmedName,
+                mobile = normalizedMobile
+            )
+
             result.fold(
                 onSuccess = { profile ->
+                    com.example.TaskzApplication.instance.userPreferences.apply {
+                        saveEmailEmployeeHint(trimmedEmail, trimmedEmpId)
+                        saveEmailAuthMethodHint(trimmedEmail, "email")
+                    }
                     _signUpState.value = AuthUiState.Success(profile)
                 },
                 onFailure = { error ->
-                    _signUpState.value = AuthUiState.Error(error.message ?: "Registration failed.")
+                    firebaseAuthService.rollbackFirebaseEmailAccount(trimmedEmail)
+                    val msg = error.message.orEmpty()
+                    val userMsg = when {
+                        msg.contains("already registered", ignoreCase = true) ||
+                        msg.contains("already exists", ignoreCase = true) ->
+                            "Employee ID '$trimmedEmpId' is already registered. Kindly sign in."
+                        msg.contains("Email address", ignoreCase = true) && msg.contains("already registered", ignoreCase = true) ->
+                            "Email address '$trimmedEmail' is already registered. Kindly sign in."
+                        else -> msg.ifBlank { "Registration failed. Please try again." }
+                    }
+                    _signUpState.value = AuthUiState.Error(userMsg)
                 }
             )
         }

@@ -34,6 +34,8 @@ class TaskAlarmScheduler(private val context: Context) {
         const val EXTRA_DESCRIPTION = "extra_description"
         const val EXTRA_LOCATION = "extra_location"
         const val EXTRA_TASK_TYPE = "extra_task_type"
+        const val EXTRA_RESPONSE_TYPE = "extra_response_type"
+        const val EXTRA_REMINDER_INTERVAL = "extra_reminder_interval"
 
         const val ACTION_ALARM_TRIGGER = "com.example.alarm.ACTION_ALARM_TRIGGER"
         const val ACTION_ACKNOWLEDGE = "com.example.alarm.ACTION_ACKNOWLEDGE"
@@ -153,6 +155,7 @@ class TaskAlarmScheduler(private val context: Context) {
         )
         database.scheduledAlarmDao().insertAlarm(alarmEntity)
 
+        val cachedTask = runCatching { database.taskDao().getTaskById(taskId)?.toDomain() }.getOrNull()
         val intent = Intent(context, TaskAlarmReceiver::class.java).apply {
             action = ACTION_ALARM_TRIGGER
             putExtra(EXTRA_TASK_ID, taskId)
@@ -161,6 +164,14 @@ class TaskAlarmScheduler(private val context: Context) {
             putExtra(EXTRA_ALARM_TYPE, alarmType)
             putExtra(EXTRA_REMINDER_LABEL, alarmEntity.reminderLabel)
             putExtra(EXTRA_ALARM_ID, alarmId)
+            if (cachedTask != null) {
+                putExtra(EXTRA_SCHEDULED_TIME, cachedTask.executionTime ?: cachedTask.startsAt ?: cachedTask.dueAt ?: "")
+                putExtra(EXTRA_DESCRIPTION, cachedTask.description ?: "")
+                putExtra(EXTRA_LOCATION, cachedTask.location ?: "")
+                putExtra(EXTRA_TASK_TYPE, cachedTask.taskType.name)
+                putExtra(EXTRA_RESPONSE_TYPE, cachedTask.responseType.name)
+                putExtra(EXTRA_REMINDER_INTERVAL, (cachedTask.overdueReminderIntervalMinutes ?: cachedTask.repeatIntervalMinutes ?: 10).coerceAtLeast(1))
+            }
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -169,7 +180,9 @@ class TaskAlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        scheduleWithAlarmManager(triggerMillis, pendingIntent)
+        val isCriticalAlarm = alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
+            importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true)
+        scheduleWithAlarmManager(triggerMillis, pendingIntent, useAlarmClock = isCriticalAlarm, alarmId = alarmId)
         Log.d(TAG, "Scheduled snooze alarm for $taskId in $snoozeMinutes minutes")
     }
 
@@ -261,6 +274,8 @@ class TaskAlarmScheduler(private val context: Context) {
             putExtra(EXTRA_DESCRIPTION, task.description)
             putExtra(EXTRA_LOCATION, task.location)
             putExtra(EXTRA_TASK_TYPE, task.taskType.name)
+            putExtra(EXTRA_RESPONSE_TYPE, task.responseType.name)
+            putExtra(EXTRA_REMINDER_INTERVAL, (task.overdueReminderIntervalMinutes ?: task.repeatIntervalMinutes ?: 10).coerceAtLeast(1))
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -270,11 +285,35 @@ class TaskAlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        scheduleWithAlarmManager(alarmEntity.triggerAtMillis, pendingIntent)
+        val isCriticalAlarm = alarmEntity.alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
+            alarmEntity.importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true)
+        scheduleWithAlarmManager(alarmEntity.triggerAtMillis, pendingIntent, useAlarmClock = isCriticalAlarm, alarmId = alarmEntity.alarmId)
     }
 
-    private fun scheduleWithAlarmManager(triggerMillis: Long, pendingIntent: PendingIntent) {
+    private fun scheduleWithAlarmManager(
+        triggerMillis: Long,
+        pendingIntent: PendingIntent,
+        useAlarmClock: Boolean = false,
+        alarmId: Int = 0
+    ) {
         try {
+            if (useAlarmClock && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val showIntent = Intent(context, com.example.MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                val showPendingIntent = PendingIntent.getActivity(
+                    context,
+                    alarmId + 900000,
+                    showIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                alarmManager.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(triggerMillis, showPendingIntent),
+                    pendingIntent
+                )
+                return
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (alarmManager.canScheduleExactAlarms()) {
                     alarmManager.setExactAndAllowWhileIdle(

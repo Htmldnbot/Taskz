@@ -117,8 +117,8 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
-  // Firestore and Firebase Auth:
-  implementation(libs.firebase.firestore)
+  // Firebase Auth & Credential Manager (Firestore removed; Supabase is the single app database):
+  // implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
