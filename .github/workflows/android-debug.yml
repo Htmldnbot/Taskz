@@ -72,7 +72,7 @@ jobs:
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -f "$APK_PATH" ]; then
-            echo "::error::Expected APK not found at $APK_PATH"
+            echo "::error::APK not found: $APK_PATH"
             exit 1
           fi
 
@@ -81,7 +81,7 @@ jobs:
           BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
 
           if [ -z "$BUILD_TOOLS_DIR" ]; then
-            echo "::error::Android build-tools not found under $SDK_ROOT"
+            echo "::error::Android build-tools not found."
             exit 1
           fi
 
@@ -98,45 +98,67 @@ jobs:
             exit 1
           fi
 
+          echo "Checking APK signature..."
+
           if ! VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$APK_PATH")"; then
             echo "::error::APK signature verification failed."
             exit 1
           fi
 
+          echo "APK signature verification passed."
+
+          echo "Reading APK metadata..."
+
           if ! BADGING_OUTPUT="$("$AAPT2" dump badging "$APK_PATH")"; then
-            echo "::error::aapt2 could not read APK metadata."
+            echo "::error::Could not read APK metadata."
             exit 1
           fi
 
           BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
 
           PKG_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
+
           VER_CODE="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+
           VER_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
 
-          RAW_SHA1="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-1 digest:' | awk '{print toupper($NF)}')"
-          RAW_SHA256="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-256 digest:' | awk '{print toupper($NF)}')"
+          RAW_SHA1="$(printf '%s\n' "$VERIFY_OUT" | sed -n '/Signer #1 certificate SHA-1 digest:/s/.*digest: *//p' | sed -n '1p' | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+
+          RAW_SHA256="$(printf '%s\n' "$VERIFY_OUT" | sed -n '/Signer #1 certificate SHA-256 digest:/s/.*digest: *//p' | sed -n '1p' | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+
+          if [ -z "$PKG_NAME" ]; then
+            echo "::error::Could not read package name."
+            echo "$BADGING_LINE"
+            exit 1
+          fi
+
+          if [ "$PKG_NAME" != "com.taskz.app" ]; then
+            echo "::error::Unexpected package name: $PKG_NAME"
+            exit 1
+          fi
 
           if [ -z "$RAW_SHA1" ] || [ -z "$RAW_SHA256" ]; then
-            echo "::error::Could not extract signing certificate fingerprints."
+            echo "::error::Could not extract signing fingerprints."
+            echo "Full apksigner output:"
+            printf '%s\n' "$VERIFY_OUT"
             exit 1
           fi
 
           FMT_SHA1="$(printf '%s' "$RAW_SHA1" | sed 's/\(..\)/\1:/g; s/:$//')"
+
           FMT_SHA256="$(printf '%s' "$RAW_SHA256" | sed 's/\(..\)/\1:/g; s/:$//')"
 
-          if [ "$PKG_NAME" != "com.taskz.app" ]; then
-            echo "::error::Unexpected package name '$PKG_NAME' (expected com.taskz.app)"
-            exit 1
-          fi
-
-          echo "=== Taskz APK Build & Signing Verification ==="
+          echo ""
+          echo "=========================================="
+          echo "       TASKZ APK VERIFICATION"
+          echo "=========================================="
           echo "Package name   : $PKG_NAME"
           echo "Version code   : $VER_CODE"
           echo "Version name   : $VER_NAME"
-          echo "Signing config : Permanent CI keystore"
           echo "SHA-1          : $FMT_SHA1"
           echo "SHA-256        : $FMT_SHA256"
+          echo "Signature      : VERIFIED"
+          echo "=========================================="
 
       - name: Clean up temporary keystore
         if: always()
