@@ -78,7 +78,8 @@ jobs:
           AAPT2="$BUILD_TOOLS_DIR/aapt2"
 
           VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$APK_PATH")"
-          BADGING_LINE="$("$AAPT2" dump badging "$APK_PATH" | head -n 1)"
+          BADGING_OUTPUT="$("$AAPT2" dump badging "$APK_PATH")"
+BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '1p')"
 
           PKG_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
           VER_CODE="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
