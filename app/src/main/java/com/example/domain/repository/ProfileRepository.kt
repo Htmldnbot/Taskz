@@ -83,13 +83,14 @@ class ProfileRepository(
             newPhotoPath = uploadRes.getOrElse { return Result.failure(it) }
         }
 
-        // 3. Update DB with new photo path (or preserve existing)
+        // 3. Update DB with new photo path (or preserve existing) and normalized E.164 mobile
+        val normalizedMobile = com.example.core.network.SupabaseConfig.normalizeMobile(mobile)
         val targetPath = newPhotoPath ?: oldPhotoPath
         val updateRes = supabaseClient.updateProfile(
             accessToken = token,
             userId = userId,
             fullName = fullName.trim(),
-            mobile = mobile.trim(),
+            mobile = normalizedMobile.ifBlank { mobile.trim() },
             photoPath = targetPath
         )
 

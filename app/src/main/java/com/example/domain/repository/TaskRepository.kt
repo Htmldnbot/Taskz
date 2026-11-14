@@ -40,7 +40,6 @@ import android.content.Context
 import com.example.TaskzApplication
 import com.example.alarm.TaskAlarmScheduler
 import com.example.R
-import kotlinx.coroutines.tasks.await
 import com.example.core.model.AlarmType
 import com.example.core.model.LanProgressItem
 import com.example.core.model.ResponseType
@@ -118,9 +117,8 @@ class TaskRepository(
         if (!validToken.isNullOrBlank()) return validToken
         return userPrefs.getUserSession().accessToken?.takeIf {
             it.isNotBlank() &&
-                !it.startsWith("firebase_") &&
                 !it.startsWith("offline_") &&
-                !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+                it.split(".").size == 3
         }
     }
 
@@ -2644,6 +2642,9 @@ class TaskRepository(
     suspend fun syncPendingTasks() = withContext(Dispatchers.IO) {
         val db = TaskzDatabase.getInstance(context)
         val activeUserId = getActiveUserId()
+        if (!activeUserId.isNullOrBlank()) {
+            db.outboxDao().deleteLegacyPreMigrationEvents(activeUserId)
+        }
         val pendingEvents = if (!activeUserId.isNullOrBlank()) {
             db.outboxDao().getPendingEventsForUser(activeUserId)
         } else {
@@ -2675,11 +2676,15 @@ class TaskRepository(
                             }
                         } else {
                             val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
-                            val isPermanent = err.contains("not authorized", true) || err.contains("inactive", true)
+                            val isPermanent = err.contains("not authorized", true) ||
+                                err.contains("inactive", true) ||
+                                err.contains("cannot be blank", true)
                             db.outboxDao().markEventFailed(ev.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", now)
                         }
                     } catch (e: Exception) {
-                        Log.w(tag, "Failed to sync pending task ${ev.taskId}: ${e.message}")
+                        val msg = e.message ?: "Task creation exception"
+                        Log.w(tag, "Failed to sync pending task ${ev.taskId}: $msg")
+                        db.outboxDao().markEventFailed(ev.id, msg, "FAILED_RETRYABLE", now)
                     }
                 }
                 "TASK_DELETION" -> {
@@ -2696,10 +2701,65 @@ class TaskRepository(
                             }
                             if (res.isSuccess) {
                                 db.outboxDao().markEventSynced(ev.id, "DELETED", now)
+                            } else {
+                                val err = res.exceptionOrNull()?.message ?: "Task deletion sync error"
+                                db.outboxDao().markEventFailed(ev.id, err, "FAILED_RETRYABLE", now)
                             }
+                        } else {
+                            db.outboxDao().markEventFailed(ev.id, "Missing task ID for deletion", "FAILED_PERMANENT", now)
                         }
                     } catch (e: Exception) {
-                        Log.w(tag, "Failed to sync pending task deletion ${ev.taskId}: ${e.message}")
+                        val msg = e.message ?: "Task deletion exception"
+                        Log.w(tag, "Failed to sync pending task deletion ${ev.taskId}: $msg")
+                        db.outboxDao().markEventFailed(ev.id, msg, "FAILED_RETRYABLE", now)
+                    }
+                }
+                "GROUP_CREATION" -> {
+                    try {
+                        val payload = JSONObject(ev.payloadJson)
+                        var res = supabaseClient.createGroup(token, payload)
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            if (!refreshed.isNullOrBlank()) {
+                                token = refreshed
+                                res = supabaseClient.createGroup(token, payload)
+                            }
+                        }
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val serverGroupId = serverObj.optString("id", ev.taskId)
+                            db.outboxDao().markEventSynced(ev.id, serverGroupId, now)
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Group creation sync error"
+                            val isPermanent = err.contains("duplicate", true) || err.contains("unauthorized", true)
+                            db.outboxDao().markEventFailed(ev.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", now)
+                        }
+                    } catch (e: Exception) {
+                        db.outboxDao().markEventFailed(ev.id, e.message ?: "Group exception", "FAILED_RETRYABLE", now)
+                    }
+                }
+                "SHIFT_CREATION" -> {
+                    try {
+                        val payload = JSONObject(ev.payloadJson)
+                        var res = supabaseClient.createShift(token, payload)
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            if (!refreshed.isNullOrBlank()) {
+                                token = refreshed
+                                res = supabaseClient.createShift(token, payload)
+                            }
+                        }
+                        if (res.isSuccess) {
+                            val serverObj = res.getOrThrow()
+                            val serverShiftId = serverObj.optString("id", ev.taskId)
+                            db.outboxDao().markEventSynced(ev.id, serverShiftId, now)
+                        } else {
+                            val err = res.exceptionOrNull()?.message ?: "Shift creation sync error"
+                            val isPermanent = err.contains("duplicate", true) || err.contains("unauthorized", true)
+                            db.outboxDao().markEventFailed(ev.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", now)
+                        }
+                    } catch (e: Exception) {
+                        db.outboxDao().markEventFailed(ev.id, e.message ?: "Shift exception", "FAILED_RETRYABLE", now)
                     }
                 }
                 "TASK_RESPONSE", "PROGRESS_UPDATE", "LAN_CONFIRMATION", "COMPLETION_REQUEST" -> {
@@ -2713,6 +2773,13 @@ class TaskRepository(
                         val txt = payload.optString("textValue").takeIf { it.isNotBlank() && !it.equals("null", true) }
                         val lan = payload.optString("lanNumber").takeIf { it.isNotBlank() && !it.equals("null", true) }
                         val devTs = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        val dynMap = buildMap<String, String> {
+                            val dynObj = payload.optJSONObject("dynamic_values") ?: payload.optJSONObject("dynamicValues")
+                            dynObj?.keys()?.forEach { key ->
+                                val v = dynObj.optString(key, "")
+                                if (v.isNotBlank() && !v.equals("null", true)) put(key, v)
+                            }
+                        }
 
                         var res = supabaseClient.submitTaskResponse(
                             accessToken = token,
@@ -2725,7 +2792,8 @@ class TaskRepository(
                             text = txt,
                             lanNumber = lan,
                             idempotencyKey = ev.eventId,
-                            deviceTimestamp = devTs
+                            deviceTimestamp = devTs,
+                            dynamicValues = dynMap.takeIf { it.isNotEmpty() }
                         )
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
                             val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
@@ -2742,7 +2810,8 @@ class TaskRepository(
                                     text = txt,
                                     lanNumber = lan,
                                     idempotencyKey = ev.eventId,
-                                    deviceTimestamp = devTs
+                                    deviceTimestamp = devTs,
+                                    dynamicValues = dynMap.takeIf { it.isNotEmpty() }
                                 )
                             }
                         }
@@ -2760,11 +2829,14 @@ class TaskRepository(
                             val err = res.exceptionOrNull()?.message ?: "Response sync error"
                             val isPermanent = err.contains("not found", true) ||
                                 err.contains("cancelled", true) ||
-                                err.contains("violates foreign key", true)
+                                err.contains("violates foreign key", true) ||
+                                err.contains("invalid input syntax", true)
                             db.outboxDao().markEventFailed(ev.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", now)
                         }
                     } catch (e: Exception) {
-                        Log.w(tag, "Failed to sync pending task response ${ev.eventId}: ${e.message}")
+                        val msg = e.message ?: "Response sync exception"
+                        Log.w(tag, "Failed to sync pending task response ${ev.eventId}: $msg")
+                        db.outboxDao().markEventFailed(ev.id, msg, "FAILED_RETRYABLE", now)
                     }
                 }
                 "TASK_ACKNOWLEDGEMENT" -> {
@@ -2795,11 +2867,14 @@ class TaskRepository(
                         } else {
                             val err = res.exceptionOrNull()?.message ?: "Acknowledgement sync error"
                             val isPermanent = err.contains("not found", true) ||
-                                err.contains("violates foreign key", true)
+                                err.contains("violates foreign key", true) ||
+                                err.contains("invalid input syntax", true)
                             db.outboxDao().markEventFailed(ev.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", now)
                         }
                     } catch (e: Exception) {
-                        Log.w(tag, "Failed to sync pending task acknowledgement ${ev.eventId}: ${e.message}")
+                        val msg = e.message ?: "Acknowledgement exception"
+                        Log.w(tag, "Failed to sync pending task acknowledgement ${ev.eventId}: $msg")
+                        db.outboxDao().markEventFailed(ev.id, msg, "FAILED_RETRYABLE", now)
                     }
                 }
             }

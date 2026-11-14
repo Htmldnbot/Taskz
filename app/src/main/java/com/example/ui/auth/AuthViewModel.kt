@@ -8,6 +8,9 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.model.UserProfile
+import com.example.core.network.SupabaseConfig
+import com.example.data.remote.GoogleAuthManager
+import com.example.data.remote.GoogleSignInTokenResult
 import com.example.domain.repository.AuthRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +37,7 @@ sealed interface ResetRequestUiState {
 
 class AuthViewModel(
     private val authRepository: AuthRepository,
-    private val firebaseAuthService: com.example.data.remote.FirebaseAuthService = com.example.TaskzApplication.instance.firebaseAuthService
+    private val googleAuthManager: GoogleAuthManager = GoogleAuthManager()
 ) : ViewModel() {
 
     private val _loginState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
@@ -47,7 +50,7 @@ class AuthViewModel(
     val resetRequestState: StateFlow<ResetRequestUiState> = _resetRequestState.asStateFlow()
 
     fun login(employeeId: String, password: String) {
-        val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         if (normalizedEmpId.isBlank()) {
             _loginState.value = AuthUiState.Error("Please enter your Employee ID.")
             return
@@ -69,7 +72,9 @@ class AuthViewModel(
                     if (msg.contains("inactive", ignoreCase = true)) {
                         _loginState.value = AuthUiState.AccountInactive
                     } else {
-                        _loginState.value = AuthUiState.Error(msg.ifBlank { "Login failed. Check your Employee ID and password." })
+                        _loginState.value = AuthUiState.Error(
+                            msg.ifBlank { "Login failed. Check your Employee ID and password." }
+                        )
                     }
                 }
             )
@@ -85,27 +90,24 @@ class AuthViewModel(
         confirmPassword: String,
         selectedPhotoUri: Uri?
     ) {
-        val normalizedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         val trimmedName = fullName.trim()
-        val trimmedMobile = mobile.trim()
+        val normalizedMobile = normalizeMobile(mobile)
 
-        // Validation
-        if (normalizedEmpId.length < 2 || normalizedEmpId.length > 40) {
-            _signUpState.value = AuthUiState.Error("Employee ID must be between 2 and 40 characters.")
-            return
-        }
-        if (!normalizedEmpId.matches(Regex("^[A-Z0-9._-]+$"))) {
-            _signUpState.value = AuthUiState.Error("Employee ID may only contain letters, numbers, dots, underscores, or hyphens.")
+        if (!normalizedEmpId.matches(Regex("^[A-Z0-9._-]{2,40}$"))) {
+            _signUpState.value = AuthUiState.Error(
+                "Employee ID must be 2 to 40 letters, numbers, dots, underscores, or hyphens."
+            )
             return
         }
         if (trimmedName.length < 2) {
             _signUpState.value = AuthUiState.Error("Please enter your full name (at least 2 characters).")
             return
         }
-        val normalizedMobile = normalizeMobile(trimmedMobile)
-        val mobileDigits = normalizedMobile.filter { it.isDigit() }
-        if (mobileDigits.length < 8 || mobileDigits.length > 15 || !normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
-            _signUpState.value = AuthUiState.Error("Please enter a valid mobile number (e.g., +91 9876543210 or 9876543210).")
+        if (!normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
+            _signUpState.value = AuthUiState.Error(
+                "Please enter a valid mobile number (e.g., +919876543210 or 9876543210)."
+            )
             return
         }
         if (password.length < 6) {
@@ -119,8 +121,6 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _signUpState.value = AuthUiState.Loading
-
-            // Process image if selected
             var photoBytes: ByteArray? = null
             var photoFilename: String? = null
             if (selectedPhotoUri != null) {
@@ -148,72 +148,19 @@ class AuthViewModel(
         }
     }
 
-    /**
-     * Continue in Offline / Local Demo mode when backend auth is unavailable or rate limited.
-     */
-    fun registerOffline(
-        employeeId: String,
-        fullName: String,
-        mobile: String
-    ) {
-        val trimmedEmpId = employeeId.trim()
-        val trimmedName = fullName.trim()
-        val normalizedMobile = normalizeMobile(mobile.trim())
-
-        if (trimmedEmpId.length < 3) {
-            _signUpState.value = AuthUiState.Error("Employee ID must be at least 3 characters.")
-            return
-        }
-        if (trimmedName.isBlank()) {
-            _signUpState.value = AuthUiState.Error("Please enter your full name.")
-            return
-        }
-
-        viewModelScope.launch {
-            _signUpState.value = AuthUiState.Loading
-            val result = authRepository.registerOfflineDemo(
-                employeeId = trimmedEmpId,
-                fullName = trimmedName,
-                mobile = normalizedMobile
-            )
-            result.fold(
-                onSuccess = { profile ->
-                    _signUpState.value = AuthUiState.Success(profile)
-                },
-                onFailure = { error ->
-                    _signUpState.value = AuthUiState.Error(error.message ?: "Offline registration failed.")
-                }
-            )
-        }
-    }
-
     companion object {
-        fun normalizeMobile(input: String): String {
-            val trimmed = input.trim()
-            val cleaned = trimmed.replace(Regex("[^0-9+]"), "")
-            if (cleaned.startsWith("+")) {
-                return cleaned
-            }
-            val digits = cleaned.replace("+", "")
-            return when {
-                digits.length == 10 && digits[0] in '6'..'9' -> "+91$digits"
-                digits.length == 10 -> "+1$digits"
-                digits.length == 11 && digits.startsWith("1") -> "+$digits"
-                digits.length == 12 && digits.startsWith("91") -> "+$digits"
-                else -> "+$digits"
-            }
-        }
+        fun normalizeMobile(input: String): String = SupabaseConfig.normalizeMobile(input)
     }
 
     fun submitResetRequest(employeeId: String, mobile: String, message: String?) {
-        val trimmedEmpId = employeeId.trim()
-        val trimmedMobile = mobile.trim().replace(Regex("[^0-9]"), "")
+        val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedMobile = normalizeMobile(mobile)
 
         if (trimmedEmpId.isBlank()) {
             _resetRequestState.value = ResetRequestUiState.Error("Please enter your Employee ID.")
             return
         }
-        if (trimmedMobile.length < 10) {
+        if (!normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
             _resetRequestState.value = ResetRequestUiState.Error("Please enter a valid mobile number.")
             return
         }
@@ -222,7 +169,7 @@ class AuthViewModel(
             _resetRequestState.value = ResetRequestUiState.Loading
             val result = authRepository.submitPasswordResetRequest(
                 employeeId = trimmedEmpId,
-                mobile = trimmedMobile,
+                mobile = normalizedMobile,
                 message = message?.takeIf { it.isNotBlank() } ?: "I forgot my password."
             )
             result.fold(
@@ -253,7 +200,7 @@ class AuthViewModel(
     }
 
     // ----------------------------------------------------
-    // Email & Employee ID Authentication
+    // Email & Employee ID Authentication (Native Supabase Auth)
     // ----------------------------------------------------
 
     fun loginWithEmailPassword(emailOrEmpId: String, password: String) {
@@ -267,7 +214,6 @@ class AuthViewModel(
             return
         }
 
-        // If it does NOT contain '@', it is an Employee ID: authenticate via Supabase
         if (!trimmed.contains("@")) {
             login(trimmed, password)
             return
@@ -275,13 +221,20 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signInWithEmailPassword(trimmed, password)
+            val result = authRepository.loginWithEmail(trimmed, password)
             result.fold(
                 onSuccess = { profile ->
                     _loginState.value = AuthUiState.Success(profile)
                 },
                 onFailure = { error ->
-                    _loginState.value = AuthUiState.Error(error.message ?: "Sign-in failed. Please check your credentials.")
+                    val msg = error.message.orEmpty()
+                    if (msg.contains("inactive", ignoreCase = true)) {
+                        _loginState.value = AuthUiState.AccountInactive
+                    } else {
+                        _loginState.value = AuthUiState.Error(
+                            msg.ifBlank { "Sign-in failed. Please check your email and password." }
+                        )
+                    }
                 }
             )
         }
@@ -294,38 +247,39 @@ class AuthViewModel(
             return
         }
         viewModelScope.launch {
-            val result = firebaseAuthService.sendPasswordReset(trimmedEmail)
+            val result = authRepository.sendPasswordResetEmail(trimmedEmail)
             onResult(result)
         }
     }
 
     fun signUpWithEmailPassword(
+        context: Context,
         email: String,
         password: String,
         fullName: String,
         mobile: String,
-        employeeId: String = ""
+        employeeId: String,
+        selectedPhotoUri: Uri? = null
     ) {
-        val trimmedEmail = email.trim()
+        val trimmedEmail = email.trim().lowercase()
         val trimmedName = fullName.trim()
-        val trimmedMobile = mobile.trim()
-        val normalizedMobile = normalizeMobile(trimmedMobile)
-        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedMobile = normalizeMobile(mobile)
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
 
         if (trimmedName.length < 2) {
-            _signUpState.value = AuthUiState.Error("Please enter your full name.")
+            _signUpState.value = AuthUiState.Error("Please enter your full name (at least 2 characters).")
             return
         }
         if (trimmedEmail.isBlank() || !trimmedEmail.contains("@")) {
             _signUpState.value = AuthUiState.Error("Please enter a valid email address.")
             return
         }
-        if (trimmedMobile.filter { it.isDigit() }.length < 10) {
+        if (!normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
             _signUpState.value = AuthUiState.Error("Please enter a valid 10-digit mobile number.")
             return
         }
-        if (trimmedEmpId.isBlank()) {
-            _signUpState.value = AuthUiState.Error("Please enter your Employee ID (up to 7 digits).")
+        if (!normalizedEmpId.matches(Regex("^[A-Z0-9._-]{2,40}$"))) {
+            _signUpState.value = AuthUiState.Error("Employee ID must be 2 to 40 letters or digits.")
             return
         }
         if (password.length < 6) {
@@ -335,127 +289,106 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _signUpState.value = AuthUiState.Loading
-
-            // 1. Check local SQLite cache for duplicate Employee ID
-            val localProfile = com.example.TaskzApplication.instance.database.profileDao().findProfileByIdOrEmployeeId(trimmedEmpId)
-            if (localProfile != null) {
-                _signUpState.value = AuthUiState.Error("Employee ID '$trimmedEmpId' is already registered. Kindly sign in.")
-                return@launch
+            var photoBytes: ByteArray? = null
+            var photoFilename: String? = null
+            if (selectedPhotoUri != null) {
+                photoBytes = compressImageUri(context, selectedPhotoUri)
+                photoFilename = "avatar_${System.currentTimeMillis()}.jpg"
             }
 
-            // 2. Enforce email uniqueness & register email/password in Firebase Auth first
-            val firebaseCreateRes = firebaseAuthService.createFirebaseEmailAccount(
+            val result = authRepository.signUpWithEmail(
                 email = trimmedEmail,
                 password = password,
+                employeeId = normalizedEmpId,
                 fullName = trimmedName,
-                employeeId = trimmedEmpId
-            )
-            if (firebaseCreateRes.isFailure) {
-                _signUpState.value = AuthUiState.Error(
-                    firebaseCreateRes.exceptionOrNull()?.message ?: "Email address '$trimmedEmail' is already registered. Kindly sign in."
-                )
-                return@launch
-            }
-
-            // 3. Primary registration in Supabase (the single authoritative backend for Taskz)
-            val result = authRepository.signUp(
-                employeeId = trimmedEmpId,
-                password = password,
-                fullName = trimmedName,
-                mobile = normalizedMobile
+                mobile = normalizedMobile,
+                photoBytes = photoBytes,
+                photoFilename = photoFilename
             )
 
             result.fold(
                 onSuccess = { profile ->
-                    com.example.TaskzApplication.instance.userPreferences.apply {
-                        saveEmailEmployeeHint(trimmedEmail, trimmedEmpId)
-                        saveEmailAuthMethodHint(trimmedEmail, "email")
-                    }
                     _signUpState.value = AuthUiState.Success(profile)
                 },
                 onFailure = { error ->
-                    firebaseAuthService.rollbackFirebaseEmailAccount(trimmedEmail)
-                    val msg = error.message.orEmpty()
-                    val userMsg = when {
-                        msg.contains("already registered", ignoreCase = true) ||
-                        msg.contains("already exists", ignoreCase = true) ->
-                            "Employee ID '$trimmedEmpId' is already registered. Kindly sign in."
-                        msg.contains("Email address", ignoreCase = true) && msg.contains("already registered", ignoreCase = true) ->
-                            "Email address '$trimmedEmail' is already registered. Kindly sign in."
-                        else -> msg.ifBlank { "Registration failed. Please try again." }
-                    }
-                    _signUpState.value = AuthUiState.Error(userMsg)
+                    _signUpState.value = AuthUiState.Error(
+                        error.message?.ifBlank { "Registration failed. Please try again." }
+                            ?: "Registration failed. Please try again."
+                    )
                 }
             )
         }
     }
 
     // ----------------------------------------------------
-    // Google Sign-In via Credential Manager
+    // Google Sign-In via Credential Manager -> Supabase Auth ID Token
     // ----------------------------------------------------
 
     fun signInWithGoogle(activity: Activity) {
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signInWithGoogle(activity)
-            result.fold(
-                onSuccess = { profile ->
-                    _loginState.value = AuthUiState.Success(profile)
-                },
-                onFailure = { error ->
-                    _loginState.value = AuthUiState.Error(error.message ?: "Google Sign-In failed.")
+            when (val tokenRes = googleAuthManager.requestGoogleIdToken(activity)) {
+                is GoogleSignInTokenResult.Cancelled -> {
+                    _loginState.value = AuthUiState.Idle
                 }
-            )
-        }
-    }
-
-    fun signInWithGoogleToken(idToken: String, displayName: String? = null, email: String? = null) {
-        viewModelScope.launch {
-            _loginState.value = AuthUiState.Loading
-            val result = firebaseAuthService.signInWithGoogleIdToken(idToken, displayName, email)
-            result.fold(
-                onSuccess = { profile ->
-                    _loginState.value = AuthUiState.Success(profile)
-                },
-                onFailure = { error ->
-                    _loginState.value = AuthUiState.Error(error.message ?: "Google Sign-In failed.")
+                is GoogleSignInTokenResult.Failure -> {
+                    _loginState.value = AuthUiState.Error(tokenRes.message)
                 }
-            )
+                is GoogleSignInTokenResult.Success -> {
+                    val authResult = authRepository.signInWithGoogleIdToken(
+                        idToken = tokenRes.idToken,
+                        rawNonce = tokenRes.rawNonce,
+                        displayNameHint = tokenRes.displayName,
+                        emailHint = tokenRes.email
+                    )
+                    authResult.fold(
+                        onSuccess = { profile ->
+                            _loginState.value = AuthUiState.Success(profile)
+                        },
+                        onFailure = { error ->
+                            val msg = error.message.orEmpty()
+                            if (msg.contains("inactive", ignoreCase = true)) {
+                                _loginState.value = AuthUiState.AccountInactive
+                            } else {
+                                _loginState.value = AuthUiState.Error(
+                                    msg.ifBlank { "Google authentication failed." }
+                                )
+                            }
+                        }
+                    )
+                }
+            }
         }
     }
 
     fun completeGoogleProfile(
-        uid: String,
         fullName: String,
         mobile: String,
-        employeeId: String,
-        role: String
+        employeeId: String
     ) {
         val trimmedName = fullName.trim()
-        val trimmedMobile = mobile.trim()
-        val trimmedEmpId = employeeId.trim()
+        val normalizedMobile = normalizeMobile(mobile)
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
 
         if (trimmedName.length < 2) {
             _loginState.value = AuthUiState.Error("Please enter your full name.")
             return
         }
-        if (trimmedMobile.filter { it.isDigit() }.length < 10) {
+        if (!normalizedMobile.matches(Regex("^\\+[1-9][0-9]{7,14}$"))) {
             _loginState.value = AuthUiState.Error("Please enter a valid 10-digit mobile number.")
             return
         }
-        if (trimmedEmpId.isBlank() || trimmedEmpId.length > 7 || !trimmedEmpId.all { it.isDigit() }) {
-            _loginState.value = AuthUiState.Error("Employee ID must be numeric and up to 7 digits.")
+        if (!normalizedEmpId.matches(Regex("^[A-Z0-9._-]{2,40}$"))) {
+            _loginState.value = AuthUiState.Error("Employee ID must be 2 to 40 letters or digits.")
             return
         }
 
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
-            val result = firebaseAuthService.completeGoogleProfile(
-                uid = uid,
+            val result = authRepository.completeGoogleProfile(
+                employeeId = normalizedEmpId,
                 fullName = trimmedName,
-                mobile = trimmedMobile,
-                employeeId = trimmedEmpId,
-                appRole = role
+                mobile = normalizedMobile
             )
             result.fold(
                 onSuccess = { profile ->
@@ -468,6 +401,13 @@ class AuthViewModel(
         }
     }
 
+    fun cancelPendingProfileCompletion() {
+        viewModelScope.launch {
+            authRepository.cancelPendingProfileCompletion()
+            _loginState.value = AuthUiState.Idle
+        }
+    }
+
     private suspend fun compressImageUri(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
         try {
             val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext null
@@ -475,7 +415,6 @@ class AuthViewModel(
             inputStream.close()
             if (original == null) return@withContext null
 
-            // Resize if exceeds 800px
             val maxDimension = 800
             val width = original.width
             val height = original.height

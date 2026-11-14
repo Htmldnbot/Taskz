@@ -44,8 +44,7 @@ class SupabaseClient(
         val trimmed = accessToken.trim()
         if (trimmed.isBlank() ||
             trimmed.startsWith("offline_") ||
-            trimmed.startsWith("firebase_") ||
-            com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(trimmed)
+            trimmed.split(".").size != 3
         ) {
             return ""
         }
@@ -148,6 +147,9 @@ class SupabaseClient(
 
     /**
      * Log in an existing employee with Employee ID and Password.
+     * Calls the server-side employee-login Edge Function first (resolves any Employee ID
+     * regardless of whether the user registered with Email, Google, or Employee ID),
+     * and falls back to legacy internal auth email lookup only if the Edge Function is 404.
      */
     suspend fun login(
         employeeId: String,
@@ -156,6 +158,53 @@ class SupabaseClient(
         try {
             checkConfig()
             val normalized = SupabaseConfig.normalizeEmployeeId(employeeId)
+
+            val edgeBody = JSONObject().apply {
+                put("employee_id", normalized)
+                put("password", password)
+            }
+            val edgeRequest = Request.Builder()
+                .url("${baseUrl()}/functions/v1/employee-login")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
+                .addHeader("Content-Type", "application/json")
+                .post(edgeBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val edgeResponse = okHttpClient.newCall(edgeRequest).execute()
+            val edgeRespBody = edgeResponse.body?.string() ?: ""
+
+            if (edgeResponse.isSuccessful) {
+                val json = JSONObject(edgeRespBody)
+                val accessToken = json.getString("access_token")
+                val refreshToken = json.optString("refresh_token")
+                val userObj = json.getJSONObject("user")
+                val userId = userObj.getString("id")
+                val resolvedEmpId = json.optString("employee_id", normalized).ifBlank { normalized }
+                return@withContext Result.success(
+                    AuthSessionResponse(
+                        accessToken = accessToken,
+                        refreshToken = refreshToken.takeIf { it.isNotBlank() },
+                        userId = userId,
+                        employeeId = resolvedEmpId
+                    )
+                )
+            }
+
+            if (edgeResponse.code == 401 || edgeResponse.code == 403 || edgeResponse.code == 400) {
+                val parsed = parseErrorMessage(edgeRespBody, "Invalid Employee ID or password.")
+                return@withContext Result.failure(IOException(parsed))
+            }
+
+            val isEdgeUnavailable = edgeResponse.code == 404 ||
+                edgeRespBody.contains("NOT_FOUND", ignoreCase = true) ||
+                edgeRespBody.contains("Requested function was not found", ignoreCase = true)
+            if (!isEdgeUnavailable) {
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(edgeRespBody, "Employee login failed (${edgeResponse.code})"))
+                )
+            }
+
             val candidateEmails = listOf(
                 SupabaseConfig.toInternalAuthEmail(normalized),
                 SupabaseConfig.toLegacyAuthEmail(normalized),
@@ -194,7 +243,7 @@ class SupabaseClient(
                             accessToken = accessToken,
                             refreshToken = refreshToken.takeIf { it.isNotBlank() },
                             userId = userId,
-                            employeeId = employeeId.trim()
+                            employeeId = normalized
                         )
                     )
                 } else {
@@ -208,6 +257,153 @@ class SupabaseClient(
                 return@withContext Result.failure(IOException("Invalid Employee ID or password."))
             }
             Result.failure(IOException(lastErrorMsg))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Native Supabase Auth Google ID-token sign-in (with cryptographic raw nonce verification).
+     */
+    suspend fun signInWithGoogleIdToken(
+        idToken: String,
+        rawNonce: String
+    ): Result<AuthSessionResponse> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("provider", "google")
+                put("id_token", idToken)
+                put("nonce", rawNonce)
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/auth/v1/token?grant_type=id_token")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                val parsed = parseErrorMessage(responseBody, "Google authentication failed (${response.code})")
+                return@withContext Result.failure(IOException(parsed))
+            }
+
+            val json = JSONObject(responseBody)
+            val accessToken = json.optString("access_token")
+            val refreshToken = json.optString("refresh_token")
+            val userObj = json.optJSONObject("user")
+            val userId = userObj?.optString("id").orEmpty()
+            if (accessToken.isBlank() || userId.isBlank()) {
+                return@withContext Result.failure(IOException("Supabase did not return a valid session for Google sign-in."))
+            }
+
+            Result.success(
+                AuthSessionResponse(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken.takeIf { it.isNotBlank() },
+                    userId = userId,
+                    employeeId = ""
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Send password reset email via native Supabase Auth /auth/v1/recover.
+     */
+    suspend fun sendPasswordResetEmail(email: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val body = JSONObject().apply {
+                put("email", email.trim().lowercase())
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/auth/v1/recover")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${anonKey()}")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                if (response.code == 429) {
+                    return@withContext Result.failure(IOException("Too many reset emails requested. Please try again later or use 'Contact Administrator'."))
+                }
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to send reset email (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Complete or update profile details securely for Google / first-time users via RPC complete_my_profile().
+     */
+    suspend fun completeMyProfile(
+        accessToken: String,
+        employeeId: String,
+        fullName: String,
+        mobile: String
+    ): Result<UserProfile> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val normalizedEmp = SupabaseConfig.normalizeEmployeeId(employeeId)
+            val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
+            val body = JSONObject().apply {
+                put("p_employee_id", normalizedEmp)
+                put("p_full_name", fullName.trim())
+                put("p_mobile", normalizedMobile)
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/complete_my_profile")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                val isMissingRpc = response.code == 404 ||
+                    responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true)
+                if (isMissingRpc) {
+                    val userId = extractUserIdFromJwt(bearer)
+                        ?: return@withContext Result.failure(IOException("401 Authentication required"))
+                    val existing = fetchProfileById(bearer, userId).getOrNull()
+                    return@withContext if (existing == null) {
+                        createProfile(
+                            bearer,
+                            UserProfile(
+                                id = userId,
+                                employeeId = normalizedEmp,
+                                fullName = fullName.trim(),
+                                mobile = normalizedMobile,
+                                appRole = "employee",
+                                isActive = true
+                            )
+                        )
+                    } else {
+                        updateProfile(bearer, userId, fullName.trim(), normalizedMobile, existing.profilePhotoPath)
+                    }
+                }
+                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to save profile (${response.code})")))
+            }
+
+            Result.success(parseProfileJson(JSONObject(responseBody)))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -444,42 +640,53 @@ class SupabaseClient(
     ): Result<UserProfile> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val body = JSONObject().apply {
-                put("id", profile.id)
-                put("employee_id", SupabaseConfig.normalizeEmployeeId(profile.employeeId))
-                put("full_name", profile.fullName.trim())
-                put("mobile", profile.mobile.trim())
-                if (!profile.profilePhotoPath.isNullOrBlank()) {
-                    put("profile_photo_path", profile.profilePhotoPath)
+            val bearer = getAuthBearer(accessToken)
+            val candidates = SupabaseConfig.mobileFormatCandidates(profile.mobile)
+                .ifEmpty { listOf(profile.mobile.trim()) }
+
+            var lastError = "Failed to create profile"
+            for (mobileCandidate in candidates) {
+                val body = JSONObject().apply {
+                    put("id", profile.id)
+                    put("employee_id", SupabaseConfig.normalizeEmployeeId(profile.employeeId))
+                    put("full_name", profile.fullName.trim())
+                    put("mobile", mobileCandidate)
+                    if (!profile.profilePhotoPath.isNullOrBlank()) {
+                        put("profile_photo_path", profile.profilePhotoPath)
+                    }
+                    put("app_role", "employee")
+                    put("is_active", true)
                 }
-                put("app_role", "employee")
-                put("is_active", true)
-            }
 
-            val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/profiles")
-                .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
-                .addHeader("Prefer", "return=representation")
-                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
-                .build()
+                val request = Request.Builder()
+                    .url("${baseUrl()}/rest/v1/profiles")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer $bearer")
+                    .addHeader("Prefer", "return=representation")
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
 
-            val response = okHttpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+                val response = okHttpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
 
-            if (!response.isSuccessful) {
+                if (response.isSuccessful) {
+                    val jsonArray = JSONArray(responseBody)
+                    val created = jsonArray.getJSONObject(0)
+                    return@withContext Result.success(parseProfileJson(created))
+                }
+
                 val errorMsg = parseErrorMessage(responseBody, "Failed to create profile")
                 if (errorMsg.contains("duplicate key", ignoreCase = true) ||
                     errorMsg.contains("profiles_employee_id_unique", ignoreCase = true)
                 ) {
                     return@withContext Result.failure(IOException("Employee ID is already in use by another account."))
                 }
-                return@withContext Result.failure(IOException(errorMsg))
+                lastError = errorMsg
+                if (!errorMsg.contains("profiles_mobile_check", ignoreCase = true)) {
+                    return@withContext Result.failure(IOException(errorMsg))
+                }
             }
-
-            val jsonArray = JSONArray(responseBody)
-            val created = jsonArray.getJSONObject(0)
-            Result.success(parseProfileJson(created))
+            Result.failure(IOException(lastError))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -487,7 +694,7 @@ class SupabaseClient(
 
     /**
      * Update safe profile fields (Full Name, Mobile, Photo Path).
-     * Where profiles.id = userId.
+     * Tries canonical E.164 first, then RPC update_my_profile, then legacy mobile formats if a legacy constraint rejects E.164.
      */
     suspend fun updateProfile(
         accessToken: String,
@@ -498,34 +705,89 @@ class SupabaseClient(
     ): Result<UserProfile> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
-            val body = JSONObject().apply {
-                put("full_name", fullName.trim())
-                put("mobile", mobile.trim())
-                if (photoPath != null) {
-                    put("profile_photo_path", photoPath)
+            val bearer = getAuthBearer(accessToken)
+            val candidates = SupabaseConfig.mobileFormatCandidates(mobile)
+                .ifEmpty { listOf(mobile.trim()) }
+
+            var lastError = "Failed to update profile"
+            for (idx in candidates.indices) {
+                val mobileCandidate = candidates[idx]
+                val body = JSONObject().apply {
+                    put("full_name", fullName.trim())
+                    put("mobile", mobileCandidate)
+                    if (photoPath != null) {
+                        put("profile_photo_path", photoPath)
+                    }
+                }
+
+                val request = Request.Builder()
+                    .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId")
+                    .addHeader("apikey", anonKey())
+                    .addHeader("Authorization", "Bearer $bearer")
+                    .addHeader("Prefer", "return=representation")
+                    .patch(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                val response = okHttpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+
+                if (response.isSuccessful) {
+                    val jsonArray = JSONArray(responseBody)
+                    if (jsonArray.length() > 0) {
+                        return@withContext Result.success(parseProfileJson(jsonArray.getJSONObject(0)))
+                    }
+                    val fetched = fetchProfileById(bearer, userId).getOrNull()
+                    if (fetched != null) {
+                        return@withContext Result.success(fetched)
+                    }
+                    return@withContext Result.failure(IOException("Profile update returned empty response"))
+                }
+
+                val errorMsg = parseErrorMessage(responseBody, "Failed to update profile (${response.code})")
+                lastError = errorMsg
+                val isMobileCheckError = errorMsg.contains("profiles_mobile_check", ignoreCase = true) ||
+                    responseBody.contains("profiles_mobile_check", ignoreCase = true)
+
+                if (idx == 0 && isMobileCheckError) {
+                    // Try RPC update_my_profile if migration 012 is applied
+                    val rpcRes = tryUpdateProfileViaRpc(bearer, fullName.trim(), mobileCandidate, photoPath)
+                    if (rpcRes.isSuccess) return@withContext rpcRes
+                }
+
+                if (!isMobileCheckError) {
+                    return@withContext Result.failure(IOException(errorMsg))
                 }
             }
-
-            val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/profiles?id=eq.$userId")
-                .addHeader("apikey", anonKey())
-                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
-                .addHeader("Prefer", "return=representation")
-                .patch(body.toString().toRequestBody(JSON_MEDIA_TYPE))
-                .build()
-
-            val response = okHttpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException(parseErrorMessage(responseBody, "Failed to update profile")))
-            }
-
-            val jsonArray = JSONArray(responseBody)
-            val updated = jsonArray.getJSONObject(0)
-            Result.success(parseProfileJson(updated))
+            Result.failure(IOException(lastError))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun tryUpdateProfileViaRpc(
+        bearer: String,
+        fullName: String,
+        mobile: String,
+        photoPath: String?
+    ): Result<UserProfile> {
+        val body = JSONObject().apply {
+            put("p_full_name", fullName)
+            put("p_mobile", mobile)
+            if (photoPath != null) put("p_profile_photo_path", photoPath)
+        }
+        val req = Request.Builder()
+            .url("${baseUrl()}/rest/v1/rpc/update_my_profile")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        val respBody = resp.body?.string() ?: ""
+        return if (resp.isSuccessful && respBody.isNotBlank()) {
+            Result.success(parseProfileJson(JSONObject(respBody)))
+        } else {
+            Result.failure(IOException(parseErrorMessage(respBody, "RPC update_my_profile failed")))
         }
     }
 
@@ -901,8 +1163,11 @@ class SupabaseClient(
                 }
 
                 val isMissingOrMismatchedRpc = code == 404 ||
+                    code == 300 ||
                     responseBody.contains("PGRST202", ignoreCase = true) ||
-                    responseBody.contains("Could not find the function", ignoreCase = true)
+                    responseBody.contains("PGRST203", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true) ||
+                    responseBody.contains("Could not choose the best candidate", ignoreCase = true)
 
                 if (isMissingOrMismatchedRpc) {
                     val retry = executeRpc(buildRpcBody(includeExtendedParams = false))
@@ -914,13 +1179,17 @@ class SupabaseClient(
                 }
 
                 val shouldUseRestFallback = code == 404 ||
+                    code == 300 ||
                     responseBody.contains("PGRST202", ignoreCase = true) ||
+                    responseBody.contains("PGRST203", ignoreCase = true) ||
                     responseBody.contains("Could not find the function", ignoreCase = true) ||
+                    responseBody.contains("Could not choose the best candidate", ignoreCase = true) ||
+                    responseBody.contains("does not accept responses", ignoreCase = true) ||
                     responseBody.contains("not authorized", ignoreCase = true) ||
                     responseBody.contains("User profile not found", ignoreCase = true)
 
                 if (shouldUseRestFallback) {
-                    Log.w(TAG, "RPC submit_task_response unavailable or blocked ($responseBody); falling back to PostgREST")
+                    Log.w(TAG, "RPC submit_task_response unavailable or blocked ($code: $responseBody); falling back to PostgREST")
                     return@withContext submitTaskResponseViaRestFallback(
                         bearer = bearer,
                         taskId = taskId,
@@ -932,7 +1201,8 @@ class SupabaseClient(
                         text = text,
                         lanNumber = lanNumber,
                         idempotencyKey = idempotencyKey,
-                        deviceTimestamp = deviceTimestamp
+                        deviceTimestamp = deviceTimestamp,
+                        dynamicValues = dynamicValues
                     )
                 }
 
@@ -958,7 +1228,8 @@ class SupabaseClient(
         text: String?,
         lanNumber: String?,
         idempotencyKey: String?,
-        deviceTimestamp: String?
+        deviceTimestamp: String?,
+        dynamicValues: Map<String, String>? = null
     ): Result<JSONObject> {
         val userId = extractUserIdFromJwt(bearer)
             ?: return Result.failure(IOException("401 Authentication required: invalid user session"))
@@ -1027,6 +1298,8 @@ class SupabaseClient(
             if (numeric2 != null) put("numeric_value_2", numeric2)
             if (!text.isNullOrBlank()) put("text_value", text)
             if (!idempotencyKey.isNullOrBlank()) put("idempotency_key", idempotencyKey)
+            if (!deviceTimestamp.isNullOrBlank()) put("device_timestamp", deviceTimestamp)
+            if (!dynamicValues.isNullOrEmpty()) put("dynamic_values", JSONObject(dynamicValues))
         }
 
         val insertReq = Request.Builder()
@@ -1248,8 +1521,12 @@ class SupabaseClient(
                     return@withContext Result.failure(IOException(msg))
                 }
                 val isMissingRpc = response.code == 404 ||
+                    response.code == 300 ||
                     responseBody.contains("PGRST202", ignoreCase = true) ||
-                    responseBody.contains("Could not find the function", ignoreCase = true)
+                    responseBody.contains("PGRST203", ignoreCase = true) ||
+                    responseBody.contains("Could not find the function", ignoreCase = true) ||
+                    responseBody.contains("Could not choose the best candidate", ignoreCase = true) ||
+                    responseBody.contains("Not authorized", ignoreCase = true)
                 if (isMissingRpc) {
                     val userId = extractUserIdFromJwt(bearer)
                         ?: return@withContext Result.failure(IOException("401 Authentication required"))
@@ -2547,6 +2824,260 @@ class SupabaseClient(
             val respBody = response.body?.string() ?: ""
             if (!response.isSuccessful) {
                 return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to upsert profile (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch active canonical work roles from Supabase.
+     */
+    suspend fun fetchWorkRoles(accessToken: String): Result<List<com.example.core.model.WorkRole>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/work_roles?select=*&is_active=eq.true&order=sort_order.asc")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(body, "Failed to fetch work roles (${response.code})")))
+            }
+
+            val array = JSONArray(body)
+            val list = mutableListOf<com.example.core.model.WorkRole>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    com.example.core.model.WorkRole(
+                        id = obj.optString("id"),
+                        name = obj.optString("name"),
+                        code = obj.optString("code"),
+                        description = obj.optString("description").takeIf { it.isNotBlank() && it != "null" },
+                        isActive = obj.optBoolean("is_active", true),
+                        sortOrder = obj.optInt("sort_order", i)
+                    )
+                )
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Patch task fields on Supabase PostgREST.
+     */
+    suspend fun updateTaskFields(
+        accessToken: String,
+        taskId: String,
+        updates: JSONObject
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val encodedId = java.net.URLEncoder.encode(taskId, "UTF-8")
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/tasks?id=eq.$encodedId")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .patch(updates.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(body, "Failed to update task (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch task join requests for a specific task from Supabase.
+     */
+    suspend fun fetchTaskJoinRequests(
+        accessToken: String,
+        taskId: String
+    ): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val encodedId = java.net.URLEncoder.encode(taskId, "UTF-8")
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/task_join_requests?task_id=eq.$encodedId&select=*,profiles:user_id(id,employee_id,full_name,profile_photo_path)&order=created_at.desc")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(body, "Failed to fetch task join requests (${response.code})")))
+            }
+            val array = JSONArray(body)
+            val list = mutableListOf<JSONObject>()
+            for (i in 0 until array.length()) {
+                list.add(array.getJSONObject(i))
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Request to join a group via RPC request_group_join.
+     */
+    suspend fun requestGroupJoin(
+        accessToken: String,
+        groupId: String,
+        message: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val body = JSONObject().apply {
+                put("p_group", groupId)
+                if (!message.isNullOrBlank()) put("p_message", message)
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/request_group_join")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            val response = okHttpClient.newCall(request).execute()
+            val respBody = response.body?.string() ?: "{}"
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to request group join (${response.code})")))
+            }
+            Result.success(JSONObject(respBody))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Review group join request via RPC review_group_join.
+     */
+    suspend fun reviewGroupJoin(
+        accessToken: String,
+        requestId: String,
+        approve: Boolean
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val body = JSONObject().apply {
+                put("p_request", requestId)
+                put("p_approve", approve)
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/review_group_join")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            val response = okHttpClient.newCall(request).execute()
+            val respBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to review group join (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Request task completion confirmation via RPC request_task_completion.
+     */
+    suspend fun requestTaskCompletion(
+        accessToken: String,
+        taskId: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val body = JSONObject().apply { put("p_task", taskId) }
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/request_task_completion")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            val response = okHttpClient.newCall(request).execute()
+            val respBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to submit completion request (${response.code})")))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Review task completion request via RPC review_task_completion.
+     */
+    suspend fun reviewTaskCompletion(
+        accessToken: String,
+        taskId: String,
+        approve: Boolean,
+        comment: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) {
+                return@withContext Result.failure(IOException("401 Authentication session expired or invalid"))
+            }
+            val body = JSONObject().apply {
+                put("p_task", taskId)
+                put("p_approve", approve)
+                if (!comment.isNullOrBlank()) put("p_comment", comment)
+            }
+            val request = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/review_task_completion")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            val response = okHttpClient.newCall(request).execute()
+            val respBody = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(IOException(parseErrorMessage(respBody, "Failed to review task completion (${response.code})")))
             }
             Result.success(Unit)
         } catch (e: Exception) {

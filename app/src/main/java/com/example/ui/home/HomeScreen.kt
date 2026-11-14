@@ -91,6 +91,7 @@ fun HomeScreen(
     val syncMetadata by viewModel.syncMetadataFlow.collectAsStateWithLifecycle()
     val dashboardStats by viewModel.dashboardStats.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncErrorMessage by viewModel.syncErrorMessage.collectAsStateWithLifecycle()
     val isAccountInactive by viewModel.isAccountInactive.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -137,6 +138,13 @@ fun HomeScreen(
         } else true
     }
 
+    fun checkNotificationsEnabled(): Boolean {
+        return androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
+
+    var hasNotificationsPermission by remember {
+        mutableStateOf(checkNotificationsEnabled())
+    }
     var hasOverlayPermission by remember {
         mutableStateOf(android.provider.Settings.canDrawOverlays(context))
     }
@@ -149,6 +157,7 @@ fun HomeScreen(
 
     // Refresh alarm permission states whenever screen resumes
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        hasNotificationsPermission = checkNotificationsEnabled()
         hasOverlayPermission = android.provider.Settings.canDrawOverlays(context)
         hasFullScreenIntentPermission = checkFullScreenIntentGranted()
         hasExactAlarmPermission = checkExactAlarmGranted()
@@ -277,7 +286,7 @@ fun HomeScreen(
         }
 
         // Alarm Permissions Banner for Full Screen Alerts & Ringing when closed
-        if (!hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
+        if (!hasNotificationsPermission || !hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -305,6 +314,7 @@ fun HomeScreen(
                     Text(
                         text = buildString {
                             append("Enable the permissions below so high-priority alarms ring and open full-screen even when the app is closed:")
+                            if (!hasNotificationsPermission) append("\n• Notifications (Required to post & ring alarms)")
                             if (!hasFullScreenIntentPermission) append("\n• Full-Screen Intent (Lock-screen & urgent popups)")
                             if (!hasOverlayPermission) append("\n• Display Over Other Apps (Immediate popup when unlocked)")
                             if (!hasExactAlarmPermission) append("\n• Exact Alarms (Exact trigger timing)")
@@ -474,8 +484,16 @@ fun HomeScreen(
         SyncStatusCard(
             syncMetadata = syncMetadata,
             onRefreshClick = {
-                viewModel.triggerManualRefresh()
+                if (syncMetadata.pendingSyncCount > 0 || syncMetadata.status == com.example.core.model.SyncStatus.ERROR) {
+                    viewModel.retryPendingSync()
+                } else {
+                    viewModel.triggerManualRefresh()
+                }
             },
+            onClearFailedClick = {
+                viewModel.clearFailedSyncItems()
+            },
+            externalErrorMessage = syncErrorMessage,
             isRefreshing = isRefreshing
         )
 

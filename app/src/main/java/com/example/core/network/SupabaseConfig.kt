@@ -70,26 +70,50 @@ object SupabaseConfig {
     }
 
     /**
-     * Deterministic Supabase Auth identity email for Google-authenticated Firebase users.
+     * Normalizes mobile input to E.164 matching public.normalize_mobile and profiles_mobile_check.
      */
-    fun toGoogleAuthEmail(firebaseUid: String): String {
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest(firebaseUid.trim().toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-            .take(24)
-        return "ggl$hash@taskzapp.org"
+    fun normalizeMobile(input: String): String {
+        val cleaned = input.trim().replace(Regex("[^0-9+]"), "")
+        if (cleaned.startsWith("+")) {
+            val digits = cleaned.drop(1).filter { it.isDigit() }
+            return if (digits.isNotEmpty()) "+$digits" else ""
+        }
+        val rawDigits = cleaned.filter { it.isDigit() }
+        val digits = if (rawDigits.length == 11 && rawDigits.startsWith("0")) {
+            rawDigits.drop(1)
+        } else {
+            rawDigits
+        }
+        return when {
+            digits.isEmpty() -> ""
+            digits.length == 10 && digits[0] in '6'..'9' -> "+91$digits"
+            digits.length == 10 -> "+1$digits"
+            digits.length == 11 && digits.startsWith("1") -> "+$digits"
+            digits.length == 12 && digits.startsWith("91") -> "+$digits"
+            else -> "+$digits"
+        }
     }
 
     /**
-     * Deterministic bridge credential tied to the Firebase UID so an authenticated Google user
-     * consistently obtains a valid Supabase JWT and stable profiles.id UUID across logins.
+     * Ordered mobile format candidates starting with canonical E.164 (+91XXXXXXXXXX),
+     * followed by local 10-digit / 12-digit formats in case a legacy DB constraint rejects E.164.
      */
-    fun toGoogleBridgeSecret(firebaseUid: String): String {
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest("taskz_google_bridge_${firebaseUid.trim()}".toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-            .take(32)
-        return "TzkG!$hash"
+    fun mobileFormatCandidates(input: String): List<String> {
+        val canonical = normalizeMobile(input)
+        val rawDigits = input.filter { it.isDigit() }
+        val list = linkedSetOf<String>()
+        if (canonical.isNotBlank()) list.add(canonical)
+        val trimmed = input.trim()
+        if (trimmed.isNotBlank()) list.add(trimmed)
+        if (canonical.startsWith("+91") && canonical.length == 13) {
+            val ten = canonical.drop(3)
+            list.add(ten)
+            list.add("91$ten")
+        } else if (rawDigits.length >= 10) {
+            list.add(rawDigits.takeLast(10))
+            list.add(rawDigits)
+        }
+        return list.toList()
     }
 
     fun isValidUuid(value: String?): Boolean {

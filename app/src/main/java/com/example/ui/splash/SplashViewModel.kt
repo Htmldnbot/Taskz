@@ -35,7 +35,7 @@ class SplashViewModel(
 
             sessionResult.fold(
                 onSuccess = { profile ->
-                    if (profile != null && profile.isActive) {
+                    if (profile != null && profile.isActive && profile.employeeId.isNotBlank()) {
                         _navigationState.value = SplashNavigationState.NavigateToMain
                     } else {
                         _navigationState.value = SplashNavigationState.NavigateToAuth

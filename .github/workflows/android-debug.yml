@@ -20,17 +20,92 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Ensure debug keystore exists
+      - name: Restore permanent signing keystore
+        id: keystore
+        env:
+          TASKZ_KEYSTORE_BASE64: ${{ secrets.TASKZ_KEYSTORE_BASE64 }}
+          TASKZ_KEYSTORE_PASSWORD: ${{ secrets.TASKZ_KEYSTORE_PASSWORD }}
+          TASKZ_KEY_ALIAS: ${{ secrets.TASKZ_KEY_ALIAS }}
+          TASKZ_KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
         run: |
-          if [ ! -f debug.keystore ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          set -euo pipefail
+          for var in TASKZ_KEYSTORE_BASE64 TASKZ_KEYSTORE_PASSWORD TASKZ_KEY_ALIAS TASKZ_KEY_PASSWORD; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::Missing required GitHub secret: $var. Configure TASKZ_KEYSTORE_BASE64, TASKZ_KEYSTORE_PASSWORD, TASKZ_KEY_ALIAS, and TASKZ_KEY_PASSWORD in Repository Settings -> Secrets and variables -> Actions."
+              exit 1
+            fi
+          done
+
+          KEYSTORE_PATH="$RUNNER_TEMP/taskz-signing.jks"
+          printf '%s' "$TASKZ_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Decoded keystore file is empty."
+            exit 1
           fi
+
+          # Validate keystore readability without printing any secret values
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$TASKZ_KEYSTORE_PASSWORD" -alias "$TASKZ_KEY_ALIAS" >/dev/null
+          echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build signed Debug APK
+        env:
+          TASKZ_KEYSTORE_PATH: ${{ steps.keystore.outputs.keystore_path }}
+          TASKZ_KEYSTORE_PASSWORD: ${{ secrets.TASKZ_KEYSTORE_PASSWORD }}
+          TASKZ_KEY_ALIAS: ${{ secrets.TASKZ_KEY_ALIAS }}
+          TASKZ_KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
+        run: ./gradlew clean assembleDebug --stacktrace
+
+      - name: Verify APK signature and metadata
+        run: |
+          set -euo pipefail
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::Expected APK not found at $APK_PATH"
+            exit 1
+          fi
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          if [ -z "$BUILD_TOOLS_DIR" ]; then
+            echo "::error::Android build-tools not found under $SDK_ROOT"
+            exit 1
+          fi
+
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          AAPT2="$BUILD_TOOLS_DIR/aapt2"
+
+          VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$APK_PATH")"
+          BADGING_LINE="$("$AAPT2" dump badging "$APK_PATH" | head -n 1)"
+
+          PKG_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
+          VER_CODE="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+          VER_NAME="$(printf '%s' "$BADGING_LINE" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+
+          RAW_SHA1="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-1 digest:' | awk '{print toupper($NF)}')"
+          RAW_SHA256="$(printf '%s\n' "$VERIFY_OUT" | grep -m1 'Signer #1 certificate SHA-256 digest:' | awk '{print toupper($NF)}')"
+
+          FMT_SHA1="$(printf '%s' "$RAW_SHA1" | sed 's/\(..\)/\1:/g; s/:$//')"
+          FMT_SHA256="$(printf '%s' "$RAW_SHA256" | sed 's/\(..\)/\1:/g; s/:$//')"
+
+          if [ "$PKG_NAME" != "com.taskz.app" ]; then
+            echo "::error::Unexpected package name '$PKG_NAME' (expected com.taskz.app)"
+            exit 1
+          fi
+
+          echo "=== Taskz APK Build & Signing Verification ==="
+          echo "Package name   : $PKG_NAME"
+          echo "Version code   : $VER_CODE"
+          echo "Version name   : $VER_NAME"
+          echo "Signing config : debugConfig (permanent CI keystore)"
+          echo "SHA-1          : $FMT_SHA1"
+          echo "SHA-256        : $FMT_SHA256"
+
+      - name: Clean up temporary keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/taskz-signing.jks"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4

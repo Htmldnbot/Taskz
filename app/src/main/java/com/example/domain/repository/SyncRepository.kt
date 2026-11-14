@@ -13,8 +13,13 @@ import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.SyncMetadataEntity
 import com.example.data.remote.SupabaseClient
 import com.example.sync.SyncWorker
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import java.io.IOException
 import java.util.UUID
 
@@ -27,21 +32,50 @@ class SyncRepository(
     private val networkMonitor: NetworkMonitor,
     private val context: Context = TaskzApplication.instance
 ) {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val userPendingEventsFlow: Flow<List<OutboxEventEntity>> =
+        userPrefs.userSessionFlow
+            .map { it.userId.orEmpty() }
+            .distinctUntilChanged()
+            .flatMapLatest { uid ->
+                if (uid.isBlank()) flowOf(emptyList())
+                else outboxDao.getUnsyncedEventsForUserFlow(uid)
+            }
+
     val syncMetadataFlow: Flow<SyncMetadata> = combine(
         syncMetadataDao.getSyncMetadataFlow(),
-        outboxDao.getPendingCountFlow()
-    ) { entity, pendingCount ->
+        userPendingEventsFlow
+    ) { entity, unsyncedEvents ->
+        val pendingCount = unsyncedEvents.count {
+            it.syncStatus in listOf("PENDING", "SENDING", "FAILED_RETRYABLE")
+        }
+        val latestError = unsyncedEvents.firstNotNullOfOrNull { it.lastError?.takeIf { e -> e.isNotBlank() } }
+        val permFailedCount = unsyncedEvents.count { it.syncStatus == "FAILED_PERMANENT" }
+
         if (entity != null) {
             val base = entity.toDomain().copy(pendingSyncCount = pendingCount)
-            if (pendingCount > 0 && base.status == SyncStatus.SYNCED) {
-                base.copy(status = SyncStatus.PENDING)
-            } else {
-                base
+            when {
+                pendingCount > 0 && base.status == SyncStatus.SYNCED -> {
+                    val msg = latestError?.let { "$pendingCount pending — $it" }
+                        ?: "$pendingCount pending operations awaiting sync"
+                    base.copy(status = SyncStatus.PENDING, statusMessage = msg)
+                }
+                pendingCount == 0 && permFailedCount > 0 && base.status == SyncStatus.SYNCED -> {
+                    base.copy(
+                        status = SyncStatus.ERROR,
+                        statusMessage = latestError ?: "$permFailedCount item(s) could not sync"
+                    )
+                }
+                pendingCount > 0 && latestError != null && base.status == SyncStatus.PENDING -> {
+                    base.copy(statusMessage = "$pendingCount pending — $latestError")
+                }
+                else -> base
             }
         } else {
             SyncMetadata(
                 pendingSyncCount = pendingCount,
-                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED
+                status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED,
+                statusMessage = latestError
             )
         }
     }
@@ -62,6 +96,25 @@ class SyncRepository(
                     statusMessage = null
                 )
             )
+        }
+    }
+
+    suspend fun retryStuckAndFailedEvents(): Result<SyncMetadata> {
+        val userId = userPrefs.getUserSession().userId
+        if (!userId.isNullOrBlank()) {
+            outboxDao.resetAllUnsyncedToPendingForUser(userId)
+        }
+        return manualSync()
+    }
+
+    suspend fun clearPermanentFailedEvents() {
+        val userId = userPrefs.getUserSession().userId
+        if (!userId.isNullOrBlank()) {
+            outboxDao.clearPermanentFailedForUser(userId)
+            val remaining = outboxDao.getPendingEventsForUser(userId)
+            if (remaining.isEmpty()) {
+                syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
+            }
         }
     }
 
@@ -88,6 +141,8 @@ class SyncRepository(
             syncMetadataDao.updateSyncStatus(SyncStatus.ERROR.name, "Authentication required: No active session")
             return Result.failure(IOException("Session not active"))
         }
+
+        outboxDao.deleteLegacyPreMigrationEvents(userId)
 
         val authRepo = TaskzApplication.instance.authRepository
 
@@ -142,13 +197,22 @@ class SyncRepository(
             android.util.Log.w("TaskzSync", "Data sync warning: ${e.message}")
         }
 
-        val pendingCount = outboxDao.getPendingEventsForUser(userId).size
+        val pendingEvents = outboxDao.getPendingEventsForUser(userId)
+        val pendingCount = pendingEvents.size
+        val latestError = pendingEvents.firstNotNullOfOrNull { it.lastError?.takeIf { e -> e.isNotBlank() } }
         syncMetadataDao.updateLastServerFetch(now)
+        val statusMsg = if (pendingCount > 0) {
+            if (latestError != null) "$pendingCount pending — $latestError"
+            else "$pendingCount pending operations awaiting sync"
+        } else {
+            "Verified with Server"
+        }
+
         if (pendingCount > 0) {
-            syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "$pendingCount pending operations awaiting sync")
+            syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, statusMsg)
         } else {
             syncMetadataDao.updateLastSuccessfulSync(now)
-            syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, "Verified with Server")
+            syncMetadataDao.updateSyncStatus(SyncStatus.SYNCED.name, statusMsg)
         }
 
         val updated = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
@@ -156,7 +220,7 @@ class SyncRepository(
             lastSuccessfulSync = if (pendingCount == 0) now else null,
             pendingSyncCount = pendingCount,
             status = if (pendingCount > 0) SyncStatus.PENDING else SyncStatus.SYNCED,
-            statusMessage = if (pendingCount > 0) "$pendingCount pending operations awaiting sync" else "Verified with Server"
+            statusMessage = statusMsg
         )
         return Result.success(updated)
     }

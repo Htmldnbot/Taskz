@@ -25,7 +25,7 @@ class TaskzViewModelFactory(
                 SplashViewModel(app.authRepository) as T
             }
             modelClass.isAssignableFrom(AuthViewModel::class.java) -> {
-                AuthViewModel(app.authRepository, app.firebaseAuthService) as T
+                AuthViewModel(app.authRepository, app.googleAuthManager) as T
             }
             modelClass.isAssignableFrom(HomeViewModel::class.java) -> {
                 HomeViewModel(app.authRepository, app.profileRepository, app.syncRepository, app.taskRepository) as T

@@ -101,7 +101,8 @@ class SyncWorker(
 
         var token = tokenRes.getOrThrow()
 
-        // Strictly query pending events for the currently active user to prevent account data leakage
+        // Clean up any synthetic pre-migration legacy outbox entries and query strictly active user's queue
+        outboxDao.deleteLegacyPreMigrationEvents(activeUserId)
         val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         if (pendingEvents.isEmpty()) {
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
@@ -217,18 +218,30 @@ class SyncWorker(
 
                     "TASK_RESPONSE", "PROGRESS_UPDATE", "LAN_CONFIRMATION", "COMPLETION_REQUEST" -> {
                         val payload = JSONObject(event.payloadJson)
+                        val rVal = payload.optString("responseValue").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        val txt = payload.optString("textValue").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        val lan = payload.optString("lanNumber").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        val devTs = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        val dynMap = buildMap<String, String> {
+                            val dynObj = payload.optJSONObject("dynamic_values") ?: payload.optJSONObject("dynamicValues")
+                            dynObj?.keys()?.forEach { key ->
+                                val v = dynObj.optString(key, "")
+                                if (v.isNotBlank() && !v.equals("null", true)) put(key, v)
+                            }
+                        }
                         var res = supabaseClient.submitTaskResponse(
                             accessToken = token,
                             taskId = event.taskId,
                             responseType = payload.optString("responseType", "COMPLETED_NOT_COMPLETED"),
-                            responseValue = payload.optString("responseValue").takeIf { it.isNotBlank() },
+                            responseValue = rVal,
                             percentage = if (payload.has("percentage") && !payload.isNull("percentage")) payload.getInt("percentage") else null,
                             numeric1 = if (payload.has("numeric1") && !payload.isNull("numeric1")) payload.getDouble("numeric1") else null,
                             numeric2 = if (payload.has("numeric2") && !payload.isNull("numeric2")) payload.getDouble("numeric2") else null,
-                            text = payload.optString("textValue").takeIf { it.isNotBlank() },
-                            lanNumber = payload.optString("lanNumber").takeIf { it.isNotBlank() },
+                            text = txt,
+                            lanNumber = lan,
                             idempotencyKey = event.eventId,
-                            deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() }
+                            deviceTimestamp = devTs,
+                            dynamicValues = dynMap.takeIf { it.isNotEmpty() }
                         )
 
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
@@ -239,14 +252,15 @@ class SyncWorker(
                                     accessToken = token,
                                     taskId = event.taskId,
                                     responseType = payload.optString("responseType", "COMPLETED_NOT_COMPLETED"),
-                                    responseValue = payload.optString("responseValue").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                                    responseValue = rVal,
                                     percentage = if (payload.has("percentage") && !payload.isNull("percentage")) payload.getInt("percentage") else null,
                                     numeric1 = if (payload.has("numeric1") && !payload.isNull("numeric1")) payload.getDouble("numeric1") else null,
                                     numeric2 = if (payload.has("numeric2") && !payload.isNull("numeric2")) payload.getDouble("numeric2") else null,
-                                    text = payload.optString("textValue").takeIf { it.isNotBlank() && !it.equals("null", true) },
-                                    lanNumber = payload.optString("lanNumber").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                                    text = txt,
+                                    lanNumber = lan,
                                     idempotencyKey = event.eventId,
-                                    deviceTimestamp = payload.optString("deviceTimestamp").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                                    deviceTimestamp = devTs,
+                                    dynamicValues = dynMap.takeIf { it.isNotEmpty() }
                                 )
                             }
                         }
@@ -266,8 +280,8 @@ class SyncWorker(
                             val err = res.exceptionOrNull()?.message ?: "Unknown server error"
                             val isPermanent = err.contains("not found", ignoreCase = true) ||
                                     err.contains("cancelled", ignoreCase = true) ||
-                                    err.contains("not authorized", ignoreCase = true) ||
-                                    err.contains("violates foreign key", ignoreCase = true)
+                                    err.contains("violates foreign key", ignoreCase = true) ||
+                                    err.contains("invalid input syntax", ignoreCase = true)
 
                             val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
                             outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
@@ -358,16 +372,20 @@ class SyncWorker(
             }
         }
 
-        val remainingPending = outboxDao.getPendingEventsForUser(activeUserId).size
+        val remainingEvents = outboxDao.getPendingEventsForUser(activeUserId)
+        val remainingPending = remainingEvents.size
         if (!hasRetryableFailure && remainingPending == 0) {
             db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
             db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
             Result.success()
-        } else if (hasRetryableFailure) {
-            db.syncMetadataDao().updateSyncStatus(
-                SyncStatus.PENDING.name,
+        } else if (hasRetryableFailure || remainingPending > 0) {
+            val latestErr = remainingEvents.firstNotNullOfOrNull { it.lastError?.takeIf { e -> e.isNotBlank() } }
+            val msg = if (latestErr != null) {
+                "$remainingPending pending — $latestErr"
+            } else {
                 "$remainingPending pending operations awaiting sync"
-            )
+            }
+            db.syncMetadataDao().updateSyncStatus(SyncStatus.PENDING.name, msg)
             Result.retry()
         } else {
             Result.success()

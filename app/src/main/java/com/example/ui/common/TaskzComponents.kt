@@ -306,6 +306,8 @@ private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, v
 fun SyncStatusCard(
     syncMetadata: SyncMetadata,
     onRefreshClick: () -> Unit,
+    onClearFailedClick: (() -> Unit)? = null,
+    externalErrorMessage: String? = null,
     isRefreshing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -425,13 +427,27 @@ fun SyncStatusCard(
                 }
             }
 
-            if (!syncMetadata.statusMessage.isNullOrBlank() && syncMetadata.status != SyncStatus.SYNCED) {
+            val effectiveMessage = externalErrorMessage?.takeIf { it.isNotBlank() }
+                ?: syncMetadata.statusMessage?.takeIf { it.isNotBlank() && syncMetadata.status != SyncStatus.SYNCED }
+            if (!effectiveMessage.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = syncMetadata.statusMessage,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (syncMetadata.status == SyncStatus.ERROR) TaskzError else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = effectiveMessage,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (syncMetadata.status == SyncStatus.ERROR || !externalErrorMessage.isNullOrBlank()) TaskzError else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (syncMetadata.status == SyncStatus.ERROR && onClearFailedClick != null) {
+                        TextButton(onClick = onClearFailedClick) {
+                            Text("Clear", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
         }
     }

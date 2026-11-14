@@ -4,18 +4,16 @@ import android.util.Log
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncStatus
 import com.example.core.model.UserProfile
+import com.example.core.network.SupabaseConfig
 import com.example.data.local.dao.ProfileDao
 import com.example.data.local.dao.SyncMetadataDao
 import com.example.data.local.entity.ProfileEntity
+import com.example.data.remote.AuthSessionResponse
 import com.example.data.remote.SupabaseClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import kotlinx.coroutines.tasks.await
-import org.json.JSONObject
 import java.io.IOException
 
 class SessionExpiredException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -32,12 +30,7 @@ class AuthRepository(
     val currentProfileFlow: Flow<UserProfile?> = profileDao.getCachedProfileFlow().map { it?.toDomain() }
 
     /**
-     * Sign Up flow:
-     * 1. Register with deterministic internal ID and password.
-     *    The database trigger (on_auth_user_created) automatically creates the profile row with id = auth.users.id.
-     * 2. (Optional) Upload photo to private 'profile-photos' storage if provided.
-     * 3. Update profile_photo_path in profiles.
-     * 4. Cache profile in Room and save session in secure session storage.
+     * Sign up using Employee ID + Password (internal deterministic identifier mapped cleanly to auth.users).
      */
     suspend fun signUp(
         employeeId: String,
@@ -47,50 +40,104 @@ class AuthRepository(
         photoBytes: ByteArray? = null,
         photoFilename: String? = null
     ): Result<UserProfile> {
-        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
-        val authResult = supabaseClient.signUp(
+        val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
+        val session = supabaseClient.signUp(
             employeeId = trimmedEmpId,
             password = password,
             fullName = fullName.trim(),
-            mobile = mobile.trim()
-        )
+            mobile = normalizedMobile
+        ).getOrElse { return Result.failure(it) }
 
-        val session = authResult.getOrElse { networkErr ->
-            if (isNetworkFailure(networkErr)) {
-                // If remote server cannot be reached, fallback cleanly to offline demo account
-                return registerOfflineDemo(
-                    employeeId = trimmedEmpId,
-                    fullName = fullName,
-                    mobile = mobile
-                )
-            }
-            return Result.failure(networkErr)
-        }
-
-        var activeToken = session.accessToken
-        if (activeToken.isBlank()) {
+        var activeSession = session
+        if (activeSession.accessToken.isBlank()) {
             val loginRes = supabaseClient.login(trimmedEmpId, password)
             if (loginRes.isSuccess) {
-                activeToken = loginRes.getOrThrow().accessToken
-            } else if (isNetworkFailure(loginRes.exceptionOrNull() ?: Exception())) {
-                return registerOfflineDemo(
-                    employeeId = trimmedEmpId,
-                    fullName = fullName,
-                    mobile = mobile
-                )
+                activeSession = loginRes.getOrThrow()
             }
         }
 
-        if (activeToken.isBlank()) {
+        if (activeSession.accessToken.isBlank()) {
             return Result.failure(
                 IOException(
-                    "SUPABASE_EMAIL_CONFIRMATION_REQUIRED: Account was registered on the server, but no active session was returned because 'Confirm email' is enabled in your Supabase project. " +
-                    "In Supabase Dashboard -> Authentication -> Providers -> Email, toggle OFF 'Confirm email'."
+                    "Account was registered on the server, but no active session was returned. " +
+                        "Please ensure 'Confirm email' is disabled in Supabase Auth -> Providers -> Email for Employee ID onboarding."
                 )
             )
         }
 
-        // 2. Upload optional photo to private 'profile-photos' bucket
+        return finalizeAuthenticatedSession(
+            session = activeSession,
+            fallbackEmployeeId = trimmedEmpId,
+            fallbackFullName = fullName.trim(),
+            fallbackMobile = normalizedMobile,
+            photoBytes = photoBytes,
+            photoFilename = photoFilename
+        )
+    }
+
+    /**
+     * Register a new user with real Email + Password + Employee ID + Mobile in Supabase Auth.
+     */
+    suspend fun signUpWithEmail(
+        email: String,
+        password: String,
+        employeeId: String,
+        fullName: String,
+        mobile: String,
+        photoBytes: ByteArray? = null,
+        photoFilename: String? = null
+    ): Result<UserProfile> {
+        val cleanEmail = email.trim().lowercase()
+        val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
+
+        val session = supabaseClient.signUpWithEmail(
+            email = cleanEmail,
+            password = password,
+            employeeId = trimmedEmpId,
+            fullName = fullName.trim(),
+            mobile = normalizedMobile
+        ).getOrElse { return Result.failure(it) }
+
+        var activeSession = session
+        if (activeSession.accessToken.isBlank()) {
+            val loginRes = supabaseClient.loginWithEmail(cleanEmail, password)
+            if (loginRes.isSuccess) {
+                activeSession = loginRes.getOrThrow()
+            }
+        }
+
+        if (activeSession.accessToken.isBlank()) {
+            return Result.failure(
+                IOException(
+                    "Registration created for $cleanEmail. Please confirm your email from your inbox before signing in."
+                )
+            )
+        }
+
+        userPrefs.saveEmailEmployeeHint(cleanEmail, trimmedEmpId)
+        userPrefs.saveEmailAuthMethodHint(cleanEmail, "email")
+
+        return finalizeAuthenticatedSession(
+            session = activeSession,
+            fallbackEmployeeId = trimmedEmpId,
+            fallbackFullName = fullName.trim(),
+            fallbackMobile = normalizedMobile,
+            photoBytes = photoBytes,
+            photoFilename = photoFilename
+        )
+    }
+
+    private suspend fun finalizeAuthenticatedSession(
+        session: AuthSessionResponse,
+        fallbackEmployeeId: String,
+        fallbackFullName: String,
+        fallbackMobile: String,
+        photoBytes: ByteArray?,
+        photoFilename: String?
+    ): Result<UserProfile> {
+        val activeToken = session.accessToken
         var photoPath: String? = null
         if (photoBytes != null && photoFilename != null) {
             val uploadRes = supabaseClient.uploadProfilePhoto(
@@ -104,56 +151,57 @@ class AuthRepository(
                 supabaseClient.updateProfile(
                     accessToken = activeToken,
                     userId = session.userId,
-                    fullName = fullName.trim(),
-                    mobile = mobile.trim(),
+                    fullName = fallbackFullName,
+                    mobile = fallbackMobile,
                     photoPath = photoPath
                 )
             }
         }
 
-        // 3. Confirm that the required server profile exists
         var remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
         if (remoteProfile == null) {
-            kotlinx.coroutines.delay(500)
+            kotlinx.coroutines.delay(400)
             remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
         }
 
-        if (remoteProfile == null) {
-            val fallbackProfile = UserProfile(
-                id = session.userId,
-                employeeId = trimmedEmpId,
-                fullName = fullName.trim(),
-                mobile = mobile.trim(),
-                profilePhotoPath = photoPath,
-                appRole = if (trimmedEmpId.startsWith("ADMIN")) "admin" else "employee",
-                isActive = true
-            )
-            profileDao.insertProfile(ProfileEntity.fromDomain(fallbackProfile))
-            userPrefs.saveSession(
+        if (remoteProfile == null && fallbackEmployeeId.isNotBlank()) {
+            val completed = supabaseClient.completeMyProfile(
                 accessToken = activeToken,
-                refreshToken = session.refreshToken,
-                userId = session.userId,
-                employeeId = trimmedEmpId
+                employeeId = fallbackEmployeeId,
+                fullName = fallbackFullName,
+                mobile = fallbackMobile
             )
-            syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
-            return Result.success(fallbackProfile)
+            if (completed.isSuccess) {
+                remoteProfile = completed.getOrNull()
+            }
         }
 
-        val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
-            supabaseClient.getSignedProfilePhotoUrl(activeToken, remoteProfile.profilePhotoPath).getOrNull()
+        val resolvedProfile = remoteProfile ?: return Result.failure(
+            IOException("Authenticated with Supabase, but user profile could not be created or loaded.")
+        )
+
+        if (!resolvedProfile.isActive) {
+            supabaseClient.logout(activeToken)
+            userPrefs.clearSession()
+            return Result.failure(
+                IOException("Your Taskz account is currently inactive. Please contact the administrator.")
+            )
+        }
+
+        val signedUrl = if (!resolvedProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(activeToken, resolvedProfile.profilePhotoPath).getOrNull()
         } else {
             null
         }
+        val finalProfile = resolvedProfile.copy(avatarSignedUrl = signedUrl)
 
-        val finalProfile = remoteProfile.copy(avatarSignedUrl = signedUrl)
-
-        // 4. Cache in Room & secure session storage only after confirmed server profile
         profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
         userPrefs.saveSession(
             accessToken = activeToken,
             refreshToken = session.refreshToken,
             userId = session.userId,
-            employeeId = trimmedEmpId
+            employeeId = finalProfile.employeeId,
+            mustChangePassword = finalProfile.mustChangePassword
         )
         syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
 
@@ -161,48 +209,105 @@ class AuthRepository(
     }
 
     /**
-     * Login flow:
-     * 1. Authenticate with Employee ID + Password.
-     * 2. Fetch profile from Supabase PostgREST (profiles.id = user.id).
-     * 3. Check is_active flag. If inactive, block immediately.
-     * 4. Cache in Room & DataStore.
+     * Login with Employee ID + Password via Edge Function / Supabase Auth.
      */
     suspend fun login(employeeId: String, password: String): Result<UserProfile> {
-        val trimmedEmpId = com.example.core.network.SupabaseConfig.normalizeEmployeeId(employeeId)
-        val loginResult = supabaseClient.login(trimmedEmpId, password)
-        val session = loginResult.getOrElse { networkErr ->
-            if (isNetworkFailure(networkErr)) {
-                val cached = profileDao.getCachedProfile()?.toDomain()
-                if (cached != null && cached.employeeId.equals(trimmedEmpId, ignoreCase = true)) {
-                    if (!cached.isActive) {
-                        return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
-                    }
-                    userPrefs.saveSession(
-                        accessToken = "offline_demo_token_${System.currentTimeMillis()}",
-                        refreshToken = null,
-                        userId = cached.id,
-                        employeeId = cached.employeeId,
-                        mustChangePassword = cached.mustChangePassword
-                    )
-                    return Result.success(cached)
-                }
-                return Result.failure(IOException("Server is unreachable. Please check connection or switch to 'Create Account' to use Taskz offline."))
+        val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val session = supabaseClient.login(trimmedEmpId, password)
+            .getOrElse { return Result.failure(it) }
+
+        return loadProfileAndSaveSession(session)
+    }
+
+    /**
+     * Login directly with Email + Password via native Supabase Auth.
+     */
+    suspend fun loginWithEmail(email: String, password: String): Result<UserProfile> {
+        val cleanEmail = email.trim().lowercase()
+        val session = supabaseClient.loginWithEmail(cleanEmail, password)
+            .getOrElse { return Result.failure(it) }
+
+        val result = loadProfileAndSaveSession(session, allowPendingProfileCompletion = true)
+        result.onSuccess { prof ->
+            if (prof.employeeId.isNotBlank()) {
+                userPrefs.saveEmailEmployeeHint(cleanEmail, prof.employeeId)
+                userPrefs.saveEmailAuthMethodHint(cleanEmail, "email")
             }
-            return Result.failure(networkErr)
+        }
+        return result
+    }
+
+    /**
+     * Authenticate with Google ID Token + raw nonce against Supabase Auth (/auth/v1/token?grant_type=id_token).
+     * If the authenticated user has no public.profiles row yet, saves the Supabase session so
+     * completeGoogleProfile() can execute complete_my_profile() and returns a profile with blank employeeId.
+     */
+    suspend fun signInWithGoogleIdToken(
+        idToken: String,
+        rawNonce: String,
+        displayNameHint: String? = null,
+        emailHint: String? = null
+    ): Result<UserProfile> {
+        if (idToken.isBlank() || rawNonce.isBlank()) {
+            return Result.failure(IllegalArgumentException("Google ID token or nonce is missing."))
         }
 
-        // Fetch remote profile using profiles.id = auth.users.id
-        val profileResult = supabaseClient.fetchProfileById(session.accessToken, session.userId)
-        val profile = profileResult.getOrElse {
-            return Result.failure(IOException("Failed to retrieve profile: ${it.message}"))
+        val session = supabaseClient.signInWithGoogleIdToken(idToken, rawNonce)
+            .getOrElse { return Result.failure(it) }
+
+        val result = loadProfileAndSaveSession(
+            session = session,
+            allowPendingProfileCompletion = true,
+            fallbackFullName = displayNameHint.orEmpty()
+        )
+        result.onSuccess { prof ->
+            val cleanEmail = emailHint?.trim()?.lowercase()
+            if (!cleanEmail.isNullOrBlank()) {
+                if (prof.employeeId.isNotBlank()) {
+                    userPrefs.saveEmailEmployeeHint(cleanEmail, prof.employeeId)
+                }
+                userPrefs.saveEmailAuthMethodHint(cleanEmail, "google")
+            }
         }
+        return result
+    }
+
+    private suspend fun loadProfileAndSaveSession(
+        session: AuthSessionResponse,
+        allowPendingProfileCompletion: Boolean = false,
+        fallbackFullName: String = ""
+    ): Result<UserProfile> {
+        val profile = supabaseClient.fetchProfileById(session.accessToken, session.userId)
+            .getOrElse {
+                return Result.failure(IOException("Failed to retrieve profile: ${it.message}"))
+            }
 
         if (profile == null) {
-            return Result.failure(IOException("Profile record not found for this user."))
+            if (allowPendingProfileCompletion) {
+                userPrefs.saveSession(
+                    accessToken = session.accessToken,
+                    refreshToken = session.refreshToken,
+                    userId = session.userId,
+                    employeeId = "",
+                    mustChangePassword = false
+                )
+                return Result.success(
+                    UserProfile(
+                        id = session.userId,
+                        employeeId = "",
+                        fullName = fallbackFullName,
+                        mobile = "",
+                        appRole = "employee",
+                        isActive = true
+                    )
+                )
+            }
+            return Result.failure(IOException("Profile record not found for this account."))
         }
 
-        // Enforce account active status:
         if (!profile.isActive) {
+            supabaseClient.logout(session.accessToken)
+            userPrefs.clearSession()
             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
         }
 
@@ -213,13 +318,12 @@ class AuthRepository(
         }
         val finalProfile = profile.copy(avatarSignedUrl = signedUrl)
 
-        // Persist session and cache
         userPrefs.saveSession(
             accessToken = session.accessToken,
             refreshToken = session.refreshToken,
             userId = session.userId,
-            employeeId = profile.employeeId,
-            mustChangePassword = profile.mustChangePassword
+            employeeId = finalProfile.employeeId,
+            mustChangePassword = finalProfile.mustChangePassword
         )
         profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
         syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
@@ -228,22 +332,75 @@ class AuthRepository(
     }
 
     /**
+     * Completes onboarding for an authenticated Google / email user by calling complete_my_profile().
+     */
+    suspend fun completeGoogleProfile(
+        employeeId: String,
+        fullName: String,
+        mobile: String
+    ): Result<UserProfile> {
+        val validToken = getValidAccessToken().getOrElse { return Result.failure(it) }
+        val session = userPrefs.getUserSession()
+        val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
+        val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
+
+        val completedProfile = supabaseClient.completeMyProfile(
+            accessToken = validToken,
+            employeeId = normalizedEmpId,
+            fullName = fullName.trim(),
+            mobile = normalizedMobile
+        ).getOrElse { return Result.failure(it) }
+
+        if (!completedProfile.isActive) {
+            return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
+        }
+
+        val signedUrl = if (!completedProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(validToken, completedProfile.profilePhotoPath).getOrNull()
+        } else {
+            null
+        }
+        val finalProfile = completedProfile.copy(avatarSignedUrl = signedUrl)
+
+        userPrefs.saveSession(
+            accessToken = validToken,
+            refreshToken = session.refreshToken,
+            userId = finalProfile.id,
+            employeeId = finalProfile.employeeId,
+            mustChangePassword = finalProfile.mustChangePassword
+        )
+        profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
+        syncMetadataDao.updateLastSuccessfulSync(System.currentTimeMillis())
+
+        return Result.success(finalProfile)
+    }
+
+    suspend fun cancelPendingProfileCompletion() {
+        val session = userPrefs.getUserSession()
+        if (!session.accessToken.isNullOrBlank() && session.employeeId.isNullOrBlank()) {
+            supabaseClient.logout(session.accessToken)
+            userPrefs.clearSession()
+            profileDao.clearProfile()
+        }
+    }
+
+    suspend fun sendPasswordResetEmail(email: String): Result<Unit> {
+        return supabaseClient.sendPasswordResetEmail(email)
+    }
+
+    /**
      * Checks if a JWT token has expired or will expire within [bufferSeconds].
      */
     fun isTokenExpired(token: String?, bufferSeconds: Long = 60L): Boolean {
-        if (token.isNullOrBlank()) return true
-        if (token.startsWith("offline_demo_token_")) {
-            return false
-        }
+        if (token.isNullOrBlank() || token.startsWith("offline_")) return true
         return try {
             val parts = token.split(".")
-            if (parts.size < 2) return true
+            if (parts.size != 3) return true
             val payloadSegment = parts[1]
             val payloadBytes = decodeBase64Url(payloadSegment)
             val payloadString = String(payloadBytes, Charsets.UTF_8)
             val expRegex = """"exp"\s*:\s*(\d+)""".toRegex()
-            val match = expRegex.find(payloadString)
-            if (match == null) return false
+            val match = expRegex.find(payloadString) ?: return false
             val expSeconds = match.groupValues[1].toLong()
             val currentSeconds = System.currentTimeMillis() / 1000
             currentSeconds >= (expSeconds - bufferSeconds)
@@ -265,8 +422,7 @@ class AuthRepository(
     }
 
     /**
-     * Thread-safe access token provider with automatic token refresh.
-     * Guaranteed to return a valid access token or a typed failure.
+     * Thread-safe access token provider with automatic refresh via Supabase Auth.
      */
     suspend fun getValidAccessToken(): Result<String> = tokenRefreshMutex.withLock {
         val session = userPrefs.getUserSession()
@@ -276,24 +432,18 @@ class AuthRepository(
             return Result.failure(SessionExpiredException("No active session found"))
         }
 
-        if (currentToken.startsWith("offline_demo_token_")) {
-            return Result.success(currentToken)
+        if (currentToken.startsWith("offline_") || currentToken.split(".").size != 3) {
+            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again."))
         }
 
-        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, currentToken)) {
-            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again to sync with server."))
-        }
-
-        // If current access token is not expired (with 60-second safety window), return it
         if (!isTokenExpired(currentToken, bufferSeconds = 60L)) {
             return Result.success(currentToken)
         }
 
-        Log.i("TaskzAuth", "Access token is expired or expiring within 60s. Refreshing via Supabase...")
+        Log.i("TaskzAuth", "Access token expiring within 60s; refreshing via Supabase Auth")
 
         val refreshToken = session.refreshToken
         if (refreshToken.isNullOrBlank()) {
-            Log.w("TaskzAuth", "No refresh token available to refresh expired access token")
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
@@ -301,23 +451,20 @@ class AuthRepository(
         if (refreshResult.isSuccess) {
             val newSession = refreshResult.getOrThrow()
             userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-            Log.i("TaskzAuth", "Access token successfully refreshed and stored")
             Result.success(newSession.accessToken)
         } else {
             val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
             if (isNetworkFailure(err)) {
-                Log.w("TaskzAuth", "Network unavailable during token refresh: ${err.message}")
                 Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", err))
             } else {
                 val errMsg = err.message.orEmpty()
-                Log.e("TaskzAuth", "Refresh token was rejected or revoked: $errMsg")
                 Result.failure(SessionExpiredException("Authentication required: $errMsg", err))
             }
         }
     }
 
     /**
-     * Force an immediate token refresh, e.g. after receiving HTTP 401 Unauthorized during an ongoing call.
+     * Force an immediate token refresh after receiving HTTP 401.
      */
     suspend fun forceRefreshAccessToken(): Result<String> = tokenRefreshMutex.withLock {
         val session = userPrefs.getUserSession()
@@ -326,19 +473,17 @@ class AuthRepository(
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
-        if (session.accessToken?.startsWith("offline_") == true) {
-            return Result.success(session.accessToken)
-        }
-        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, session.accessToken)) {
+        if (session.accessToken.isNullOrBlank() ||
+            session.accessToken.startsWith("offline_") ||
+            session.accessToken.split(".").size != 3
+        ) {
             return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again."))
         }
 
-        Log.i("TaskzAuth", "Forcing session token refresh...")
         val refreshResult = supabaseClient.refreshSession(refreshToken)
         if (refreshResult.isSuccess) {
             val newSession = refreshResult.getOrThrow()
             userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-            Log.i("TaskzAuth", "Forced token refresh succeeded")
             Result.success(newSession.accessToken)
         } else {
             val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
@@ -351,8 +496,8 @@ class AuthRepository(
     }
 
     /**
-     * Restore session on app launch without prompting for login if session is valid.
-     * Automatically handles token refresh and preserves offline profiles gracefully.
+     * Restore valid Supabase session on app launch, automatically refreshing expired JWTs.
+     * Preserves cached profile on offline launches when a valid persisted session exists.
      */
     suspend fun restoreSession(): Result<UserProfile?> {
         val session = userPrefs.getUserSession()
@@ -360,35 +505,30 @@ class AuthRepository(
             return Result.success(null)
         }
 
+        val token = session.accessToken
+        if (token.isNullOrBlank() || token.startsWith("offline_") || token.split(".").size != 3) {
+            userPrefs.clearSession()
+            profileDao.clearProfile()
+            return Result.failure(SessionExpiredException("Please sign in again to establish a Supabase session."))
+        }
+
         val cachedProfile = profileDao.getCachedProfile()?.toDomain()
 
-        if (session.accessToken?.startsWith("offline_demo_token_") == true) {
-            return Result.success(cachedProfile)
-        }
-        if (com.example.core.network.FirebaseSessionHelper.isLegacyNonSupabaseSession(session, session.accessToken)) {
-            return Result.failure(SessionExpiredException("Please sign in again to refresh your Supabase session."))
-        }
-
-        // Obtain valid token (or refresh if expired)
         val tokenRes = getValidAccessToken()
         if (tokenRes.isFailure) {
             val ex = tokenRes.exceptionOrNull()!!
-            if (ex is NetworkUnavailableException || isNetworkFailure(ex)) {
-                // Offline launch: smoothly preserve cached profile and offline session
-                Log.i("TaskzAuth", "App launched offline or network unreachable; preserving cached profile")
-                return Result.success(cachedProfile)
+            return if (ex is NetworkUnavailableException || isNetworkFailure(ex)) {
+                Log.i("TaskzAuth", "Offline launch; preserving cached profile")
+                Result.success(cachedProfile)
             } else {
-                // Refresh token is revoked or invalid: user must reauthenticate.
-                // CRITICAL: Preserve all local unsynced outbox events and tasks.
                 Log.w("TaskzAuth", "Session restoration requires reauthentication: ${ex.message}")
-                return Result.failure(ex)
+                Result.failure(ex)
             }
         }
 
         val validToken = tokenRes.getOrThrow()
         val userId = session.userId ?: return Result.success(cachedProfile)
 
-        // Verify with server using valid token
         val remoteProfileRes = supabaseClient.fetchProfileById(validToken, userId)
         if (remoteProfileRes.isSuccess) {
             val remoteProfile = remoteProfileRes.getOrNull()
@@ -399,13 +539,17 @@ class AuthRepository(
 
                 val signedUrl = if (!remoteProfile.profilePhotoPath.isNullOrBlank()) {
                     supabaseClient.getSignedProfilePhotoUrl(validToken, remoteProfile.profilePhotoPath).getOrNull()
-                } else null
+                } else {
+                    null
+                }
                 val enriched = remoteProfile.copy(avatarSignedUrl = signedUrl)
 
                 profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
                 syncMetadataDao.updateLastServerFetch(System.currentTimeMillis())
                 return Result.success(enriched)
             }
+            // Auth session exists, profile not yet completed
+            return Result.success(null)
         } else {
             val ex = remoteProfileRes.exceptionOrNull()
             if (ex != null && isNetworkFailure(ex)) {
@@ -413,56 +557,24 @@ class AuthRepository(
             }
         }
 
-        // Return cached profile if offline or server temporary error
         return Result.success(cachedProfile)
     }
 
     /**
-     * Logout and clear session.
+     * Logout from Supabase Auth and clear local session/cached profile.
      */
     suspend fun logout() {
         val session = userPrefs.getUserSession()
         if (!session.accessToken.isNullOrBlank()) {
             supabaseClient.logout(session.accessToken)
         }
-        runCatching { Firebase.auth.signOut() }
         userPrefs.clearSession()
         profileDao.clearProfile()
         syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Signed out")
     }
 
     /**
-     * Register an account locally in Room database for offline evaluation or when remote auth is unavailable.
-     */
-    suspend fun registerOfflineDemo(
-        employeeId: String,
-        fullName: String,
-        mobile: String
-    ): Result<UserProfile> {
-        val trimmedEmpId = employeeId.trim().uppercase()
-        val localId = java.util.UUID.randomUUID().toString()
-        val localProfile = UserProfile(
-            id = localId,
-            employeeId = trimmedEmpId,
-            fullName = fullName.trim(),
-            mobile = mobile.trim(),
-            profilePhotoPath = null,
-            appRole = if (trimmedEmpId.startsWith("ADMIN")) "admin" else "employee",
-            isActive = true
-        )
-        profileDao.insertProfile(com.example.data.local.entity.ProfileEntity.fromDomain(localProfile))
-        userPrefs.saveSession(
-            accessToken = "offline_demo_token_${System.currentTimeMillis()}",
-            refreshToken = null,
-            userId = localId,
-            employeeId = trimmedEmpId
-        )
-        syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Offline evaluation session")
-        return Result.success(localProfile)
-    }
-
-    /**
-     * Submit password reset request.
+     * Submit password reset request to Admin table.
      */
     suspend fun submitPasswordResetRequest(
         employeeId: String,
@@ -470,8 +582,8 @@ class AuthRepository(
         message: String?
     ): Result<Unit> {
         val res = supabaseClient.submitPasswordResetRequest(
-            employeeId = employeeId.trim().uppercase(),
-            mobile = mobile.trim(),
+            employeeId = SupabaseConfig.normalizeEmployeeId(employeeId),
+            mobile = SupabaseConfig.normalizeMobile(mobile),
             message = message?.trim()
         )
         return if (res.isSuccess) Result.success(Unit) else Result.failure(res.exceptionOrNull()!!)
@@ -481,16 +593,16 @@ class AuthRepository(
         if (throwable is NetworkUnavailableException) return true
         val msg = throwable.message.orEmpty()
         return throwable is java.net.UnknownHostException ||
-                throwable is java.net.ConnectException ||
-                throwable is java.net.SocketTimeoutException ||
-                throwable is java.net.NoRouteToHostException ||
-                msg.contains("resolve host", ignoreCase = true) ||
-                msg.contains("failed to connect", ignoreCase = true) ||
-                msg.contains("timeout", ignoreCase = true) ||
-                msg.contains("unreachable", ignoreCase = true) ||
-                msg.contains("route to host", ignoreCase = true) ||
-                msg.contains("Supabase is not configured", ignoreCase = true) ||
-                msg.contains("Network unreachable", ignoreCase = true) ||
-                msg.contains("No internet connection", ignoreCase = true)
+            throwable is java.net.ConnectException ||
+            throwable is java.net.SocketTimeoutException ||
+            throwable is java.net.NoRouteToHostException ||
+            msg.contains("resolve host", ignoreCase = true) ||
+            msg.contains("failed to connect", ignoreCase = true) ||
+            msg.contains("timeout", ignoreCase = true) ||
+            msg.contains("unreachable", ignoreCase = true) ||
+            msg.contains("route to host", ignoreCase = true) ||
+            msg.contains("Supabase is not configured", ignoreCase = true) ||
+            msg.contains("Network unreachable", ignoreCase = true) ||
+            msg.contains("No internet connection", ignoreCase = true)
     }
 }

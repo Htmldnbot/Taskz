@@ -79,8 +79,9 @@ class TaskAlarmScheduler(private val context: Context) {
 
         // 1. Advance Reminders (e.g., 30m before, 10m before, 5m before, 0m at task time)
         for (minutesBefore in task.advanceRemindersMinutes) {
-            val triggerMillis = mainTimeMillis - (minutesBefore * 60 * 1000L)
-            if (triggerMillis > now - 60_000L) { // Allow immediate or near-future
+            val rawTriggerMillis = mainTimeMillis - (minutesBefore * 60 * 1000L)
+            if (rawTriggerMillis > now - 60_000L) { // Allow immediate or near-future
+                val triggerMillis = maxOf(rawTriggerMillis, now + 1500L)
                 val label = if (minutesBefore == 0) "At task time" else "$minutesBefore minutes before"
                 val alarmId = generateAlarmId(task.id, -minutesBefore)
                 val alarmEntity = ScheduledAlarmRecordEntity(
@@ -180,9 +181,11 @@ class TaskAlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val isCriticalAlarm = alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
-            importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true)
-        scheduleWithAlarmManager(triggerMillis, pendingIntent, useAlarmClock = isCriticalAlarm, alarmId = alarmId)
+        val isAlarmClockUrgent = alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
+            alarmType == AlarmType.SOUND_ALERT.name ||
+            importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true) ||
+            importance.equals(TaskImportance.HIGH.name, ignoreCase = true)
+        scheduleWithAlarmManager(triggerMillis, pendingIntent, useAlarmClock = isAlarmClockUrgent, alarmId = alarmId)
         Log.d(TAG, "Scheduled snooze alarm for $taskId in $snoozeMinutes minutes")
     }
 
@@ -285,9 +288,11 @@ class TaskAlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val isCriticalAlarm = alarmEntity.alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
-            alarmEntity.importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true)
-        scheduleWithAlarmManager(alarmEntity.triggerAtMillis, pendingIntent, useAlarmClock = isCriticalAlarm, alarmId = alarmEntity.alarmId)
+        val isAlarmClockUrgent = alarmEntity.alarmType == AlarmType.FULL_SCREEN_ALARM.name ||
+            alarmEntity.alarmType == AlarmType.SOUND_ALERT.name ||
+            alarmEntity.importance.equals(TaskImportance.CRITICAL.name, ignoreCase = true) ||
+            alarmEntity.importance.equals(TaskImportance.HIGH.name, ignoreCase = true)
+        scheduleWithAlarmManager(alarmEntity.triggerAtMillis, pendingIntent, useAlarmClock = isAlarmClockUrgent, alarmId = alarmEntity.alarmId)
     }
 
     private fun scheduleWithAlarmManager(

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -58,9 +59,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
                     lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                    runCatching { setBypassDnd(true) }
                 }
 
-                // High priority channel with notification sound
+                // High priority channel with alarm sound
                 val highChannel = NotificationChannel(
                     CHANNEL_ID_HIGH_ALARM,
                     "Taskz High Priority Alarms",
@@ -71,6 +73,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 400, 200, 400)
                     lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                    runCatching { setBypassDnd(true) }
                 }
 
                 // Normal channel
@@ -161,6 +164,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val useForegroundAlarmService = shouldFullScreen || alarmType == AlarmType.SOUND_ALERT
 
         if (useForegroundAlarmService) {
+            runCatching {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Taskz::AlarmReceiverWakeLock")
+                wl.setReferenceCounted(false)
+                wl.acquire(10_000L)
+            }
             val serviceIntent = Intent(context, TaskAlarmService::class.java).apply {
                 action = TaskAlarmService.ACTION_START_ALARM
                 putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)

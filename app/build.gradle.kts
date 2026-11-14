@@ -1,29 +1,37 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
 }
 
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.takeIf { it > 0 }
+  val explicitVersionCode = System.getenv("TASKZ_VERSION_CODE")?.toIntOrNull()?.takeIf { it > 0 }
+  val resolvedVersionCode = (ciRunNumber?.let { 100 + it } ?: explicitVersionCode ?: 1).also {
+    require(it in 1..2_000_000_000) { "Invalid versionCode: $it" }
+  }
+  val resolvedVersionName = when {
+    ciRunNumber != null -> "1.0.$ciRunNumber"
+    explicitVersionCode != null -> "1.0.$explicitVersionCode"
+    else -> "1.0"
+  }
+
   defaultConfig {
     applicationId = "com.taskz.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = resolvedVersionCode
+    versionName = resolvedVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
-  // and updating Android apps in AI Studio.
+  // and updating Android apps in AI Studio and CI.
   signingConfigs {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
@@ -33,10 +41,31 @@ android {
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val ciKeystorePath = System.getenv("TASKZ_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+      val ciStorePassword = System.getenv("TASKZ_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+      val ciKeyAlias = System.getenv("TASKZ_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+      val ciKeyPassword = System.getenv("TASKZ_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+      val anyCiSigningVar = listOf(ciKeystorePath, ciStorePassword, ciKeyAlias, ciKeyPassword).any { it != null }
+      if (anyCiSigningVar) {
+        if (ciKeystorePath == null || ciStorePassword == null || ciKeyAlias == null || ciKeyPassword == null) {
+          throw GradleException(
+            "Incomplete CI signing configuration. All of TASKZ_KEYSTORE_PATH, TASKZ_KEYSTORE_PASSWORD, TASKZ_KEY_ALIAS, TASKZ_KEY_PASSWORD must be set."
+          )
+        }
+        val ciKeystoreFile = file(ciKeystorePath)
+        if (!ciKeystoreFile.exists()) {
+          throw GradleException("CI signing keystore file not found at: $ciKeystorePath")
+        }
+        storeFile = ciKeystoreFile
+        storePassword = ciStorePassword
+        keyAlias = ciKeyAlias
+        keyPassword = ciKeyPassword
+      } else {
+        storeFile = file("${rootDir}/debug.keystore")
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -83,16 +112,12 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
-
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -116,15 +141,10 @@ dependencies {
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
-  // Firebase Auth & Credential Manager (Firestore removed; Supabase is the single app database):
-  // implementation(libs.firebase.firestore)
-  implementation(libs.firebase.auth)
+  // Google Credential Manager + Google Identity (for native Google ID-token sign-in with Supabase Auth):
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
-  // implementation(libs.firebase.appcheck.recaptcha)
-  // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

@@ -1,0 +1,1069 @@
+TASKZ – COMPLETE PROJECT AUDIT, AUTHENTICATION MIGRATION & PERMANENT BUILD FIX
+
+You are working on my existing Android application named Taskz.
+
+This is an existing, partially developed production-oriented application. Your job is to audit the complete existing source code, identify the actual causes of the problems, and implement permanent fixes.
+
+This is NOT a request to create a new application.
+
+Do not replace the application with a simplified demo. Do not remove existing features. Do not redesign the UI unnecessarily. Preserve all existing working functionality and improve the underlying architecture.
+
+You must inspect the complete project before making changes.
+
+---
+
+1. PROJECT IDENTITY – LOCK THESE VALUES
+
+Application name: Taskz
+
+Android package/application ID:
+
+"com.taskz.app"
+
+Supabase project ID:
+
+"obxvgoibjvvgldomhhpl"
+
+Supabase URL:
+
+"https://obxvgoibjvvgldomhhpl.supabase.co"
+
+Supabase Auth Google callback:
+
+"https://obxvgoibjvvgldomhhpl.supabase.co/auth/v1/callback"
+
+GitHub repository:
+
+"Htmldnbot/Taskz"
+
+Branch:
+
+"main"
+
+Android target SDK: 36
+
+Minimum SDK: Preserve the existing supported minimum SDK unless a genuine compatibility issue requires a change.
+
+The application must remain compatible with modern Android devices, including Android 16.
+
+IMPORTANT:
+
+- Never change "applicationId".
+- Never change the package name.
+- Never create a second application identity.
+- Never introduce a different package name in debug and release builds unless explicitly required and documented.
+- Preserve existing app data compatibility.
+
+---
+
+2. CRITICAL SIGNING CERTIFICATE PROBLEM – PERMANENT FIX
+
+We discovered that GitHub Actions was generating different signing certificates on different builds.
+
+As a result:
+
+- SHA-1 changed between builds.
+- SHA-256 could also change.
+- Google Sign-In stopped working when the new fingerprint was not registered.
+- Android refused to update the previously installed APK.
+- The user had to uninstall and reinstall the application.
+
+This must be permanently fixed.
+
+Confirmed working SHA-1
+
+The SHA-1 fingerprint of the latest working GitHub APK is:
+
+"F5:0A:BB:ED:E5:BB:65:40:CE:49:C8:BD:EB:14:B6:AC:B8:AA:12:89"
+
+This fingerprint was registered in Google Cloud Console, after which Google Sign-In started working.
+
+Treat this fingerprint as the currently confirmed working certificate identity.
+
+IMPORTANT:
+Do not invent a SHA-256 fingerprint.
+
+The SHA-256 fingerprint must be calculated from the actual fixed keystore that will be used to sign future APKs.
+
+Required implementation
+
+Create a permanent Android signing configuration.
+
+Requirements:
+
+1. Generate or securely establish one permanent keystore.
+2. Never generate a new signing keystore during every GitHub Actions run.
+3. Store the keystore securely using GitHub Actions Secrets.
+4. Store the keystore password and alias securely.
+5. Restore the exact same keystore during every build.
+6. Configure Gradle to explicitly use that keystore.
+7. Ensure the debug APK is actually signed using that keystore.
+8. Do not assume that merely creating a keystore means Gradle uses it.
+9. Verify the actual APK signing certificate after the build.
+10. Print SHA-1 and SHA-256 in GitHub Actions logs.
+
+Use secure GitHub Secrets such as:
+
+- TASKZ_KEYSTORE_BASE64
+- TASKZ_KEYSTORE_PASSWORD
+- TASKZ_KEY_ALIAS
+- TASKZ_KEY_PASSWORD
+
+The exact secret names may be changed if necessary, but document them clearly.
+
+Do not commit:
+
+- Keystore files.
+- Keystore passwords.
+- Private signing keys.
+- Secrets.
+- OAuth client secrets.
+
+Add appropriate entries to ".gitignore".
+
+Important migration requirement
+
+Before replacing the signing configuration, inspect the existing signing certificate and compare it with the confirmed SHA-1 above.
+
+If the permanent keystore does not match the existing installed APK's certificate, clearly explain that one uninstall/reinstall may be required for the transition.
+
+Do not claim that an APK signed with a different certificate can update an existing installation.
+
+The long-term requirement is:
+
+Build 1 → same certificate
+Build 2 → same certificate
+Build 3 → same certificate
+Build 100 → same certificate
+
+The signing SHA-1 and SHA-256 must remain stable.
+
+If the current working keystore cannot be recovered, generate a permanent replacement, calculate its fingerprints, and provide the exact Google Cloud Console update instructions.
+
+Do not silently claim that the new key matches the old one.
+
+Google Cloud configuration
+
+Keep the confirmed SHA-1 registered in the appropriate Android OAuth client if it matches the actual signing key.
+
+Verify:
+
+- Package name: "com.taskz.app"
+- Android OAuth client package name.
+- SHA-1 fingerprint.
+- Web OAuth client configuration.
+- Google Sign-In configuration.
+
+Do not repeatedly create new OAuth clients without first checking existing clients.
+
+---
+
+3. AUTOMATIC APK VERSIONING AND DIRECT UPDATES
+
+Currently, Gradle contains a fixed configuration similar to:
+
+"versionCode = 1"
+"versionName = "1.0""
+
+This causes update-related problems.
+
+Implement reliable automatic versioning.
+
+Requirements:
+
+1. Every successful new GitHub build must have a higher versionCode than the previous build.
+2. Use GitHub Actions run number or another reliable monotonic versioning strategy.
+3. Preserve a sensible versionName.
+4. Support local builds without GitHub environment variables.
+5. Avoid integer overflow.
+6. Ensure Android accepts the new APK as an update.
+7. Never change the application ID between builds.
+
+Test that:
+
+- APK 1 installs.
+- APK 2 updates APK 1 directly.
+- Existing app data remains intact.
+- Login sessions are preserved.
+- Existing locally stored tasks are not deleted.
+
+Do not instruct users to uninstall the application for every update.
+
+---
+
+4. AUTHENTICATION ARCHITECTURE – MIGRATE TO SUPABASE AUTH
+
+Our final intended authentication architecture is:
+
+Google Credential Manager
+↓
+Google ID Token
+↓
+Supabase Auth Google ID-token authentication
+↓
+Supabase session
+↓
+Supabase access token/JWT
+↓
+Supabase database and RPCs
+
+We have already configured the Google provider in Supabase.
+
+Supabase Google provider configuration includes:
+
+- Web OAuth Client ID.
+- Android OAuth Client ID where applicable.
+- Web OAuth Client Secret.
+- Supabase callback URL.
+
+Callback URL:
+
+"https://obxvgoibjvvgldomhhpl.supabase.co/auth/v1/callback"
+
+Skip nonce checks should remain OFF unless a documented technical requirement proves otherwise.
+
+IMPORTANT:
+SHA-1 and SHA-256 are Google Cloud Android OAuth signing fingerprints. They are not Supabase provider settings.
+
+Google Sign-In implementation
+
+Google Sign-In is now working after registering the current SHA-1 in Google Cloud.
+
+Do not break this working configuration.
+
+Audit the existing Credential Manager implementation.
+
+Use the correct Web OAuth Client ID as the server client ID when obtaining the Google ID token.
+
+Implement native Google ID-token authentication with Supabase Auth using the Supabase Kotlin SDK version already compatible with this project.
+
+Do not invent SDK methods. Check the actual installed dependency version and use its supported APIs.
+
+Requirements:
+
+1. Launch Google account selection.
+2. Obtain a real Google ID token.
+3. Validate that the token is not empty.
+4. Pass the token to Supabase Auth using its supported Google ID-token sign-in method.
+5. Obtain a real Supabase session.
+6. Obtain the actual Supabase user UUID.
+7. Store and refresh the Supabase session securely.
+8. Maintain login across app restarts.
+9. Avoid unnecessary logout.
+10. Handle token expiration and refresh correctly.
+11. Handle Google account cancellation separately from authentication/configuration errors.
+12. Show understandable error messages.
+
+Do not create fake authentication success states.
+
+Do not use fake tokens.
+
+Do not use Firebase ID tokens as Supabase access tokens.
+
+Do not create deterministic fake email accounts such as:
+
+"ggl<hash>@taskzapp.org"
+
+Remove this fake bridge if it exists.
+
+The authenticated user's Supabase UUID must be the source of truth for ownership, assignments and database access.
+
+---
+
+5. REMOVE UNNECESSARY FIREBASE AUTHENTICATION AND PHONE OTP
+
+Our final requirement is:
+
+- Google Sign-In.
+- Employee ID and password login.
+- Email and password login.
+- NO Phone OTP.
+- NO SMS authentication.
+- NO fake OTP.
+- NO test-phone authentication.
+
+Audit all Firebase-related dependencies, services, imports, repositories and authentication code.
+
+Remove Firebase Authentication and Firestore as authentication/database dependencies if no longer needed.
+
+However:
+
+Do not blindly remove:
+
+- Google Credential Manager.
+- Google Identity dependencies.
+- Google OAuth configuration.
+- Any dependency still required for a working Google Sign-In flow.
+
+If Firebase is no longer used anywhere, remove:
+
+- Firebase Authentication dependency.
+- Firebase Firestore dependency.
+- Firebase BOM if unused.
+- Google Services Gradle plugin if unused.
+- Firebase initialization code.
+- Firestore repositories.
+- Firebase token handling.
+- Fake phone OTP code.
+- Fake user IDs and tokens.
+- Unused Firebase configuration.
+
+Do not delete "google-services.json" until you verify that no remaining code or Gradle configuration depends on it.
+
+If Firebase is removed completely, remove the Google Services plugin and generated-resource references cleanly.
+
+There must be no half-Firebase/half-Supabase authentication architecture.
+
+---
+
+6. EMPLOYEE ID + EMAIL + PASSWORD AUTHENTICATION
+
+Preserve the existing login UI and implement reliable authentication.
+
+Supported login methods:
+
+A. Continue with Google
+B. Login using Employee ID and password
+C. Login using Email and password
+
+All methods must ultimately create a valid Supabase Auth session.
+
+Employee ID login
+
+Supabase Auth primarily authenticates users using email/password.
+
+Implement Employee ID login safely.
+
+Possible architecture:
+
+- Maintain a unique employee ID mapping in the profiles table.
+- Resolve the employee ID to its corresponding authenticated account through a secure database function or Edge Function.
+- Perform the actual authentication using Supabase Auth.
+- Do not expose a public endpoint that allows enumeration of employee email addresses.
+- Do not store plaintext passwords.
+- Do not create a fake local-only login.
+
+Preserve existing employee profile information.
+
+Registration
+
+Preserve existing registration fields:
+
+- Employee ID.
+- Full name.
+- Mobile number.
+- Optional profile photo.
+- Password, where applicable.
+
+Profile photos should remain optional.
+
+Do not require phone OTP.
+
+Do not require email verification if the existing product configuration intentionally disables it, but implement appropriate security and document the configuration.
+
+Password reset
+
+Provide a safe password-reset workflow.
+
+Do not invent an admin password or hardcode a universal default password.
+
+If Contact Admin is the intended recovery mechanism, preserve it.
+
+---
+
+7. SUPABASE SESSION AND USER PROFILE MANAGEMENT
+
+Audit the entire authentication lifecycle.
+
+Implement:
+
+- Initial session restoration.
+- Login.
+- Logout.
+- Session persistence.
+- Token refresh.
+- Expired session handling.
+- User profile loading.
+- Profile creation/upsert.
+- Correct mapping between "auth.users.id" and "public.profiles.id".
+- Correct authenticated user UUID in every database request.
+
+Never use:
+
+- Fake local user IDs.
+- Firebase UID as a Supabase UUID.
+- Hardcoded user identities.
+- Random UUIDs as authenticated user IDs.
+- Fake bearer tokens.
+
+Every authenticated request must use a valid Supabase JWT.
+
+If the session is missing or expired, refresh it or request reauthentication.
+
+Do not mark operations as successfully synchronized without actual server confirmation.
+
+---
+
+8. COMPLETE SUPABASE DATABASE MIGRATION AND SCHEMA AUDIT
+
+Inspect all existing migrations before modifying the database.
+
+Existing migration history includes files similar to:
+
+001_initial_auth.sql
+002_task_engine.sql
+003_time_critical_engine.sql
+004_security_and_response_integrity.sql
+005_offline_sync_and_dynamic_forms.sql
+006_operations_monitoring.sql
+007_schema_repair_and_auth_fix.sql
+008_system_incident_register.sql
+009_batch1_tasks_groups_shifts_sync.sql
+010_batch1_hardening.sql
+
+Do not assume these migrations are all correct.
+
+Audit the actual code and migration history.
+
+Check:
+
+- "profiles"
+- "tasks"
+- "task_participants"
+- "task_groups"
+- "group_members"
+- "shifts"
+- "task_assignments", if required by the current architecture
+- Task join requests.
+- Task responses.
+- Incident register.
+- Notification records.
+- Outbox/event records.
+- User roles.
+- Centre/group relationships.
+
+Inspect all required columns, indexes, foreign keys, constraints, triggers and RPCs.
+
+Previously identified RPCs include:
+
+"assign_user_to_task(p_task uuid, p_user uuid, p_role uuid)"
+
+"copy_shift(...)"
+
+"create_task_atomic(p_task jsonb)"
+
+"request_task_join(p_task uuid, p_role uuid, p_message text)"
+
+Inspect their actual current signatures before modifying them.
+
+Do not change an existing PostgreSQL function's return type using an incompatible CREATE OR REPLACE statement.
+
+If a signature change is necessary, provide a safe migration that handles dependencies.
+
+Migration requirements
+
+Create numbered, idempotent SQL migrations.
+
+Use:
+
+- "CREATE TABLE IF NOT EXISTS" where appropriate.
+- Safe "ALTER TABLE" operations.
+- Explicit constraints.
+- Appropriate indexes.
+- Foreign keys.
+- RLS policies.
+- Secure RPCs.
+- Proper ownership and permissions.
+
+Do not drop production tables or delete existing user/task data.
+
+Do not truncate tables.
+
+Do not create duplicate tables merely because an existing table has a different assumed name.
+
+First inspect the existing schema and reuse it.
+
+Provide complete SQL migration files that I can copy and execute in Supabase SQL Editor.
+
+Clearly distinguish:
+
+1. SQL that is safe to execute.
+2. Dashboard configuration that must be done manually.
+3. Secrets that must be configured separately.
+
+---
+
+9. TASK CREATION AND SERVER SYNCHRONIZATION
+
+A major existing issue is that tasks created by one user are not consistently visible to other users.
+
+Previously, some code wrote tasks to Firebase Firestore while other code fetched tasks from Supabase.
+
+This must be eliminated.
+
+Supabase must become the single source of truth.
+
+Requirements:
+
+1. Task creation writes to Supabase.
+2. Task updates write to Supabase.
+3. Task deletion follows the existing authorization rules.
+4. Task fetching reads from Supabase.
+5. Other authorized users can see the correct tasks.
+6. Task ownership is stored using the real Supabase user UUID.
+7. Task participants are stored in Supabase.
+8. Task responses are stored in Supabase.
+9. Task status updates are synchronized.
+10. All RPC calls use correct parameter names and types.
+11. Database errors are surfaced properly.
+12. Successful UI confirmation occurs only after actual server success or an explicitly documented offline queue operation.
+
+Remove any Firebase Firestore task-writing branch.
+
+Do not use in-memory collections as the permanent source of truth.
+
+Audit:
+
+- TaskRepository.
+- Task creation services.
+- Task fetching.
+- SyncWorker.
+- Task detail screens.
+- Task assignment logic.
+- Task participation logic.
+
+---
+
+10. TASK ASSIGNMENT AND JOIN REQUEST FIX
+
+Currently, adding users to tasks is not working reliably.
+
+Audit the entire assignment flow.
+
+Requirements:
+
+- A task creator can assign eligible users.
+- Authorized managers can assign users according to role permissions.
+- Users can request to join a task where allowed.
+- The task creator/authorized manager can approve or reject join requests.
+- Approved participants appear in the task.
+- Participants can see tasks assigned to them.
+- The same user must not receive duplicate active assignments for the same task.
+- Existing unique active participant constraints must be respected.
+
+Verify the exact role UUID mapping.
+
+Do not pass role names or role codes into a UUID parameter.
+
+Resolve roles using the actual database role records.
+
+Previously identified RPC:
+
+"assign_user_to_task(p_task, p_user, p_role)"
+
+Inspect its implementation and RLS permissions.
+
+Do not bypass RLS using client-side service-role credentials.
+
+Never put the Supabase service-role key inside the Android application.
+
+---
+
+11. TASK RESPONSES AND COMPLETION SYNCHRONIZATION
+
+All task responses must be saved to Supabase.
+
+Audit:
+
+- Yes/no responses.
+- Completion confirmations.
+- Progress updates.
+- Lane-specific status.
+- Manager approvals.
+- Offline responses.
+- Response timestamps.
+- User identity.
+- Task identity.
+
+When a user responds:
+
+1. Save the operation locally if offline.
+2. Add a durable outbox record.
+3. Synchronize when connectivity returns.
+4. Confirm server acceptance.
+5. Update the UI.
+6. Prevent duplicate submission.
+
+Use idempotency keys or unique operation IDs.
+
+Do not mark an event as SYNCED before Supabase confirms success.
+
+---
+
+12. INCIDENT REGISTER – COMPLETE SYNC FIX
+
+The incident register is an important feature.
+
+Currently incidents are not reliably synchronizing.
+
+Inspect the complete incident submission flow.
+
+Previously used event type:
+
+"SYSTEM_INCIDENT_SUBMISSION"
+
+Ensure it is processed correctly by SyncWorker and stored in the actual Supabase incident table.
+
+Preserve existing fields and add missing fields only when genuinely required.
+
+Ensure:
+
+- Incident creation.
+- Incident editing, if supported.
+- Incident visibility according to permissions.
+- Incident status.
+- Reporter UUID.
+- Centre information.
+- Task/exam references where applicable.
+- Timestamp.
+- Offline queue.
+- Retry handling.
+- Server acknowledgement.
+
+An incident must never be silently lost.
+
+Display a useful error if synchronization fails.
+
+---
+
+13. OFFLINE-FIRST SYNCHRONIZATION ENGINE
+
+The app must remain usable during weak or unavailable internet connectivity.
+
+Audit the outbox/event architecture.
+
+Implement durable synchronization using Room and WorkManager, preserving the existing architecture where possible.
+
+Requirements:
+
+- Persist pending events locally.
+- Retry temporary network errors.
+- Use exponential backoff.
+- Respect authentication session state.
+- Refresh expired tokens.
+- Avoid duplicate operations.
+- Use unique operation IDs.
+- Handle server conflicts.
+- Preserve event ordering where required.
+- Record real synchronization status.
+- Keep failed events available for retry.
+- Show pending/success/failed status in the UI where appropriate.
+
+Do not delete pending operations before server acknowledgement.
+
+Do not mark all operations successful just because a worker ran.
+
+Use appropriate WorkManager constraints.
+
+Avoid unnecessary duplicate background workers.
+
+---
+
+14. FULL-SCREEN TASK ALARMS AND NOTIFICATIONS
+
+A critical requirement is that task alarms must work even when the app is swiped away from recent apps.
+
+The application already has alarm-related components, including:
+
+- "TaskAlarmActivity"
+- "TaskAlarmReceiver"
+- "TaskBootReceiver"
+
+Preserve and audit them.
+
+Do not replace the alarm architecture with ordinary notifications.
+
+Requirements:
+
+1. Task alarm scheduling must be reliable.
+2. Alarms must work when the app is not visible.
+3. Reboot handling must restore required alarms.
+4. App updates must preserve/reschedule required alarms.
+5. Use exact alarms where permitted.
+6. Implement notification channels correctly.
+7. Implement full-screen notification intents correctly.
+8. Check Android 14+ full-screen intent restrictions.
+9. Provide an understandable setup screen if special permission is required.
+10. Handle notification permission.
+11. Handle exact-alarm permission.
+12. Handle battery optimization restrictions where relevant.
+13. Support Samsung One UI behavior.
+
+The target device includes Samsung Galaxy S23, model SM-S911B, Android 16.
+
+IMPORTANT:
+Swiping the app away from Recents is not the same as Force Stop.
+
+Do not claim that Android guarantees background execution after Force Stop.
+
+Explain any system-level limitations honestly.
+
+Use the appropriate Android alarm APIs and native components.
+
+---
+
+15. USER ROLES AND PERMISSIONS
+
+Preserve the existing role-based architecture.
+
+Existing roles include:
+
+- Super Admin.
+- Task Creator.
+- SO / Lane Manager.
+- VCO.
+- IT Manager.
+- HOM / City Head.
+- Role Head.
+- Regional Manager.
+- Operations Manager.
+- Zonal Manager.
+
+A Centre VCO may also create tasks where authorized.
+
+Do not flatten the role hierarchy.
+
+Implement authorization on the Supabase server side.
+
+UI visibility alone is not security.
+
+Every important database action must be protected by RLS or a secure RPC.
+
+---
+
+16. EXISTING OPERATIONAL FEATURES – DO NOT REMOVE
+
+Preserve the existing Taskz operational functionality.
+
+This includes, where already implemented:
+
+- Exam task management.
+- Drive download reminders around 06:00.
+- Launch completion around 07:00.
+- Lanes 1–15.
+- Lane completion percentages.
+- Registration configuration.
+- Registration started/counts.
+- Server “Allow Candidate”.
+- Shift management.
+- Shift copying with time offsets.
+- Task importance based on time/minutes.
+- Custom alarms.
+- Popups and lock-screen alerts.
+- Offline confirmation.
+- Dynamic forms.
+- Incident register.
+- Centre/system log features.
+- Existing role-specific dashboards.
+- Existing user profile and optional photo.
+
+Do not remove or simplify any of these features while fixing authentication.
+
+Preserve existing data structures unless a migration is genuinely required.
+
+---
+
+17. UI AND UX PRESERVATION
+
+The current application design should remain recognizable.
+
+Do not:
+
+- Replace the complete UI.
+- Remove existing screens.
+- Remove working navigation.
+- Remove role-specific features.
+- Change the visual identity unnecessarily.
+- Replace the application with a basic template.
+
+Keep the existing modern Nothing-inspired design language.
+
+Improve only those UI elements that are genuinely necessary to support corrected authentication, sync status, permission setup or error handling.
+
+---
+
+18. SECURITY REQUIREMENTS
+
+Audit all secrets and configuration.
+
+Never expose:
+
+- Supabase service-role key.
+- OAuth client secret.
+- Private signing key.
+- Keystore password.
+- Database credentials.
+
+The Supabase anon/publishable key may be used in the Android client according to Supabase's security model, provided RLS is correctly implemented.
+
+Never use service-role credentials in Android code.
+
+Do not store passwords in plaintext.
+
+Do not log Google ID tokens or Supabase access tokens.
+
+Do not print secrets in GitHub Actions logs.
+
+Use secure GitHub Secrets and local environment configuration.
+
+---
+
+19. GITHUB ACTIONS – PERMANENT BUILD PIPELINE
+
+Audit the existing workflow:
+
+".github/workflows/android-debug.yml"
+
+Preserve the existing workflow's purpose while correcting it.
+
+Requirements:
+
+- Stable signing keystore.
+- Stable SHA-1.
+- Stable SHA-256.
+- Locked package name.
+- Automatic versionCode.
+- Correct Gradle setup.
+- Correct JDK version.
+- APK artifact generation.
+- APK signing verification.
+- Useful build logs.
+- Failure on missing signing configuration where signing is required.
+
+Build command should remain compatible with:
+
+"./gradlew clean assembleDebug --stacktrace"
+
+After building, verify the actual APK certificate using Android build tools such as apksigner.
+
+Do not rely only on "gradlew signingReport".
+
+The final signed APK's certificate must be inspected.
+
+Output the final:
+
+- Package name.
+- Version code.
+- Version name.
+- SHA-1.
+- SHA-256.
+- Signing configuration used.
+
+Never print passwords or private secrets.
+
+---
+
+20. GOOGLE SIGN-IN CONFIGURATION VALIDATION
+
+The following configuration must be checked.
+
+Android package:
+
+"com.taskz.app"
+
+Confirmed currently working SHA-1:
+
+"F5:0A:BB:ED:E5:BB:65:40:CE:49:C8:BD:EB:14:B6:AC:B8:AA:12:89"
+
+Google OAuth:
+
+- Android OAuth client.
+- Web OAuth client.
+- Correct package name.
+- Correct signing certificate.
+
+Supabase:
+
+- Google provider enabled.
+- Web Client ID configured.
+- Client Secret configured.
+- Correct redirect callback.
+- Native ID-token authentication implemented.
+
+Do not confuse the Google OAuth redirect flow with native Google ID-token sign-in.
+
+The implementation must use the appropriate flow for Android Credential Manager and Supabase Auth.
+
+If the SHA-1 changes because the fixed signing key differs from the previously working key, provide the exact steps to update Google Cloud.
+
+---
+
+21. REQUIRED TESTS BEFORE COMPLETION
+
+Do not say "fixed" merely because the project compiles.
+
+Perform a full audit and test as much as possible.
+
+At minimum, verify:
+
+AUTHENTICATION
+
+- Google account selection opens.
+- Google Sign-In succeeds.
+- Supabase session is created.
+- Supabase user UUID is valid.
+- Session survives app restart.
+- Employee ID login works.
+- Email/password login works.
+- No phone OTP path remains.
+- No fake authentication remains.
+
+TASKS
+
+- User A creates a task.
+- User B can see the authorized task.
+- Task creator can assign User B.
+- User B sees the assignment.
+- User B can respond.
+- Response reaches Supabase.
+- Task updates synchronize.
+
+INCIDENTS
+
+- User creates an incident.
+- Incident is stored in Supabase.
+- Authorized users can view it.
+- Offline incident synchronizes later.
+
+OFFLINE
+
+- Disconnect internet.
+- Create an allowed offline operation.
+- Reconnect internet.
+- Confirm successful server synchronization.
+- Verify no duplicate records.
+
+ALARMS
+
+- Schedule an alarm.
+- Close the app from Recents.
+- Verify alarm behavior.
+- Reboot the device and verify rescheduling.
+- Verify required Android permissions.
+
+APK UPDATES
+
+- Install APK 1.
+- Build APK 2.
+- Install APK 2 without uninstalling APK 1.
+- Verify app data remains.
+- Verify login session remains.
+
+SIGNING
+
+- Build twice.
+- Compare SHA-1.
+- Compare SHA-256.
+- Confirm both are identical.
+
+---
+
+22. IMPLEMENTATION RULES – VERY IMPORTANT
+
+Do not only explain what needs to be done.
+
+Actually inspect and modify the source code.
+
+Do not give placeholder functions.
+
+Do not leave TODO comments for critical functionality.
+
+Do not silently skip broken modules.
+
+Do not invent database columns, RPC signatures or SDK methods.
+
+Inspect the actual source before changing it.
+
+When a database change is required:
+
+- Create a numbered SQL migration.
+- Explain why it is required.
+- Preserve existing records.
+- Provide the complete SQL.
+
+When a GitHub Secret is required:
+
+- Give its exact name.
+- Explain how to generate its value.
+- Explain where to add it.
+- Never hardcode it.
+
+When a dashboard change is required:
+
+- Give exact navigation steps.
+- Explain what value goes where.
+
+If a requirement cannot be completed without external dashboard configuration, implement everything possible in code and clearly identify the remaining manual step.
+
+Do not claim that an external setting has been changed automatically.
+
+---
+
+23. FINAL DELIVERABLES
+
+When implementation is complete, provide:
+
+1. Complete modified source code.
+2. Updated Gradle configuration.
+3. Updated GitHub Actions workflow.
+4. Stable signing implementation.
+5. SHA-1 and SHA-256 calculation instructions.
+6. Supabase SQL migration files.
+7. Google Sign-In implementation.
+8. Supabase session management.
+9. Employee ID/email authentication.
+10. Firebase and OTP cleanup, if safe.
+11. Task synchronization fixes.
+12. Assignment and join-request fixes.
+13. Task response synchronization fixes.
+14. Incident synchronization fixes.
+15. Offline sync fixes.
+16. Alarm/background behavior fixes.
+17. APK versioning fixes.
+18. Exact GitHub Secrets setup instructions.
+19. Exact Google Cloud configuration instructions.
+20. Exact Supabase configuration instructions.
+21. A list of files modified and why.
+22. A list of remaining manual actions.
+23. Build and test results.
+
+The project must compile successfully using:
+
+"./gradlew clean assembleDebug --stacktrace"
+
+Do not declare success if compilation fails.
+
+If the code compiles but some live Supabase functionality cannot be tested because credentials or database access are unavailable, clearly state that limitation.
+
+FINAL PRIORITY
+
+The most important objective is to make Taskz reliable.
+
+The final architecture must be:
+
+ONE STABLE ANDROID APPLICATION ID
+
++ ONE PERMANENT SIGNING CERTIFICATE
++ GOOGLE SIGN-IN
++ SUPABASE AUTH
++ SUPABASE DATABASE AS THE SINGLE SOURCE OF TRUTH
++ RELIABLE TASK/ASSIGNMENT/INCIDENT SYNC
++ WORKING OFFLINE QUEUE
++ RELIABLE FULL-SCREEN ALARMS
++ DIRECT APK UPDATES WITHOUT REINSTALLATION
+
+Preserve all existing functionality.
+
+Audit first. Implement second. Test third.
+
+Do not make superficial changes just to report success.

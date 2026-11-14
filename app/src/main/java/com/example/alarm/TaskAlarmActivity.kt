@@ -4,9 +4,12 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -114,7 +117,9 @@ class TaskAlarmActivity : ComponentActivity() {
 
     private var mediaPlayer: MediaPlayer? = null
     private var ringtone: Ringtone? = null
+    private var toneGenerator: ToneGenerator? = null
     private var vibrator: Vibrator? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
     private var activeAlarmId: Int = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -240,13 +245,10 @@ class TaskAlarmActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            keyguardManager.requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             )
@@ -258,38 +260,45 @@ class TaskAlarmActivity : ComponentActivity() {
         val shouldPlaySound = !alarmType.equals("SILENT", ignoreCase = true) &&
             !alarmType.equals("NORMAL_NOTIFICATION", ignoreCase = true) &&
             (importance.equals("CRITICAL", ignoreCase = true) ||
+                importance.equals("HIGH", ignoreCase = true) ||
                 alarmType.equals("SOUND_ALERT", ignoreCase = true) ||
-                (alarmType.equals("FULL_SCREEN_ALARM", ignoreCase = true) && !importance.equals("HIGH", ignoreCase = true)))
+                alarmType.equals("FULL_SCREEN_ALARM", ignoreCase = true))
         val shouldVibrate = !alarmType.equals("SILENT", ignoreCase = true)
 
         try {
             if (shouldPlaySound) {
-                val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                 val attrs = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
 
+                requestAlarmAudioFocus(attrs)
+
+                val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+                var started = false
                 if (alarmUri != null) {
                     try {
                         mediaPlayer = MediaPlayer().apply {
                             setAudioAttributes(attrs)
                             setDataSource(applicationContext, alarmUri)
                             isLooping = true
+                            setOnErrorListener { _, _, _ ->
+                                startRingtoneOrToneFallback(alarmUri, attrs)
+                                true
+                            }
                             prepare()
                             start()
                         }
+                        started = true
                     } catch (_: Exception) {
-                        ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)?.apply {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                isLooping = true
-                            }
-                            audioAttributes = attrs
-                            play()
-                        }
+                        started = startRingtoneOrToneFallback(alarmUri, attrs)
                     }
+                }
+                if (!started) {
+                    startRingtoneOrToneFallback(alarmUri, attrs)
                 }
             }
 
@@ -313,6 +322,45 @@ class TaskAlarmActivity : ComponentActivity() {
         } catch (_: Exception) {}
     }
 
+    private fun startRingtoneOrToneFallback(alarmUri: android.net.Uri?, attrs: AudioAttributes): Boolean {
+        if (alarmUri != null) {
+            val played = runCatching {
+                ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)?.apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        isLooping = true
+                    }
+                    audioAttributes = attrs
+                    play()
+                }
+                ringtone != null
+            }.getOrDefault(false)
+            if (played) return true
+        }
+        return runCatching {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100).apply {
+                startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 3000)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun requestAlarmAudioFocus(attrs: AudioAttributes) {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(attrs)
+                    .setAcceptsDelayedFocusGain(true)
+                    .build()
+                audioFocusRequest = req
+                am.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(null, AudioManager.STREAM_ALARM, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            }
+        }
+    }
+
     private fun stopAlarmAudioAndVibration() {
         try {
             mediaPlayer?.stop()
@@ -324,8 +372,31 @@ class TaskAlarmActivity : ComponentActivity() {
 
         try {
             ringtone?.stop()
+        } catch (_: Exception) {}
+        ringtone = null
+
+        try {
+            toneGenerator?.stopTone()
+            toneGenerator?.release()
+        } catch (_: Exception) {}
+        toneGenerator = null
+
+        try {
             vibrator?.cancel()
         } catch (_: Exception) {}
+
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am != null) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.abandonAudioFocus(null)
+                }
+            }
+        }
+        audioFocusRequest = null
     }
 
     private fun stopAllAlarmOutputs() {
@@ -380,9 +451,8 @@ class TaskAlarmActivity : ComponentActivity() {
             .getOrNull()
             ?: session.accessToken?.takeIf {
                 it.isNotBlank() &&
-                    !it.startsWith("firebase_") &&
                     !it.startsWith("offline_") &&
-                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+                    it.split(".").size == 3
             }
         if (!token.isNullOrBlank()) {
             val res = SupabaseClient().acknowledgeTaskAlarm(token, taskId, eventId, nowIso)
@@ -479,9 +549,8 @@ class TaskAlarmActivity : ComponentActivity() {
         var token = authRepo.getValidAccessToken().getOrNull()
             ?: session.accessToken?.takeIf {
                 it.isNotBlank() &&
-                    !it.startsWith("firebase_") &&
                     !it.startsWith("offline_") &&
-                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+                    it.split(".").size == 3
             }
         var isServerConfirmed = false
         var serverStatus: String? = null
@@ -644,9 +713,8 @@ class TaskAlarmActivity : ComponentActivity() {
         var token = authRepo.getValidAccessToken().getOrNull()
             ?: session.accessToken?.takeIf {
                 it.isNotBlank() &&
-                    !it.startsWith("firebase_") &&
                     !it.startsWith("offline_") &&
-                    !com.example.core.network.FirebaseSessionHelper.isFirebaseJwt(it)
+                    it.split(".").size == 3
             }
         var isServerConfirmed = false
 

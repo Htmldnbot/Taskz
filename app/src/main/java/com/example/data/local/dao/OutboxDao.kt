@@ -19,8 +19,14 @@ interface OutboxDao {
     @Query("SELECT * FROM outbox_events WHERE syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE') ORDER BY createdAt ASC")
     suspend fun getPendingEvents(): List<OutboxEventEntity>
 
+    @Query("SELECT * FROM outbox_events WHERE userId = :userId AND syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE', 'FAILED_PERMANENT') ORDER BY createdAt ASC")
+    fun getUnsyncedEventsForUserFlow(userId: String): Flow<List<OutboxEventEntity>>
+
     @Query("SELECT COUNT(*) FROM outbox_events WHERE userId = :userId AND syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE')")
     fun getPendingCountFlowForUser(userId: String): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM outbox_events WHERE userId = :userId AND syncStatus = 'FAILED_PERMANENT'")
+    fun getPermanentFailedCountFlowForUser(userId: String): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM outbox_events WHERE syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE')")
     fun getPendingCountFlow(): Flow<Int>
@@ -46,8 +52,20 @@ interface OutboxDao {
     @Query("UPDATE outbox_events SET syncStatus = :status, serverAcknowledgement = :ack WHERE transactionId = :transactionId")
     suspend fun updateEventStatus(transactionId: String, status: String, ack: String?)
 
+    @Query("UPDATE outbox_events SET syncStatus = 'PENDING' WHERE userId = :userId AND syncStatus IN ('SENDING', 'FAILED_RETRYABLE', 'FAILED_PERMANENT')")
+    suspend fun resetAllUnsyncedToPendingForUser(userId: String)
+
     @Query("UPDATE outbox_events SET syncStatus = 'PENDING' WHERE userId = :userId AND syncStatus = 'SENDING'")
     suspend fun resetSendingToPendingForUser(userId: String)
+
+    @Query("DELETE FROM outbox_events WHERE id = :id")
+    suspend fun deleteEventById(id: Long)
+
+    @Query("DELETE FROM outbox_events WHERE userId = :userId AND syncStatus = 'FAILED_PERMANENT'")
+    suspend fun clearPermanentFailedForUser(userId: String)
+
+    @Query("DELETE FROM outbox_events WHERE userId != :activeUserId AND (userId LIKE 'firebase_%' OR userId LIKE 'offline_%')")
+    suspend fun deleteLegacyPreMigrationEvents(activeUserId: String)
 
     @Query("DELETE FROM outbox_events WHERE userId = :userId AND syncStatus = 'SYNCED'")
     suspend fun clearSyncedEventsForUser(userId: String)

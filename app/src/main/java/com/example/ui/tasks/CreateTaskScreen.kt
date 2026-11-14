@@ -126,7 +126,7 @@ enum class SimpleTaskPriority(
     ),
     HIGH(
         "High",
-        "Full screen notification, no sound (vibrate)",
+        "Full screen alarm with sound & vibration",
         TaskImportance.HIGH,
         AlarmType.FULL_SCREEN_ALARM,
         "high",

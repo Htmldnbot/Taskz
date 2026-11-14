@@ -86,6 +86,37 @@ class HomeViewModel(
         }
     }
 
+    fun retryPendingSync() {
+        if (_isRefreshing.value) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            _syncErrorMessage.value = null
+            val result = syncRepository.retryStuckAndFailedEvents()
+            result.fold(
+                onSuccess = {
+                    _isRefreshing.value = false
+                    loadDashboardStats()
+                },
+                onFailure = { error ->
+                    _isRefreshing.value = false
+                    val msg = error.message.orEmpty()
+                    if (msg.contains("inactive", ignoreCase = true)) {
+                        _isAccountInactive.value = true
+                    } else {
+                        _syncErrorMessage.value = msg.ifBlank { "Sync retry failed" }
+                    }
+                }
+            )
+        }
+    }
+
+    fun clearFailedSyncItems() {
+        viewModelScope.launch {
+            syncRepository.clearPermanentFailedEvents()
+            _syncErrorMessage.value = null
+        }
+    }
+
     fun clearSyncError() {
         _syncErrorMessage.value = null
     }
