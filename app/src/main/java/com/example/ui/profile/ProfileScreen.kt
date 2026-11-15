@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,8 +31,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Save
@@ -40,6 +44,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -73,6 +79,7 @@ import com.example.ui.common.TaskzTextField
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(
     viewModel: ProfileViewModel,
@@ -81,8 +88,11 @@ fun ProfileScreen(
 ) {
     val context = LocalContext.current
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val isLoggingOut by viewModel.isLoggingOut.collectAsStateWithLifecycle()
+    val isSwitchingRole by viewModel.isSwitchingRole.collectAsStateWithLifecycle()
+    val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
 
     var fullName by rememberSaveable(profile) { mutableStateOf(profile?.fullName.orEmpty()) }
     var mobile by rememberSaveable(profile) { mutableStateOf(profile?.mobile.orEmpty()) }
@@ -202,7 +212,7 @@ fun ProfileScreen(
                 color = MaterialTheme.colorScheme.secondaryContainer
             ) {
                 Text(
-                    text = "Role: ${profile?.appRole?.replaceFirstChar { it.uppercase() } ?: "Employee"}",
+                    text = "Active Role: ${authContext.activeRole.displayName}",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -212,7 +222,152 @@ fun ProfileScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Assigned Roles & Active Role Selector Card
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("profile_roles_card")
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Assigned Roles & Active Role",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    if (isSwitchingRole) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                val rolesList = authContext.assignedRoles.ifEmpty {
+                    listOf(
+                        com.example.core.model.AssignedRoleInfo(
+                            roleId = "",
+                            roleCode = authContext.activeRole.code,
+                            roleName = authContext.activeRole.displayName,
+                            isPrimary = true
+                        )
+                    )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    rolesList.forEach { role ->
+                        val isActive = role.roleCode.equals(authContext.activeRole.code, ignoreCase = true)
+                        FilterChip(
+                            selected = isActive,
+                            onClick = {
+                                if (!isActive && !isSwitchingRole) {
+                                    viewModel.switchActiveRole(role.roleCode)
+                                }
+                            },
+                            enabled = !isSwitchingRole,
+                            label = {
+                                Text(if (isActive) "${role.roleName} (Active)" else role.roleName)
+                            },
+                            leadingIcon = if (isActive) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Active role",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else null,
+                            modifier = Modifier.testTag("profile_role_chip_${role.roleCode}")
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (rolesList.size > 1) {
+                        "Tap an assigned role to switch your active scope and dashboard view immediately."
+                    } else {
+                        "Roles are provisioned by Super Admin. Self-promotion is restricted."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Organizational Scope & Device Registration Card
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("profile_scope_device_card")
+        ) {
+            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.LocationCity,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Organizational Scope & Device",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+                Text(
+                    text = "Effective Scope: ${authContext.scope.summaryLabel()} (${authContext.activeRole.defaultScope.label})",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                )
+                val scopeParts = listOfNotNull(
+                    authContext.scope.zoneName?.let { "Zone: $it" },
+                    authContext.scope.stateName?.let { "State: $it" },
+                    authContext.scope.cityName?.let { "City: $it" },
+                    authContext.scope.centreCode?.let { "Centre: $it" }
+                )
+                if (scopeParts.isNotEmpty()) {
+                    Text(
+                        text = scopeParts.joinToString(" • "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Devices,
+                        contentDescription = null,
+                        tint = TaskzSuccess,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Device ID: ${deviceId?.take(14) ?: "Initializing..."} • Multi-device Push Registered",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Profile Form
         Card(

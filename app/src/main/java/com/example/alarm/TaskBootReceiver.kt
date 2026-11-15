@@ -23,9 +23,17 @@ class TaskBootReceiver : BroadcastReceiver() {
                 try {
                     val scheduler = TaskAlarmScheduler(context)
                     scheduler.restoreAlarmsAfterReboot()
-                    Log.d(TAG, "Finished restoring alarms after reboot")
+                    com.example.sync.SyncWorker.schedulePeriodicSync(context)
+                    val prefs = com.example.core.datastore.UserPreferencesDataStore(context)
+                    if (prefs.getUserSession().isAuthenticated) {
+                        com.example.sync.SyncWorker.enqueueSync(context)
+                        runCatching {
+                            com.example.TaskzApplication.instance.deviceTokenManager.registerActiveDeviceToken()
+                        }
+                    }
+                    Log.d(TAG, "Finished restoring alarms, sync workers, and push token registration after reboot")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error restoring alarms: ${e.message}")
+                    Log.e(TAG, "Error restoring post-reboot services: ${e.message}")
                 } finally {
                     pendingResult.finish()
                 }

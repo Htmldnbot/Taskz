@@ -88,13 +88,17 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
+    val scopedSummary by viewModel.scopedSummaryFlow.collectAsStateWithLifecycle()
     val syncMetadata by viewModel.syncMetadataFlow.collectAsStateWithLifecycle()
     val dashboardStats by viewModel.dashboardStats.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncManagerSyncing by viewModel.syncManagerSyncing.collectAsStateWithLifecycle()
+    val unreadNotifications by viewModel.unreadNotificationsCount.collectAsStateWithLifecycle()
     val syncErrorMessage by viewModel.syncErrorMessage.collectAsStateWithLifecycle()
     val isAccountInactive by viewModel.isAccountInactive.collectAsStateWithLifecycle()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(authContext.activeRole, authContext.scope) {
         viewModel.loadDashboardStats()
     }
 
@@ -434,8 +438,11 @@ fun HomeScreen(
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer
@@ -448,32 +455,36 @@ fun HomeScreen(
                             )
                         }
 
-                        if (profile?.isAdmin == true) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            modifier = Modifier.testTag("home_active_role_badge")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Security,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Admin",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = authContext.activeRole.displayName,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Scope: ${authContext.scope.summaryLabel()} • Assigned Roles: ${authContext.assignedRoles.size.coerceAtLeast(1)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -483,25 +494,28 @@ fun HomeScreen(
         // Synchronization Status Card
         SyncStatusCard(
             syncMetadata = syncMetadata,
-            onRefreshClick = {
-                if (syncMetadata.pendingSyncCount > 0 || syncMetadata.status == com.example.core.model.SyncStatus.ERROR) {
-                    viewModel.retryPendingSync()
-                } else {
-                    viewModel.triggerManualRefresh()
-                }
-            },
+            onRefreshClick = { viewModel.triggerAutomaticRefresh() },
             onClearFailedClick = {
                 viewModel.clearFailedSyncItems()
             },
             externalErrorMessage = syncErrorMessage,
-            isRefreshing = isRefreshing
+            isRefreshing = isRefreshing || syncManagerSyncing
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Real Dashboard Summary Statistics
+        // Role-Aware Dashboard Summary Statistics
+        val overviewHeading = when (authContext.activeRole) {
+            com.example.core.model.TaskzRole.IT_MANAGER -> "Centre & LAN Operations (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.VCO -> "Venue & City Coordination (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.CITY_HEAD -> "City Operational Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.ROM -> "State / Region Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.ZOM -> "Zone Operational Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.COMMAND_CENTER -> "Command Center Overview"
+            com.example.core.model.TaskzRole.SUPER_ADMIN -> "Global Governance Overview"
+        }
         Text(
-            text = "Operational Overview",
+            text = overviewHeading,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -513,16 +527,16 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = "My Tasks Today",
-                value = dashboardStats.myTasksToday.toString(),
+                title = "Assigned / Scope Tasks",
+                value = maxOf(scopedSummary.assignedTasks, dashboardStats.myTasksToday).toString(),
                 icon = Icons.Default.Today,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f),
                 onClick = onNavigateToTasks
             )
             StatCard(
-                title = "Upcoming Tasks",
-                value = dashboardStats.upcomingTasks.toString(),
+                title = "Pending Tasks",
+                value = maxOf(scopedSummary.pendingTasks, dashboardStats.upcomingTasks).toString(),
                 icon = Icons.Default.EventNote,
                 color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.weight(1f),
@@ -537,18 +551,42 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = "Pending Requests",
-                value = dashboardStats.pendingRequests.toString(),
+                title = "Overdue Tasks",
+                value = scopedSummary.overdueTasks.toString(),
                 icon = Icons.Default.HourglassTop,
-                color = MaterialTheme.colorScheme.tertiary,
+                color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.weight(1f),
                 onClick = onNavigateToTasks
             )
             StatCard(
-                title = "Vacancies",
+                title = if (scopedSummary.escalatedIncidents > 0) "Open / Escalated Incidents" else "Open Incidents",
+                value = if (scopedSummary.escalatedIncidents > 0) "${scopedSummary.openIncidents} (${scopedSummary.escalatedIncidents}↑)" else scopedSummary.openIncidents.toString(),
+                icon = Icons.Default.Lan,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToIncidents
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            StatCard(
+                title = "Unread Alerts",
+                value = maxOf(scopedSummary.unreadNotifications, unreadNotifications).toString(),
+                icon = Icons.Default.Warning,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+                onClick = onNavigateToTasks
+            )
+            StatCard(
+                title = "Open Vacancies",
                 value = dashboardStats.vacancies.toString(),
                 icon = Icons.Default.WorkOutline,
-                color = MaterialTheme.colorScheme.error,
+                color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.weight(1f),
                 onClick = onNavigateToTasks
             )
@@ -557,7 +595,7 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Workforce Modules",
+            text = "Authorized Modules (${authContext.activeRole.displayName})",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -566,29 +604,31 @@ fun HomeScreen(
 
         ModuleTile(
             title = "Task Management",
-            subtitle = "View your assigned duties, discover available tasks, or manage created tasks",
+            subtitle = "Scoped duties for ${authContext.scope.summaryLabel()} • ${authContext.activeRole.displayName}",
             icon = Icons.Default.Assignment,
             tag = "Active",
             onClick = onNavigateToTasks,
             testTag = "home_module_tasks"
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        if (viewModel.permissionManager.canManageGroups()) {
+            Spacer(modifier = Modifier.height(10.dp))
 
-        ModuleTile(
-            title = "Groups & Events",
-            subtitle = "Organize workforce by event, shifts, and departments",
-            icon = Icons.Default.Groups,
-            tag = "Events",
-            onClick = onNavigateToGroups,
-            testTag = "home_module_groups"
-        )
+            ModuleTile(
+                title = "Groups & Events",
+                subtitle = "Organize workforce by event, shifts, and operational units",
+                icon = Icons.Default.Groups,
+                tag = "Scope Mgmt",
+                onClick = onNavigateToGroups,
+                testTag = "home_module_groups"
+            )
+        }
 
         Spacer(modifier = Modifier.height(10.dp))
 
         ModuleTile(
             title = "System Incident Register",
-            subtitle = "Record computer system failures, candidate shifts, and technical exam logs",
+            subtitle = "Scoped technical failures, escalations, and live LAN logs",
             icon = Icons.Default.DesktopWindows,
             tag = "Technical",
             onClick = onNavigateToIncidents,
@@ -598,21 +638,21 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         ModuleTile(
-            title = "Employee Profile",
-            subtitle = "View credentials, photo, and update contact information",
+            title = "Employee Profile & Active Role",
+            subtitle = "Switch between your assigned roles, view scope & device info",
             icon = Icons.Default.Person,
             tag = "Profile",
             onClick = onNavigateToProfile,
             testTag = "home_module_profile"
         )
 
-        if (profile?.isAdmin == true) {
+        if (viewModel.permissionManager.canManageUsers()) {
             Spacer(modifier = Modifier.height(10.dp))
             ModuleTile(
                 title = "Administrative Console",
-                subtitle = "Manage employees, temporary password resets & configure work roles",
+                subtitle = "Manage employees, roles, geographic scope & audit logs",
                 icon = Icons.Default.AdminPanelSettings,
-                tag = "Admin Access",
+                tag = "Super Admin",
                 isHighlighted = true,
                 onClick = onNavigateToAdmin,
                 testTag = "home_module_admin"

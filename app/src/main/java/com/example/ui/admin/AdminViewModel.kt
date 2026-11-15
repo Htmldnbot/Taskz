@@ -2,9 +2,14 @@ package com.example.ui.admin
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.TaskzApplication
+import com.example.core.model.AdminAuditEntry
+import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
+import com.example.core.model.ScopedMemberSearchResult
 import com.example.core.model.UserProfile
 import com.example.domain.repository.AdminRepository
+import com.example.sync.TaskzSyncManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,11 +23,20 @@ sealed interface AdminActionState {
 }
 
 class AdminViewModel(
-    private val adminRepository: AdminRepository
+    private val adminRepository: AdminRepository,
+    private val taskzSyncManager: TaskzSyncManager = TaskzApplication.instance.taskzSyncManager
 ) : ViewModel() {
 
     private val _users = MutableStateFlow<List<UserProfile>>(emptyList())
     val users: StateFlow<List<UserProfile>> = _users.asStateFlow()
+
+    private val _scopedMembers = MutableStateFlow<List<ScopedMemberSearchResult>>(emptyList())
+    val scopedMembers: StateFlow<List<ScopedMemberSearchResult>> = _scopedMembers.asStateFlow()
+
+    val orgHierarchy: StateFlow<OrgHierarchyData> = taskzSyncManager.orgHierarchy
+
+    private val _auditLogs = MutableStateFlow<List<AdminAuditEntry>>(emptyList())
+    val auditLogs: StateFlow<List<AdminAuditEntry>> = _auditLogs.asStateFlow()
 
     private val _resetRequests = MutableStateFlow<List<PasswordResetRequest>>(emptyList())
     val resetRequests: StateFlow<List<PasswordResetRequest>> = _resetRequests.asStateFlow()
@@ -33,12 +47,17 @@ class AdminViewModel(
     private val _isLoadingRequests = MutableStateFlow(false)
     val isLoadingRequests: StateFlow<Boolean> = _isLoadingRequests.asStateFlow()
 
+    private val _isLoadingAudits = MutableStateFlow(false)
+    val isLoadingAudits: StateFlow<Boolean> = _isLoadingAudits.asStateFlow()
+
     private val _actionState = MutableStateFlow<AdminActionState>(AdminActionState.Idle)
     val actionState: StateFlow<AdminActionState> = _actionState.asStateFlow()
 
     init {
         loadAllUsers()
         loadResetRequests()
+        loadOrgHierarchy()
+        loadAuditLogs()
     }
 
     fun loadAllUsers() {
@@ -50,12 +69,80 @@ class AdminViewModel(
         }
     }
 
+    fun loadOrgHierarchy() {
+        viewModelScope.launch {
+            taskzSyncManager.refreshOrgHierarchy()
+        }
+    }
+
+    fun searchScopedMembers(
+        query: String = "",
+        roleCode: String? = null,
+        centreId: String? = null
+    ) {
+        viewModelScope.launch {
+            val res = adminRepository.searchScopedMembers(query = query, roleCode = roleCode, centreId = centreId)
+            res.onSuccess { _scopedMembers.value = it }
+        }
+    }
+
+    fun loadAuditLogs() {
+        viewModelScope.launch {
+            _isLoadingAudits.value = true
+            val res = adminRepository.getAdminAuditLogs(limit = 60)
+            _isLoadingAudits.value = false
+            res.onSuccess { _auditLogs.value = it }
+        }
+    }
+
     fun loadResetRequests() {
         viewModelScope.launch {
             _isLoadingRequests.value = true
             val res = adminRepository.getPasswordResetRequests()
             _isLoadingRequests.value = false
             res.onSuccess { _resetRequests.value = it }
+        }
+    }
+
+    fun updateUserAccess(
+        targetUser: UserProfile,
+        roleCodes: List<String>,
+        activeRoleCode: String?,
+        zoneId: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        isActive: Boolean
+    ) {
+        if (roleCodes.isEmpty()) {
+            _actionState.value = AdminActionState.Error("Select at least one role for ${targetUser.fullName}.")
+            return
+        }
+        viewModelScope.launch {
+            _actionState.value = AdminActionState.Loading
+            val res = adminRepository.adminUpdateUserAccess(
+                targetUserId = targetUser.id,
+                roleCodes = roleCodes,
+                activeRoleCode = activeRoleCode,
+                zoneId = zoneId,
+                stateId = stateId,
+                cityId = cityId,
+                centreId = centreId,
+                isActive = isActive
+            )
+            res.fold(
+                onSuccess = {
+                    _actionState.value = AdminActionState.Success(
+                        "Updated roles & scope for ${targetUser.fullName} (${targetUser.employeeId})"
+                    )
+                    loadAllUsers()
+                    loadAuditLogs()
+                    taskzSyncManager.syncNow(forceFull = true)
+                },
+                onFailure = { err ->
+                    _actionState.value = AdminActionState.Error(err.message ?: "Failed to update user access")
+                }
+            )
         }
     }
 
@@ -70,6 +157,7 @@ class AdminViewModel(
                         "Employee ${profile.employeeId} is now ${if (newStatus) "Active" else "Inactive"}"
                     )
                     loadAllUsers()
+                    loadAuditLogs()
                 },
                 onFailure = { err ->
                     _actionState.value = AdminActionState.Error(err.message ?: "Failed to update status")
@@ -100,6 +188,7 @@ class AdminViewModel(
                     _actionState.value = AdminActionState.Success(msg)
                     loadResetRequests()
                     loadAllUsers()
+                    loadAuditLogs()
                 },
                 onFailure = { err ->
                     _actionState.value = AdminActionState.Error(err.message ?: "Password reset failed")
@@ -112,3 +201,4 @@ class AdminViewModel(
         _actionState.value = AdminActionState.Idle
     }
 }
+

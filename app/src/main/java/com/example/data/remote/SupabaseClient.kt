@@ -1,9 +1,23 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.core.model.AdminAuditEntry
+import com.example.core.model.AppNotification
+import com.example.core.model.AssignedRoleInfo
+import com.example.core.model.AuthorizationContext
+import com.example.core.model.OrgCentre
+import com.example.core.model.OrgCity
+import com.example.core.model.OrgHierarchyData
+import com.example.core.model.OrgScope
+import com.example.core.model.OrgState
+import com.example.core.model.OrgZone
 import com.example.core.model.PasswordResetRequest
+import com.example.core.model.ScopeLevel
+import com.example.core.model.ScopedDashboardSummary
+import com.example.core.model.ScopedMemberSearchResult
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
+import com.example.core.model.TaskzRole
 import com.example.core.model.UserProfile
 import com.example.core.network.SupabaseConfig
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +30,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+class SupabaseHttpException(
+    val statusCode: Int,
+    override val message: String
+) : IOException(message) {
+    val isAuthFailure: Boolean get() = statusCode == 401 || statusCode == 403
+    val isConflict: Boolean get() = statusCode == 409
+    val isRetryable: Boolean get() = statusCode == 429 || statusCode >= 500
+}
 
 data class AuthSessionResponse(
     val accessToken: String,
@@ -2563,16 +2586,31 @@ class SupabaseClient(
     // ==========================================
 
     private fun parseProfileJson(json: JSONObject): UserProfile {
+        val rawRole = json.optString("app_role", "employee")
+        val fallbackActive = if (rawRole.equals("admin", ignoreCase = true)) "SUPER_ADMIN" else "IT_MANAGER"
         return UserProfile(
             id = json.optString("id"),
             employeeId = json.optString("employee_id"),
             fullName = json.optString("full_name"),
             mobile = json.optString("mobile"),
-            profilePhotoPath = json.optString("profile_photo_path").takeIf { it.isNotBlank() },
-            appRole = json.optString("app_role", "employee"),
+            email = json.optString("email").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            profilePhotoPath = json.optString("profile_photo_path").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            appRole = rawRole,
+            activeRoleCode = json.optString("active_role_code").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: fallbackActive,
+            primaryRoleCode = json.optString("primary_role_code").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: fallbackActive,
+            zoneId = json.optString("zone_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            zoneName = json.optString("zone_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            stateId = json.optString("state_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            stateName = json.optString("state_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            cityId = json.optString("city_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            cityName = json.optString("city_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            centreId = json.optString("centre_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            centreCode = json.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            roleVersion = json.optLong("role_version", 1L),
+            scopeVersion = json.optLong("scope_version", 1L),
             isActive = json.optBoolean("is_active", true),
             mustChangePassword = json.optBoolean("must_change_password", false),
-            lastSeenAt = json.optString("last_seen_at").takeIf { it.isNotBlank() },
+            lastSeenAt = json.optString("last_seen_at").takeIf { it.isNotBlank() && !it.equals("null", true) },
             createdAt = json.optString("created_at"),
             updatedAt = json.optString("updated_at")
         )
@@ -3083,6 +3121,376 @@ class SupabaseClient(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    // =====================================================================
+    // ENTERPRISE RBAC, ORG HIERARCHY, ESCALATION, DELTA SYNC & PUSH TOKENS
+    // =====================================================================
+
+    private fun executeRpc(
+        accessToken: String,
+        rpcName: String,
+        body: JSONObject
+    ): Result<String> {
+        checkConfig()
+        val bearer = getAuthBearer(accessToken)
+        if (bearer.isBlank()) {
+            return Result.failure(SupabaseHttpException(401, "401 Authentication session expired or invalid"))
+        }
+        val request = Request.Builder()
+            .url("${baseUrl()}/rest/v1/rpc/$rpcName")
+            .addHeader("apikey", anonKey())
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        val response = okHttpClient.newCall(request).execute()
+        val respBody = response.body?.string() ?: "{}"
+        if (!response.isSuccessful) {
+            return Result.failure(
+                SupabaseHttpException(
+                    statusCode = response.code,
+                    message = parseErrorMessage(respBody, "RPC $rpcName failed (${response.code})")
+                )
+            )
+        }
+        return Result.success(respBody)
+    }
+
+    suspend fun setInitialOnboardingRole(
+        accessToken: String,
+        roleCode: String,
+        centreCode: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_role_code", roleCode)
+                if (!centreCode.isNullOrBlank()) put("p_centre_code", centreCode)
+            }
+            executeRpc(accessToken, "set_initial_onboarding_role", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchMyAuthorizationContext(accessToken: String): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        try {
+            executeRpc(accessToken, "get_my_authorization_context", JSONObject()).map { raw ->
+                parseAuthorizationContext(JSONObject(raw))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun switchActiveRole(
+        accessToken: String,
+        roleCode: String
+    ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply { put("p_role_code", roleCode) }
+            executeRpc(accessToken, "switch_active_role", body).map { raw ->
+                parseAuthorizationContext(JSONObject(raw))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchOrgHierarchy(accessToken: String): Result<OrgHierarchyData> = withContext(Dispatchers.IO) {
+        try {
+            executeRpc(accessToken, "get_org_hierarchy", JSONObject()).map { raw ->
+                val obj = JSONObject(raw)
+                val zonesArr = obj.optJSONArray("zones") ?: JSONArray()
+                val statesArr = obj.optJSONArray("states") ?: JSONArray()
+                val citiesArr = obj.optJSONArray("cities") ?: JSONArray()
+                val centresArr = obj.optJSONArray("centres") ?: JSONArray()
+
+                OrgHierarchyData(
+                    zones = List(zonesArr.length()) { idx ->
+                        val z = zonesArr.getJSONObject(idx)
+                        OrgZone(z.optString("id"), z.optString("code"), z.optString("name"))
+                    },
+                    states = List(statesArr.length()) { idx ->
+                        val s = statesArr.getJSONObject(idx)
+                        OrgState(s.optString("id"), s.optString("zone_id"), s.optString("code"), s.optString("name"))
+                    },
+                    cities = List(citiesArr.length()) { idx ->
+                        val c = citiesArr.getJSONObject(idx)
+                        OrgCity(c.optString("id"), c.optString("state_id"), c.optString("zone_id"), c.optString("code"), c.optString("name"))
+                    },
+                    centres = List(centresArr.length()) { idx ->
+                        val ct = centresArr.getJSONObject(idx)
+                        OrgCentre(
+                            id = ct.optString("id"),
+                            externalCode = ct.optString("external_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                            cityId = ct.optString("city_id"),
+                            stateId = ct.optString("state_id"),
+                            zoneId = ct.optString("zone_id"),
+                            code = ct.optString("code"),
+                            name = ct.optString("name"),
+                            districtName = ct.optString("district_name").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        )
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun searchScopedMembers(
+        accessToken: String,
+        query: String = "",
+        roleCode: String? = null,
+        centreId: String? = null,
+        limit: Int = 40
+    ): Result<List<ScopedMemberSearchResult>> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_query", query)
+                if (!roleCode.isNullOrBlank()) put("p_role_code", roleCode)
+                if (SupabaseConfig.isValidUuid(centreId)) put("p_centre_id", centreId)
+                put("p_limit", limit)
+            }
+            executeRpc(accessToken, "search_scoped_members", body).map { raw ->
+                val arr = JSONArray(raw)
+                List(arr.length()) { idx ->
+                    val o = arr.getJSONObject(idx)
+                    val rolesArr = o.optJSONArray("assigned_roles") ?: JSONArray()
+                    ScopedMemberSearchResult(
+                        id = o.optString("id"),
+                        employeeId = o.optString("employee_id"),
+                        fullName = o.optString("full_name"),
+                        email = o.optString("email").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        mobile = o.optString("mobile").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        activeRoleCode = o.optString("active_role_code", "IT_MANAGER"),
+                        assignedRoles = List(rolesArr.length()) { rIdx -> rolesArr.optString(rIdx) },
+                        centreId = o.optString("centre_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        centreCode = o.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        cityId = o.optString("city_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        cityName = o.optString("city_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        stateId = o.optString("state_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        stateName = o.optString("state_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        zoneId = o.optString("zone_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        zoneName = o.optString("zone_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        isActive = o.optBoolean("is_active", true)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun adminUpdateUserAccess(
+        accessToken: String,
+        targetUserId: String,
+        roleCodes: List<String>,
+        activeRoleCode: String?,
+        zoneId: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        isActive: Boolean? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_target_user_id", targetUserId)
+                put("p_role_codes", JSONArray(roleCodes))
+                if (!activeRoleCode.isNullOrBlank()) put("p_active_role_code", activeRoleCode) else put("p_active_role_code", JSONObject.NULL)
+                put("p_zone_id", if (SupabaseConfig.isValidUuid(zoneId)) zoneId else JSONObject.NULL)
+                put("p_state_id", if (SupabaseConfig.isValidUuid(stateId)) stateId else JSONObject.NULL)
+                put("p_city_id", if (SupabaseConfig.isValidUuid(cityId)) cityId else JSONObject.NULL)
+                put("p_centre_id", if (SupabaseConfig.isValidUuid(centreId)) centreId else JSONObject.NULL)
+                if (isActive != null) put("p_is_active", isActive)
+            }
+            executeRpc(accessToken, "admin_update_user_access", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchAdminAuditLogs(accessToken: String, limit: Int = 50): Result<List<AdminAuditEntry>> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply { put("p_limit", limit) }
+            executeRpc(accessToken, "get_admin_audit_logs", body).map { raw ->
+                val arr = JSONArray(raw)
+                List(arr.length()) { idx ->
+                    val o = arr.getJSONObject(idx)
+                    AdminAuditEntry(
+                        id = o.optLong("id"),
+                        adminUserId = o.optString("admin_user_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        adminName = o.optString("admin_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        targetUserId = o.optString("target_user_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        targetName = o.optString("target_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        targetEmployeeId = o.optString("target_employee_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        action = o.optString("action"),
+                        entityType = o.optString("entity_type").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        metadataJson = o.optJSONObject("metadata")?.toString() ?: "{}",
+                        createdAt = o.optString("created_at")
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchScopedDashboardSummary(accessToken: String): Result<ScopedDashboardSummary> = withContext(Dispatchers.IO) {
+        try {
+            executeRpc(accessToken, "get_scoped_dashboard_summary", JSONObject()).map { raw ->
+                val o = JSONObject(raw)
+                ScopedDashboardSummary(
+                    activeRole = TaskzRole.fromCode(o.optString("active_role")),
+                    pendingTasks = o.optInt("pending_tasks", 0),
+                    overdueTasks = o.optInt("overdue_tasks", 0),
+                    assignedTasks = o.optInt("assigned_tasks", 0),
+                    openIncidents = o.optInt("open_incidents", 0),
+                    escalatedIncidents = o.optInt("escalated_incidents", 0),
+                    unreadNotifications = o.optInt("unread_notifications", 0),
+                    activeUsers = o.optInt("active_users", 0),
+                    totalCentres = o.optInt("total_centres", 0)
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deltaSyncPull(
+        accessToken: String,
+        sinceIso: String?,
+        knownRoleVersion: Long?
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                if (!sinceIso.isNullOrBlank()) put("p_since", sinceIso) else put("p_since", JSONObject.NULL)
+                if (knownRoleVersion != null) put("p_known_role_version", knownRoleVersion) else put("p_known_role_version", JSONObject.NULL)
+            }
+            executeRpc(accessToken, "delta_sync_pull", body).map { JSONObject(it) }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun escalateSystemIncident(
+        accessToken: String,
+        incidentId: String,
+        targetLevel: String,
+        reason: String? = null,
+        clientOperationId: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_incident_id", incidentId)
+                put("p_target_level", targetLevel)
+                if (!reason.isNullOrBlank()) put("p_reason", reason)
+                if (!clientOperationId.isNullOrBlank()) put("p_client_operation_id", clientOperationId)
+            }
+            executeRpc(accessToken, "escalate_system_incident", body).map { JSONObject(it) }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun registerDeviceToken(
+        accessToken: String,
+        deviceId: String,
+        token: String,
+        deviceName: String?,
+        appVersion: String?
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_device_id", deviceId)
+                put("p_token", token)
+                put("p_platform", "android")
+                if (!deviceName.isNullOrBlank()) put("p_device_name", deviceName)
+                if (!appVersion.isNullOrBlank()) put("p_app_version", appVersion)
+            }
+            executeRpc(accessToken, "register_device_token", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deactivateDeviceToken(accessToken: String, deviceId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply { put("p_device_id", deviceId) }
+            executeRpc(accessToken, "deactivate_device_token", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun markNotificationReadRpc(accessToken: String, notificationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply { put("p_notification_id", notificationId) }
+            executeRpc(accessToken, "mark_notification_read", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun parseAuthorizationContext(obj: JSONObject): AuthorizationContext {
+        val rolesArr = obj.optJSONArray("assigned_roles") ?: JSONArray()
+        val assigned = List(rolesArr.length()) { i ->
+            val r = rolesArr.getJSONObject(i)
+            AssignedRoleInfo(
+                roleId = r.optString("role_id"),
+                roleCode = r.optString("role_code"),
+                roleName = r.optString("role_name", r.optString("role_code")),
+                hierarchyLevel = r.optInt("hierarchy_level", 10),
+                defaultScopeLevel = r.optString("default_scope_level", "CENTRE"),
+                isPrimary = r.optBoolean("is_primary", false)
+            )
+        }
+        val scObj = obj.optJSONObject("scope") ?: JSONObject()
+        val scope = OrgScope(
+            effectiveScopeLevel = ScopeLevel.fromCode(scObj.optString("effective_scope_level", "CENTRE")),
+            zoneId = scObj.optString("zone_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            zoneName = scObj.optString("zone_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            stateId = scObj.optString("state_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            stateName = scObj.optString("state_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            cityId = scObj.optString("city_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            cityName = scObj.optString("city_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            centreId = scObj.optString("centre_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            centreCode = scObj.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) }
+        )
+        return AuthorizationContext(
+            userId = obj.optString("user_id"),
+            employeeId = obj.optString("employee_id"),
+            fullName = obj.optString("full_name"),
+            isActive = obj.optBoolean("is_active", true),
+            activeRole = TaskzRole.fromCode(obj.optString("active_role_code")),
+            primaryRole = TaskzRole.fromCode(obj.optString("primary_role_code")),
+            assignedRoles = assigned,
+            scope = scope,
+            roleVersion = obj.optLong("role_version", 1L),
+            scopeVersion = obj.optLong("scope_version", 1L),
+            serverNow = obj.optString("server_now").takeIf { it.isNotBlank() && !it.equals("null", true) }
+        )
+    }
+
+    fun parseNotificationJson(obj: JSONObject): AppNotification {
+        return AppNotification(
+            id = obj.optString("id"),
+            userId = obj.optString("user_id"),
+            type = obj.optString("type"),
+            category = obj.optString("category", "task_update"),
+            title = obj.optString("title"),
+            body = obj.optString("body").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            taskId = obj.optString("task_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            incidentId = obj.optString("incident_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            groupId = obj.optString("group_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            eventKey = obj.optString("event_key").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            deepLink = obj.optString("deep_link").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            scopeLevel = obj.optString("scope_level").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            isRead = obj.optBoolean("is_read", false),
+            readAt = obj.optString("read_at").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            createdAt = obj.optString("created_at")
+        )
     }
 }
 

@@ -45,7 +45,15 @@ data class SystemIncidentEntity(
     val updatedAt: Long,
     val updatedBy: String?,
     val syncStatus: String = "PENDING",
-    val lastSyncError: String? = null
+    val lastSyncError: String? = null,
+    val scopeLevel: String = "CENTRE",
+    val zoneId: String? = null,
+    val stateId: String? = null,
+    val cityId: String? = null,
+    val status: String = "OPEN",
+    val escalationLevel: String = "IT_MANAGER",
+    val assignedTo: String? = null,
+    val version: Long = 1L
 ) {
     fun toDomain(): SystemIncident {
         return SystemIncident(
@@ -76,7 +84,15 @@ data class SystemIncidentEntity(
             updatedAt = updatedAt,
             updatedBy = updatedBy,
             syncStatus = syncStatus,
-            lastSyncError = lastSyncError
+            lastSyncError = lastSyncError,
+            scopeLevel = scopeLevel,
+            zoneId = zoneId,
+            stateId = stateId,
+            cityId = cityId,
+            status = status,
+            escalationLevel = escalationLevel,
+            assignedTo = assignedTo,
+            version = version
         )
     }
 
@@ -110,7 +126,15 @@ data class SystemIncidentEntity(
                 updatedAt = domain.updatedAt,
                 updatedBy = domain.updatedBy,
                 syncStatus = domain.syncStatus,
-                lastSyncError = domain.lastSyncError
+                lastSyncError = domain.lastSyncError,
+                scopeLevel = domain.scopeLevel,
+                zoneId = domain.zoneId,
+                stateId = domain.stateId,
+                cityId = domain.cityId,
+                status = domain.status,
+                escalationLevel = domain.escalationLevel,
+                assignedTo = domain.assignedTo,
+                version = domain.version
             )
         }
     }

@@ -46,6 +46,9 @@ interface TaskDao {
     @Query("DELETE FROM cached_tasks WHERE id = :taskId")
     suspend fun deleteTask(taskId: String)
 
+    @Query("SELECT id FROM cached_tasks")
+    suspend fun getTaskIdsSnapshot(): List<String>
+
     @Query("DELETE FROM cached_tasks")
     suspend fun clearAll()
 }

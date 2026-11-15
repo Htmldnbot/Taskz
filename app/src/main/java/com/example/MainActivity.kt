@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +13,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.notifications.NotificationDeepLinkRouter
 import com.example.ui.TaskzViewModelFactory
 import com.example.ui.admin.AdminViewModel
 import com.example.ui.admin.WorkRolesViewModel
@@ -32,6 +34,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        NotificationDeepLinkRouter.handleIntent(intent)
 
         setContent {
             MyApplicationTheme {
@@ -40,6 +43,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        NotificationDeepLinkRouter.handleIntent(intent)
     }
 }
 

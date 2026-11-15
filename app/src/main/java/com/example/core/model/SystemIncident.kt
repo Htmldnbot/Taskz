@@ -37,7 +37,15 @@ data class SystemIncident(
     val updatedAt: Long = System.currentTimeMillis(),
     val updatedBy: String? = null,
     val syncStatus: String = "PENDING", // SYNCED, PENDING, ERROR
-    val lastSyncError: String? = null
+    val lastSyncError: String? = null,
+    val scopeLevel: String = "CENTRE",
+    val zoneId: String? = null,
+    val stateId: String? = null,
+    val cityId: String? = null,
+    val status: String = "OPEN", // OPEN, IN_PROGRESS, ESCALATED, RESOLVED
+    val escalationLevel: String = "IT_MANAGER",
+    val assignedTo: String? = null,
+    val version: Long = 1L
 ) {
     val displayReplacementSystem: String
         get() = if (candidateShifted && !newlyAllocatedSystemNumber.isNullOrBlank()) {

@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.Warning
+import com.example.core.model.TaskzRole
 import com.example.ui.theme.TaskzSuccess
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -469,7 +470,7 @@ fun AuthScreen(
                 // Unified first-time user registration form
                 UnifiedSignUpForm(
                     uiState = signUpState,
-                    onSignUp = { email, password, fullName, mobile, employeeId, photoUri ->
+                    onSignUp = { email, password, fullName, mobile, employeeId, photoUri, onboardingRole, centreCode ->
                         focusManager.clearFocus()
                         viewModel.signUpWithEmailPassword(
                             context = context,
@@ -478,7 +479,9 @@ fun AuthScreen(
                             fullName = fullName,
                             mobile = mobile,
                             employeeId = employeeId,
-                            selectedPhotoUri = photoUri
+                            selectedPhotoUri = photoUri,
+                            onboardingRole = onboardingRole,
+                            centreCode = centreCode
                         )
                     }
                 )
@@ -558,11 +561,13 @@ fun AuthScreen(
                 showGoogleProfileModal = false
                 viewModel.cancelPendingProfileCompletion()
             },
-            onSubmit = { fullName, mobile, employeeId ->
+            onSubmit = { fullName, mobile, employeeId, onboardingRole, centreCode ->
                 viewModel.completeGoogleProfile(
                     fullName = fullName,
                     mobile = mobile,
-                    employeeId = employeeId
+                    employeeId = employeeId,
+                    onboardingRole = onboardingRole,
+                    centreCode = centreCode
                 )
             }
         )
@@ -574,11 +579,13 @@ private fun GoogleProfileCompletionDialog(
     initialName: String,
     uiState: AuthUiState,
     onDismiss: () -> Unit,
-    onSubmit: (fullName: String, mobile: String, employeeId: String) -> Unit
+    onSubmit: (fullName: String, mobile: String, employeeId: String, onboardingRole: TaskzRole, centreCode: String?) -> Unit
 ) {
     var fullName by rememberSaveable { mutableStateOf(initialName) }
     var mobile by rememberSaveable { mutableStateOf("") }
     var employeeId by rememberSaveable { mutableStateOf("") }
+    var onboardingRole by rememberSaveable { mutableStateOf(TaskzRole.IT_MANAGER) }
+    var centreCode by rememberSaveable { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -635,6 +642,41 @@ private fun GoogleProfileCompletionDialog(
                     shape = RoundedCornerShape(10.dp)
                 )
 
+                Text(
+                    text = "Starting Operational Role *",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TaskzRole.onboardingRoles.forEach { role ->
+                        FilterChip(
+                            selected = onboardingRole == role,
+                            onClick = { onboardingRole = role },
+                            label = { Text(role.displayName) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("google_onboarding_role_${role.code}")
+                        )
+                    }
+                }
+                Text(
+                    text = "Only operational roles (IT Manager or VCO) are permitted at signup. Higher roles require Super Admin assignment.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = centreCode,
+                    onValueChange = { centreCode = it.uppercase().take(16) },
+                    label = { Text("Centre Code (Optional)") },
+                    placeholder = { Text("e.g., 141") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                )
+
                 val displayedError = localError ?: (uiState as? AuthUiState.Error)?.message
                 if (!displayedError.isNullOrBlank()) {
                     Card(
@@ -671,7 +713,13 @@ private fun GoogleProfileCompletionDialog(
                         return@Button
                     }
                     localError = null
-                    onSubmit(cleanName, cleanMobile, cleanEmpId)
+                    onSubmit(
+                        cleanName,
+                        cleanMobile,
+                        cleanEmpId,
+                        onboardingRole,
+                        centreCode.trim().takeIf { it.isNotBlank() }
+                    )
                 },
                 enabled = uiState !is AuthUiState.Loading,
                 shape = RoundedCornerShape(10.dp)
@@ -864,7 +912,16 @@ private fun EmployeeIdLoginForm(
 @Composable
 private fun UnifiedSignUpForm(
     uiState: AuthUiState,
-    onSignUp: (email: String, password: String, fullName: String, mobile: String, employeeId: String, photoUri: Uri?) -> Unit
+    onSignUp: (
+        email: String,
+        password: String,
+        fullName: String,
+        mobile: String,
+        employeeId: String,
+        photoUri: Uri?,
+        onboardingRole: TaskzRole,
+        centreCode: String?
+    ) -> Unit
 ) {
     val focusManager = LocalFocusManager.current
     var fullName by rememberSaveable { mutableStateOf("") }
@@ -873,6 +930,8 @@ private fun UnifiedSignUpForm(
     var employeeId by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
+    var onboardingRole by rememberSaveable { mutableStateOf(TaskzRole.IT_MANAGER) }
+    var centreCode by rememberSaveable { mutableStateOf("") }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -1050,6 +1109,52 @@ private fun UnifiedSignUpForm(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        Text(
+            text = "Starting Role *",
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TaskzRole.onboardingRoles.forEach { role ->
+                FilterChip(
+                    selected = onboardingRole == role,
+                    onClick = { onboardingRole = role },
+                    label = { Text(role.displayName) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("signup_role_${role.code}")
+                )
+            }
+        }
+        Text(
+            text = "New staff can join only as IT Manager or VCO. Higher roles are assigned by Super Admin.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TaskzTextField(
+            value = centreCode,
+            onValueChange = { centreCode = it.uppercase().take(16); localError = null },
+            label = "Centre Code (Optional)",
+            placeholder = "e.g., 141",
+            leadingIcon = Icons.Default.Security,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+            testTag = "signup_centre_code"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         TaskzTextField(
             value = password,
             onValueChange = { password = it; localError = null },
@@ -1135,7 +1240,16 @@ private fun UnifiedSignUpForm(
                     }
                     else -> {
                         localError = null
-                        onSignUp(trimmedEmail, password, trimmedName, normalizedMob, trimmedEmpId, selectedPhotoUri)
+                        onSignUp(
+                            trimmedEmail,
+                            password,
+                            trimmedName,
+                            normalizedMob,
+                            trimmedEmpId,
+                            selectedPhotoUri,
+                            onboardingRole,
+                            centreCode.trim().takeIf { it.isNotBlank() }
+                        )
                     }
                 }
             },

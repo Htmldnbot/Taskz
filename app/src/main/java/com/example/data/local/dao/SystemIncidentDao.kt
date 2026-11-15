@@ -72,4 +72,10 @@ interface SystemIncidentDao {
 
     @Query("DELETE FROM system_incident_audits WHERE incidentId = :incidentId")
     suspend fun deleteAuditsForIncident(incidentId: String)
+
+    @Query("DELETE FROM system_incidents")
+    suspend fun clearAll()
+
+    @Query("DELETE FROM system_incident_audits")
+    suspend fun clearAllAudits()
 }

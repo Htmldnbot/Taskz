@@ -48,4 +48,7 @@ interface ScheduledAlarmDao {
 
     @Query("DELETE FROM scheduled_alarm_records WHERE taskId = :taskId")
     suspend fun deleteAlarmsForTask(taskId: String)
+
+    @Query("DELETE FROM scheduled_alarm_records")
+    suspend fun clearAll()
 }

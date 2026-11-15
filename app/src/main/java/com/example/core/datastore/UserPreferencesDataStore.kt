@@ -144,4 +144,29 @@ class UserPreferencesDataStore(private val context: Context) {
             prefs[KEY_CUSTOM_SUPABASE_KEY] = key
         }
     }
+
+    // --- Per-device identification, push token & delta sync marker ---
+    fun getOrCreateDeviceId(): String {
+        val existing = accountHintsPrefs.getString("taskz_device_id", null)
+        if (!existing.isNullOrBlank()) return existing
+        val created = java.util.UUID.randomUUID().toString()
+        accountHintsPrefs.edit().putString("taskz_device_id", created).apply()
+        return created
+    }
+
+    fun getPushToken(): String? = accountHintsPrefs.getString("taskz_push_token", null)?.takeIf { it.isNotBlank() }
+
+    fun savePushToken(token: String) {
+        accountHintsPrefs.edit().putString("taskz_push_token", token.trim()).apply()
+    }
+
+    fun getLastDeltaSyncIso(): String? = authPrefs.getString("last_delta_sync_iso", null)?.takeIf { it.isNotBlank() }
+
+    fun saveLastDeltaSyncIso(iso: String) {
+        authPrefs.edit().putString("last_delta_sync_iso", iso).apply()
+    }
+
+    fun clearSyncCursor() {
+        authPrefs.edit().remove("last_delta_sync_iso").apply()
+    }
 }

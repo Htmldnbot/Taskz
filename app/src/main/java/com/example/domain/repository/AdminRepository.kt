@@ -1,7 +1,10 @@
 package com.example.domain.repository
 
 import com.example.core.datastore.UserPreferencesDataStore
+import com.example.core.model.AdminAuditEntry
+import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
+import com.example.core.model.ScopedMemberSearchResult
 import com.example.core.model.UserProfile
 import com.example.data.remote.SupabaseClient
 import java.io.IOException
@@ -30,6 +33,65 @@ class AdminRepository(
         return try {
             val token = getActiveToken()
             supabaseClient.updateUserActiveStatus(token, profileId, newActiveState)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getOrgHierarchy(): Result<OrgHierarchyData> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.fetchOrgHierarchy(token)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun searchScopedMembers(
+        query: String = "",
+        roleCode: String? = null,
+        centreId: String? = null
+    ): Result<List<ScopedMemberSearchResult>> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.searchScopedMembers(token, query = query, roleCode = roleCode, centreId = centreId)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun adminUpdateUserAccess(
+        targetUserId: String,
+        roleCodes: List<String>,
+        activeRoleCode: String?,
+        zoneId: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        isActive: Boolean?
+    ): Result<Unit> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.adminUpdateUserAccess(
+                accessToken = token,
+                targetUserId = targetUserId,
+                roleCodes = roleCodes,
+                activeRoleCode = activeRoleCode,
+                zoneId = zoneId,
+                stateId = stateId,
+                cityId = cityId,
+                centreId = centreId,
+                isActive = isActive
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getAdminAuditLogs(limit: Int = 60): Result<List<AdminAuditEntry>> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.fetchAdminAuditLogs(token, limit)
         } catch (e: Exception) {
             Result.failure(e)
         }

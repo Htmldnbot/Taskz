@@ -53,7 +53,15 @@ data class TaskEntity(
     val isAcknowledged: Boolean = false,
     val acknowledgedAt: String? = null,
     val completionPolicy: String = "SINGLE_ASSIGNEE",
-    val responseFormSchemaJson: String? = null
+    val responseFormSchemaJson: String? = null,
+    val scopeLevel: String = "CENTRE",
+    val zoneId: String? = null,
+    val stateId: String? = null,
+    val cityId: String? = null,
+    val centreId: String? = null,
+    val targetRoleCodesCsv: String = "",
+    val version: Long = 1L,
+    val localSyncState: String = "SYNCED"
 ) {
     fun toDomain(): TaskItem = TaskItem(
         id = id,
@@ -96,7 +104,15 @@ data class TaskEntity(
         isAcknowledged = isAcknowledged,
         acknowledgedAt = acknowledgedAt,
         completionPolicy = runCatching { com.example.core.model.CompletionPolicy.valueOf(completionPolicy) }.getOrDefault(com.example.core.model.CompletionPolicy.SINGLE_ASSIGNEE),
-        responseFormSchemaJson = responseFormSchemaJson
+        responseFormSchemaJson = responseFormSchemaJson,
+        scopeLevel = com.example.core.model.ScopeLevel.fromCode(scopeLevel),
+        zoneId = zoneId,
+        stateId = stateId,
+        cityId = cityId,
+        centreId = centreId,
+        targetRoleCodes = if (targetRoleCodesCsv.isBlank()) emptyList() else targetRoleCodesCsv.split(",").mapNotNull { it.trim().takeIf(String::isNotEmpty) },
+        version = version,
+        localSyncState = localSyncState
     )
 
     companion object {
@@ -141,7 +157,15 @@ data class TaskEntity(
             isAcknowledged = domain.isAcknowledged,
             acknowledgedAt = domain.acknowledgedAt,
             completionPolicy = domain.completionPolicy.name,
-            responseFormSchemaJson = domain.responseFormSchemaJson
+            responseFormSchemaJson = domain.responseFormSchemaJson,
+            scopeLevel = domain.scopeLevel.code,
+            zoneId = domain.zoneId,
+            stateId = domain.stateId,
+            cityId = domain.cityId,
+            centreId = domain.centreId,
+            targetRoleCodesCsv = domain.targetRoleCodes.joinToString(","),
+            version = domain.version,
+            localSyncState = domain.localSyncState
         )
 
         private fun parseCsvToIntList(csv: String): List<Int> {

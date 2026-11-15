@@ -6,9 +6,14 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.TaskzApplication
+import com.example.core.model.AuthorizationContext
 import com.example.core.model.UserProfile
 import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ProfileRepository
+import com.example.domain.security.TaskzPermissionManager
+import com.example.notifications.DeviceTokenManager
+import com.example.sync.TaskzSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,7 +33,10 @@ sealed interface ProfileUpdateState {
 
 class ProfileViewModel(
     private val profileRepository: ProfileRepository,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val taskzSyncManager: TaskzSyncManager = TaskzApplication.instance.taskzSyncManager,
+    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager,
+    private val deviceTokenManager: DeviceTokenManager = TaskzApplication.instance.deviceTokenManager
 ) : ViewModel() {
 
     val profileFlow: StateFlow<UserProfile?> = profileRepository.profileFlow
@@ -38,15 +46,43 @@ class ProfileViewModel(
             initialValue = null
         )
 
+    val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
+
     private val _updateState = MutableStateFlow<ProfileUpdateState>(ProfileUpdateState.Idle)
     val updateState: StateFlow<ProfileUpdateState> = _updateState.asStateFlow()
 
     private val _isLoggingOut = MutableStateFlow(false)
     val isLoggingOut: StateFlow<Boolean> = _isLoggingOut.asStateFlow()
 
+    private val _isSwitchingRole = MutableStateFlow(false)
+    val isSwitchingRole: StateFlow<Boolean> = _isSwitchingRole.asStateFlow()
+
+    private val _deviceId = MutableStateFlow<String?>(null)
+    val deviceId: StateFlow<String?> = _deviceId.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            _deviceId.value = runCatching { deviceTokenManager.getDeviceId() }.getOrNull()
+        }
+    }
+
     fun refresh() {
         viewModelScope.launch {
             profileRepository.refreshProfile()
+            taskzSyncManager.syncNow(forceFull = false)
+            _deviceId.value = runCatching { deviceTokenManager.getDeviceId() }.getOrNull()
+        }
+    }
+
+    fun switchActiveRole(roleCode: String) {
+        if (_isSwitchingRole.value) return
+        viewModelScope.launch {
+            _isSwitchingRole.value = true
+            val res = taskzSyncManager.switchActiveRole(roleCode)
+            _isSwitchingRole.value = false
+            res.onFailure { err ->
+                _updateState.value = ProfileUpdateState.Error(err.message ?: "Failed to switch active role")
+            }
         }
     }
 

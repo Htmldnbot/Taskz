@@ -2,10 +2,15 @@ package com.example.ui.tasks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.TaskzApplication
 import com.example.core.model.AlarmType
+import com.example.core.model.AuthorizationContext
 import com.example.core.model.CompletionPolicy
 import com.example.core.model.LanProgressItem
+import com.example.core.model.OrgHierarchyData
 import com.example.core.model.ResponseType
+import com.example.core.model.ScopeLevel
+import com.example.core.model.ScopedMemberSearchResult
 import com.example.core.model.TaskActivityLog
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskImportance
@@ -18,7 +23,10 @@ import com.example.core.model.TaskType
 import com.example.core.model.TimeUrgency
 import com.example.core.model.UserProfile
 import com.example.core.model.WorkRole
+import com.example.domain.repository.AdminRepository
 import com.example.domain.repository.TaskRepository
+import com.example.domain.security.TaskzPermissionManager
+import com.example.sync.TaskzSyncManager
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -44,8 +52,14 @@ enum class TaskSubFilter {
 }
 
 class TasksViewModel(
-    private val taskRepository: TaskRepository
+    private val taskRepository: TaskRepository,
+    private val adminRepository: AdminRepository = TaskzApplication.instance.adminRepository,
+    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager,
+    private val taskzSyncManager: TaskzSyncManager = TaskzApplication.instance.taskzSyncManager
 ) : ViewModel() {
+
+    val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
+    val orgHierarchyFlow: StateFlow<OrgHierarchyData> = taskzSyncManager.orgHierarchy
 
     val allTasksFlow: StateFlow<List<TaskItem>> = taskRepository.getAllTasksFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -89,6 +103,9 @@ class TasksViewModel(
     private val _directoryEmployees = MutableStateFlow<List<UserProfile>>(emptyList())
     val directoryEmployees: StateFlow<List<UserProfile>> = _directoryEmployees.asStateFlow()
 
+    private val _scopedMembers = MutableStateFlow<List<ScopedMemberSearchResult>>(emptyList())
+    val scopedMembers: StateFlow<List<ScopedMemberSearchResult>> = _scopedMembers.asStateFlow()
+
     private val _actionEvent = MutableSharedFlow<String>()
     val actionEvent: SharedFlow<String> = _actionEvent.asSharedFlow()
 
@@ -113,22 +130,24 @@ class TasksViewModel(
         }
     }
 
-    // Filtered tasks state derived from tab, sub-filter, query, and tasks flow
+    // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, query, and tasks flow
     val filteredTasks: StateFlow<List<TaskItem>> = combine(
         allTasksFlow,
         _selectedTab,
         _selectedSubFilter,
-        _searchQuery
-    ) { tasks, tab, subFilter, query ->
+        _searchQuery,
+        permissionManager.contextFlow
+    ) { tasks, tab, subFilter, query, _ ->
         val currentUserId = taskRepository.getActiveUserId()
+        val scopedTasks = tasks.filter { permissionManager.canViewTask(it) }
         val baseFiltered = when (tab) {
-            TaskTabFilter.MY_TASKS -> tasks.filter {
-                it.isAssignedToMe || it.currentUserParticipantStatus == "active" || (currentUserId != null && it.createdBy == currentUserId)
+            TaskTabFilter.MY_TASKS -> scopedTasks.filter {
+                it.isAssignedToMe || it.currentUserParticipantStatus == "active" || (currentUserId != null && it.createdBy == currentUserId) || it.targetRoleCodes.contains(permissionManager.getActiveRole().code)
             }
-            TaskTabFilter.AVAILABLE -> tasks.filter {
+            TaskTabFilter.AVAILABLE -> scopedTasks.filter {
                 it.status == "open" && it.allowSelfJoin && !it.isAssignedToMe && it.createdBy != currentUserId
             }
-            TaskTabFilter.CREATED_BY_ME -> tasks.filter { it.createdBy == currentUserId }
+            TaskTabFilter.CREATED_BY_ME -> scopedTasks.filter { it.createdBy == currentUserId }
         }
 
         val subFiltered = when (subFilter) {
@@ -146,10 +165,25 @@ class TasksViewModel(
                 it.title.lowercase().contains(q) ||
                 (it.description?.lowercase()?.contains(q) == true) ||
                 (it.groupTitle?.lowercase()?.contains(q) == true) ||
-                (it.location?.lowercase()?.contains(q) == true)
+                (it.location?.lowercase()?.contains(q) == true) ||
+                it.scopeLevel.label.lowercase().contains(q) ||
+                it.targetRoleCodes.any { role -> role.lowercase().contains(q) }
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun allowedTaskScopes(): List<ScopeLevel> = permissionManager.allowedTaskScopes()
+    fun canEditTask(task: TaskItem): Boolean = permissionManager.canEditTask(task)
+    fun canAssignTask(task: TaskItem): Boolean = permissionManager.canAssignTask(task)
+    fun canAcknowledgeTask(task: TaskItem): Boolean = permissionManager.canAcknowledgeTask(task)
+    fun canCompleteTask(task: TaskItem): Boolean = permissionManager.canCompleteTask(task)
+    fun canDeleteTask(task: TaskItem): Boolean = permissionManager.canDeleteTask(task)
+
+    fun refreshOrgHierarchy() {
+        viewModelScope.launch {
+            taskzSyncManager.refreshOrgHierarchy()
+        }
+    }
 
     fun setTab(tab: TaskTabFilter) {
         _selectedTab.value = tab
@@ -451,6 +485,12 @@ class TasksViewModel(
         lanTargetList: List<String> = emptyList(),
         completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
         responseFormSchemaJson: String? = null,
+        scopeLevel: ScopeLevel = ScopeLevel.CENTRE,
+        zoneId: String? = null,
+        stateId: String? = null,
+        cityId: String? = null,
+        centreId: String? = null,
+        targetRoleCodes: List<String> = emptyList(),
         onSuccess: (TaskItem) -> Unit
     ) {
         viewModelScope.launch {
@@ -486,7 +526,13 @@ class TasksViewModel(
                 responseType = responseType,
                 lanTargetList = lanTargetList,
                 completionPolicy = completionPolicy,
-                responseFormSchemaJson = responseFormSchemaJson
+                responseFormSchemaJson = responseFormSchemaJson,
+                scopeLevel = scopeLevel,
+                zoneId = zoneId,
+                stateId = stateId,
+                cityId = cityId,
+                centreId = centreId,
+                targetRoleCodes = targetRoleCodes
             )
             res.fold(
                 onSuccess = { task ->
@@ -543,6 +589,12 @@ class TasksViewModel(
             lanTargetList = task.lanTargetList,
             completionPolicy = task.completionPolicy,
             responseFormSchemaJson = task.responseFormSchemaJson,
+            scopeLevel = task.scopeLevel,
+            zoneId = task.zoneId,
+            stateId = task.stateId,
+            cityId = task.cityId,
+            centreId = task.centreId,
+            targetRoleCodes = task.targetRoleCodes,
             onSuccess = onSuccess
         )
     }
@@ -550,6 +602,63 @@ class TasksViewModel(
     fun searchEmployees(query: String) {
         viewModelScope.launch {
             _directoryEmployees.value = taskRepository.searchEmployees(query)
+        }
+    }
+
+    fun searchScopedMembers(
+        query: String,
+        roleCode: String? = null,
+        centreId: String? = null
+    ) {
+        viewModelScope.launch {
+            val rpcRes = adminRepository.searchScopedMembers(query = query, roleCode = roleCode, centreId = centreId)
+            val scopedList = rpcRes.getOrNull()
+            if (scopedList != null) {
+                _scopedMembers.value = scopedList
+                _directoryEmployees.value = scopedList.map { m ->
+                    UserProfile(
+                        id = m.id,
+                        employeeId = m.employeeId,
+                        fullName = m.fullName,
+                        email = m.email,
+                        mobile = m.mobile.orEmpty(),
+                        activeRoleCode = m.activeRoleCode,
+                        assignedRoleCodes = m.assignedRoles.ifEmpty { listOf(m.activeRoleCode) },
+                        zoneId = m.zoneId,
+                        zoneName = m.zoneName,
+                        stateId = m.stateId,
+                        stateName = m.stateName,
+                        cityId = m.cityId,
+                        cityName = m.cityName,
+                        centreId = m.centreId,
+                        centreCode = m.centreCode,
+                        isActive = m.isActive
+                    )
+                }
+            } else {
+                val fallback = taskRepository.searchEmployees(query)
+                _directoryEmployees.value = fallback
+                _scopedMembers.value = fallback.map { u ->
+                    ScopedMemberSearchResult(
+                        id = u.id,
+                        employeeId = u.employeeId,
+                        fullName = u.fullName,
+                        email = u.email,
+                        mobile = u.mobile,
+                        activeRoleCode = u.activeRoleCode,
+                        assignedRoles = u.assignedRoleCodes,
+                        centreId = u.centreId,
+                        centreCode = u.centreCode,
+                        cityId = u.cityId,
+                        cityName = u.cityName,
+                        stateId = u.stateId,
+                        stateName = u.stateName,
+                        zoneId = u.zoneId,
+                        zoneName = u.zoneName,
+                        isActive = u.isActive
+                    )
+                }
+            }
         }
     }
 

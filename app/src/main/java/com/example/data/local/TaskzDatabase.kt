@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room.withTransaction
+import com.example.data.local.dao.AuthorizationDao
 import com.example.data.local.dao.NotificationDao
 import com.example.data.local.dao.OutboxDao
 import com.example.data.local.dao.ProfileDao
@@ -16,6 +18,9 @@ import com.example.data.local.dao.TaskDao
 import com.example.data.local.dao.TaskGroupDao
 import com.example.data.local.dao.TaskResponseDao
 import com.example.data.local.dao.WorkRoleDao
+import com.example.data.local.entity.CachedAuthContextEntity
+import com.example.data.local.entity.CachedOrgNodeEntity
+import com.example.data.local.entity.DispatchedNotificationKeyEntity
 import com.example.data.local.entity.NotificationEntity
 import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.ProfileEntity
@@ -45,9 +50,12 @@ import com.example.data.local.entity.WorkRoleEntity
         TaskAcknowledgementEntity::class,
         ScheduledAlarmRecordEntity::class,
         SystemIncidentEntity::class,
-        SystemIncidentAuditEntity::class
+        SystemIncidentAuditEntity::class,
+        CachedAuthContextEntity::class,
+        CachedOrgNodeEntity::class,
+        DispatchedNotificationKeyEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class TaskzDatabase : RoomDatabase() {
@@ -62,15 +70,41 @@ abstract class TaskzDatabase : RoomDatabase() {
     abstract fun taskResponseDao(): TaskResponseDao
     abstract fun scheduledAlarmDao(): ScheduledAlarmDao
     abstract fun systemIncidentDao(): SystemIncidentDao
+    abstract fun authorizationDao(): AuthorizationDao
+
+    suspend fun clearAllUserScopedTables() {
+        withTransaction {
+            authorizationDao().clearAuthContext()
+            authorizationDao().clearDispatchedNotificationKeys()
+            profileDao().clearProfile()
+            taskDao().clearAll()
+            taskGroupDao().clearAll()
+            shiftDao().clearAll()
+            notificationDao().clearAll()
+            taskResponseDao().clearAllResponses()
+            taskResponseDao().clearAllAcknowledgements()
+            scheduledAlarmDao().clearAll()
+            systemIncidentDao().clearAll()
+            systemIncidentDao().clearAllAudits()
+            outboxDao().clearAll()
+        }
+    }
+
+    suspend fun clearRoleScopeCacheForSwitch() {
+        withTransaction {
+            taskDao().clearAll()
+            notificationDao().clearAll()
+            systemIncidentDao().clearAll()
+            systemIncidentDao().clearAllAudits()
+        }
+    }
 
     companion object {
         @Volatile
         private var INSTANCE: TaskzDatabase? = null
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                // Version 1 to 2: Base schema additions
-            }
+            override fun migrate(db: SupportSQLiteDatabase) {}
         }
 
         val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -143,19 +177,12 @@ abstract class TaskzDatabase : RoomDatabase() {
 
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Add completionPolicy and responseFormSchemaJson to cached_tasks
                 db.execSQL("ALTER TABLE cached_tasks ADD COLUMN completionPolicy TEXT NOT NULL DEFAULT 'SINGLE_ASSIGNEE'")
                 db.execSQL("ALTER TABLE cached_tasks ADD COLUMN responseFormSchemaJson TEXT NULL")
-
-                // Add dynamic values, isLate, and delaySeconds to cached_task_responses
                 db.execSQL("ALTER TABLE cached_task_responses ADD COLUMN dynamicValuesJson TEXT NOT NULL DEFAULT '{}'")
                 db.execSQL("ALTER TABLE cached_task_responses ADD COLUMN isLate INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE cached_task_responses ADD COLUMN delaySeconds INTEGER NOT NULL DEFAULT 0")
-
-                // Add userId to scheduled_alarm_records for account-specific alarm isolation
                 db.execSQL("ALTER TABLE scheduled_alarm_records ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
-
-                // Add durable outbox columns to outbox_events
                 db.execSQL("ALTER TABLE outbox_events ADD COLUMN eventId TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE outbox_events ADD COLUMN userId TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE outbox_events ADD COLUMN taskId TEXT NOT NULL DEFAULT ''")
@@ -228,6 +255,99 @@ abstract class TaskzDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN email TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN activeRoleCode TEXT NOT NULL DEFAULT 'IT_MANAGER'")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN primaryRoleCode TEXT NOT NULL DEFAULT 'IT_MANAGER'")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN assignedRoleCodesCsv TEXT NOT NULL DEFAULT 'IT_MANAGER'")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN zoneId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN zoneName TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN stateId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN stateName TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN cityId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN cityName TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN centreId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN centreCode TEXT NULL")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN roleVersion INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN scopeVersion INTEGER NOT NULL DEFAULT 1")
+
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN scopeLevel TEXT NOT NULL DEFAULT 'CENTRE'")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN zoneId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN stateId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN cityId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN centreId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN targetRoleCodesCsv TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE cached_tasks ADD COLUMN localSyncState TEXT NOT NULL DEFAULT 'SYNCED'")
+
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN scopeLevel TEXT NOT NULL DEFAULT 'CENTRE'")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN zoneId TEXT NULL")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN stateId TEXT NULL")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN cityId TEXT NULL")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN status TEXT NOT NULL DEFAULT 'OPEN'")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN escalationLevel TEXT NOT NULL DEFAULT 'IT_MANAGER'")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN assignedTo TEXT NULL")
+                db.execSQL("ALTER TABLE system_incidents ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+
+                db.execSQL("ALTER TABLE cached_notifications ADD COLUMN category TEXT NOT NULL DEFAULT 'task_update'")
+                db.execSQL("ALTER TABLE cached_notifications ADD COLUMN incidentId TEXT NULL")
+                db.execSQL("ALTER TABLE cached_notifications ADD COLUMN eventKey TEXT NULL")
+                db.execSQL("ALTER TABLE cached_notifications ADD COLUMN deepLink TEXT NULL")
+                db.execSQL("ALTER TABLE cached_notifications ADD COLUMN scopeLevel TEXT NULL")
+
+                db.execSQL("ALTER TABLE outbox_events ADD COLUMN activeRole TEXT NOT NULL DEFAULT 'IT_MANAGER'")
+                db.execSQL("ALTER TABLE outbox_events ADD COLUMN scopeLevel TEXT NOT NULL DEFAULT 'CENTRE'")
+                db.execSQL("ALTER TABLE outbox_events ADD COLUMN scopeId TEXT NULL")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS cached_auth_context (
+                        userId TEXT PRIMARY KEY NOT NULL,
+                        employeeId TEXT NOT NULL,
+                        fullName TEXT NOT NULL,
+                        isActive INTEGER NOT NULL,
+                        activeRoleCode TEXT NOT NULL,
+                        primaryRoleCode TEXT NOT NULL,
+                        assignedRolesJson TEXT NOT NULL,
+                        effectiveScopeLevel TEXT NOT NULL,
+                        zoneId TEXT,
+                        zoneName TEXT,
+                        stateId TEXT,
+                        stateName TEXT,
+                        cityId TEXT,
+                        cityName TEXT,
+                        centreId TEXT,
+                        centreCode TEXT,
+                        roleVersion INTEGER NOT NULL,
+                        scopeVersion INTEGER NOT NULL,
+                        lastUpdatedMillis INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS cached_org_nodes (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        nodeType TEXT NOT NULL,
+                        code TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        parentZoneId TEXT,
+                        parentStateId TEXT,
+                        parentCityId TEXT,
+                        externalCode TEXT,
+                        districtName TEXT
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS dispatched_notification_keys (
+                        eventKey TEXT PRIMARY KEY NOT NULL,
+                        userId TEXT NOT NULL,
+                        dispatchedAtMillis INTEGER NOT NULL
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getInstance(context: Context): TaskzDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -235,7 +355,7 @@ abstract class TaskzDatabase : RoomDatabase() {
                     TaskzDatabase::class.java,
                     "taskz_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration(dropAllTables = false)
                     .build()
                 INSTANCE = instance

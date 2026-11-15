@@ -245,7 +245,9 @@ fun TasksScreen(
                         TaskCard(
                             task = task,
                             onClick = { onTaskClick(task) },
-                            onLongClick = { taskToDelete = task }
+                            onLongClick = if (viewModel.canDeleteTask(task)) {
+                                { taskToDelete = task }
+                            } else null
                         )
                     }
                 }
@@ -431,8 +433,33 @@ fun TaskCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Manpower breakdown
+                // Manpower & Scope breakdown
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = task.scopeLevel.label,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    if (task.targetRoleCodes.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = task.targetRoleCodes.joinToString(", "),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = MaterialTheme.colorScheme.primaryContainer
@@ -459,9 +486,11 @@ fun TaskCard(
                     }
                 }
 
-                // Current user participation tag
+                // Current user participation & sync tag
+                val isPendingSync = task.localSyncState.equals("PENDING_SYNC", ignoreCase = true) ||
+                    task.status.equals("pending_sync", ignoreCase = true)
                 when {
-                    task.status.equals("pending_sync", ignoreCase = true) -> {
+                    isPendingSync -> {
                         Surface(shape = RoundedCornerShape(6.dp), color = TaskzWarning.copy(alpha = 0.2f)) {
                             Text(
                                 text = "PENDING SYNC",

@@ -88,6 +88,31 @@ class TaskRepository(
         // Production initialization without fake demo data
     }
 
+    fun clearInMemoryCaches() {
+        requirementsStore.clear()
+        participantsStore.clear()
+        taskJoinRequestsStore.clear()
+        groupMembersStore.clear()
+        groupJoinRequestsStore.clear()
+        completionRequestsStore.clear()
+        activityLogStore.clear()
+        taskVisibleUsersStore.clear()
+    }
+
+    private fun currentRbacOutboxMeta(explicitScopeLevel: String? = null, explicitScopeId: String? = null): Triple<String, String, String?> {
+        val ctx = runCatching { TaskzApplication.instance.permissionManager.getCurrentContext() }.getOrNull()
+        val activeRole = ctx?.activeRole?.code ?: "IT_MANAGER"
+        val scopeLevel = explicitScopeLevel ?: ctx?.scope?.effectiveScopeLevel?.code ?: "CENTRE"
+        val scopeId = explicitScopeId ?: when (scopeLevel) {
+            "ZONE" -> ctx?.scope?.zoneId
+            "STATE" -> ctx?.scope?.stateId
+            "CITY" -> ctx?.scope?.cityId
+            "CENTRE" -> ctx?.scope?.centreId
+            else -> null
+        }
+        return Triple(activeRole, scopeLevel, scopeId)
+    }
+
     private fun nowIso(): String = isoDateFormat.format(Date())
 
     private fun JSONObject?.optNullableString(key: String): String? {
@@ -990,7 +1015,13 @@ class TaskRepository(
         responseType: ResponseType = ResponseType.COMPLETED_NOT_COMPLETED,
         lanTargetList: List<String> = emptyList(),
         completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
-        responseFormSchemaJson: String? = null
+        responseFormSchemaJson: String? = null,
+        scopeLevel: com.example.core.model.ScopeLevel = com.example.core.model.ScopeLevel.CENTRE,
+        zoneId: String? = null,
+        stateId: String? = null,
+        cityId: String? = null,
+        centreId: String? = null,
+        targetRoleCodes: List<String> = emptyList()
     ): Result<TaskItem> = withContext(Dispatchers.IO) {
         try {
             if (title.trim().isBlank()) {
@@ -1026,6 +1057,13 @@ class TaskRepository(
             val userEmpId = getActiveUserEmployeeId()
             val taskId = UUID.randomUUID().toString()
             val clientOperationId = UUID.randomUUID().toString()
+
+            val userScope = runCatching { TaskzApplication.instance.permissionManager.getUserScope() }.getOrNull()
+            val resolvedZoneId = zoneId ?: if (scopeLevel != com.example.core.model.ScopeLevel.GLOBAL) userScope?.zoneId else null
+            val resolvedStateId = stateId ?: if (scopeLevel.rank <= com.example.core.model.ScopeLevel.STATE.rank) userScope?.stateId else null
+            val resolvedCityId = cityId ?: if (scopeLevel.rank <= com.example.core.model.ScopeLevel.CITY.rank) userScope?.cityId else null
+            val resolvedCentreId = centreId ?: if (scopeLevel == com.example.core.model.ScopeLevel.CENTRE) userScope?.centreId else null
+            val normalizedTargetRoles = targetRoleCodes.map { it.trim().uppercase() }.filter { it.isNotBlank() }.distinct()
 
             // Resolve selected employee identifiers to registered Supabase profiles.id UUIDs
             val resolvedEmployeeUuids = mutableListOf<String>()
@@ -1083,7 +1121,14 @@ class TaskRepository(
                 responseType = responseType,
                 lanTargetList = lanTargetList,
                 completionPolicy = completionPolicy,
-                responseFormSchemaJson = responseFormSchemaJson
+                responseFormSchemaJson = responseFormSchemaJson,
+                scopeLevel = scopeLevel,
+                zoneId = resolvedZoneId,
+                stateId = resolvedStateId,
+                cityId = resolvedCityId,
+                centreId = resolvedCentreId,
+                targetRoleCodes = normalizedTargetRoles,
+                localSyncState = "PENDING_SYNC"
             )
 
             // Build Supabase JSON Payload for atomic persistence (strictly UUID-safe for RPC casts)
@@ -1127,6 +1172,12 @@ class TaskRepository(
                         put("response_form_schema", JSONArray(responseFormSchemaJson))
                     } catch (_: Exception) {}
                 }
+                put("scope_level", scopeLevel.code)
+                if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedZoneId)) put("zone_id", resolvedZoneId)
+                if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedStateId)) put("state_id", resolvedStateId)
+                if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedCityId)) put("city_id", resolvedCityId)
+                if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedCentreId)) put("centre_id", resolvedCentreId)
+                put("target_role_codes", JSONArray(normalizedTargetRoles))
                 put("assigned_user_ids", JSONArray(resolvedEmployeeUuids.distinct()))
                 val reqsArr = JSONArray()
                 for ((rId, cnt) in requirements) {
@@ -1174,7 +1225,12 @@ class TaskRepository(
                 val confirmedGroupId = serverTaskObj.optNullableString("group_id")
                     ?.takeIf { com.example.core.network.SupabaseConfig.isValidUuid(it) }
                     ?: targetGroupId
-                serverSavedTask = task.copy(id = confirmedId, groupId = confirmedGroupId, status = "open")
+                serverSavedTask = task.copy(
+                    id = confirmedId,
+                    groupId = confirmedGroupId,
+                    status = "open",
+                    localSyncState = "SYNCED"
+                )
             } else {
                 val err = remoteRes.exceptionOrNull()
                 val isTrulyOffline = !TaskzApplication.instance.networkMonitor.isCurrentlyConnected() ||
@@ -1182,6 +1238,14 @@ class TaskRepository(
 
                 if (isTrulyOffline && token.isNotBlank()) {
                     Log.i(tag, "Device offline — queuing task creation into outbox: ${err?.message}")
+                    val targetScopeId = when (scopeLevel) {
+                        com.example.core.model.ScopeLevel.ZONE -> resolvedZoneId
+                        com.example.core.model.ScopeLevel.STATE -> resolvedStateId
+                        com.example.core.model.ScopeLevel.CITY -> resolvedCityId
+                        com.example.core.model.ScopeLevel.CENTRE -> resolvedCentreId
+                        com.example.core.model.ScopeLevel.GLOBAL -> null
+                    }
+                    val (activeRole, _, _) = currentRbacOutboxMeta(scopeLevel.code, targetScopeId)
                     try {
                         TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
                             com.example.data.local.entity.OutboxEventEntity(
@@ -1191,11 +1255,14 @@ class TaskRepository(
                                 operationType = "TASK_CREATION",
                                 payloadJson = taskPayload.toString(),
                                 syncStatus = "PENDING",
-                                createdAt = System.currentTimeMillis()
+                                createdAt = System.currentTimeMillis(),
+                                activeRole = activeRole,
+                                scopeLevel = scopeLevel.code,
+                                scopeId = targetScopeId
                             )
                         )
                         com.example.sync.SyncWorker.enqueueSync(context)
-                        serverSavedTask = task.copy(status = "pending_sync")
+                        serverSavedTask = task.copy(status = "open", localSyncState = "PENDING_SYNC")
                     } catch (oe: Exception) {
                         return@withContext Result.failure(IOException("Failed to commit durable offline task creation: ${oe.message}", oe))
                     }
@@ -1307,6 +1374,7 @@ class TaskRepository(
                 if (deleteRes.isFailure) {
                     try {
                         val session = userPrefs.getUserSession()
+                        val (activeRole, scopeLevel, scopeId) = currentRbacOutboxMeta()
                         TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(
                             com.example.data.local.entity.OutboxEventEntity(
                                 eventId = UUID.randomUUID().toString(),
@@ -1315,7 +1383,10 @@ class TaskRepository(
                                 operationType = "TASK_DELETION",
                                 payloadJson = JSONObject().put("task_id", taskId).toString(),
                                 syncStatus = "PENDING",
-                                createdAt = System.currentTimeMillis()
+                                createdAt = System.currentTimeMillis(),
+                                activeRole = activeRole,
+                                scopeLevel = scopeLevel,
+                                scopeId = scopeId
                             )
                         )
                         com.example.sync.SyncWorker.enqueueSync(context)
@@ -1327,6 +1398,61 @@ class TaskRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun updateTask(
+        taskId: String,
+        title: String,
+        description: String?,
+        priority: String
+    ): Result<TaskItem> = withContext(Dispatchers.IO) {
+        val existing = taskDao.getTaskById(taskId)?.toDomain()
+            ?: return@withContext Result.failure(NoSuchElementException("Task not found"))
+        val userId = getActiveUserId().orEmpty()
+        val updated = existing.copy(
+            title = title.trim(),
+            description = description?.trim()?.takeIf { it.isNotBlank() },
+            priority = priority.lowercase(),
+            updatedAt = nowIso(),
+            localSyncState = "PENDING_SYNC"
+        )
+        taskDao.updateTask(TaskEntity.fromDomain(updated))
+
+        val updatesObj = JSONObject().apply {
+            put("title", updated.title)
+            put("description", updated.description ?: JSONObject.NULL)
+            put("priority", updated.priority)
+        }
+        val (activeRole, scopeLevel, scopeId) = currentRbacOutboxMeta(updated.scopeLevel.code)
+        val outboxEvent = com.example.data.local.entity.OutboxEventEntity(
+            eventId = UUID.randomUUID().toString(),
+            userId = userId,
+            taskId = taskId,
+            operationType = "TASK_UPDATE",
+            payloadJson = JSONObject().apply {
+                put("task_id", taskId)
+                put("updates", updatesObj)
+            }.toString(),
+            syncStatus = "PENDING",
+            createdAt = System.currentTimeMillis(),
+            activeRole = activeRole,
+            scopeLevel = scopeLevel,
+            scopeId = scopeId
+        )
+        val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
+
+        val token = getActiveAccessToken()
+        if (!token.isNullOrBlank() && TaskzApplication.instance.networkMonitor.isCurrentlyConnected()) {
+            val res = supabaseClient.updateTaskFields(token, taskId, updatesObj)
+            if (res.isSuccess) {
+                TaskzDatabase.getInstance(context).outboxDao().markEventSynced(outboxId, "TASK_UPDATED", System.currentTimeMillis())
+                val synced = updated.copy(localSyncState = "SYNCED")
+                taskDao.updateTask(TaskEntity.fromDomain(synced))
+                return@withContext Result.success(synced)
+            }
+        }
+        com.example.sync.SyncWorker.enqueueSync(context)
+        Result.success(updated)
     }
 
     /**
@@ -1341,154 +1467,200 @@ class TaskRepository(
             }
 
             val remoteTasksJson = remoteRes.getOrDefault(emptyList())
-            val currentUserId = getActiveUserId()
-            val entities = mutableListOf<TaskEntity>()
-            val domainTasks = mutableListOf<TaskItem>()
-
-            for (taskJson in remoteTasksJson) {
-                val taskId = taskJson.optString("id")
-                val groupObj = taskJson.optJSONObject("task_groups")
-                val shiftObj = taskJson.optJSONObject("shifts")
-
-                // Parse participants
-                val participantsJson = taskJson.optJSONArray("task_participants")
-                val taskParts = mutableListOf<TaskParticipant>()
-                var myParticipantStatus: String? = null
-                var myRoleName: String? = null
-
-                if (participantsJson != null) {
-                    for (i in 0 until participantsJson.length()) {
-                        val pObj = participantsJson.getJSONObject(i)
-                        val pUserId = pObj.optString("user_id")
-                        val pStatus = pObj.optString("status", "active")
-                        val part = TaskParticipant(
-                            id = pObj.optString("id", UUID.randomUUID().toString()),
-                            taskId = taskId,
-                            userId = pUserId,
-                            userName = pObj.optNullableString("full_name") ?: "Employee",
-                            userEmployeeId = pObj.optNullableString("employee_id") ?: "",
-                            roleName = pObj.optNullableString("role_name"),
-                            status = pStatus,
-                            joinedAt = pObj.optNullableString("joined_at") ?: nowIso(),
-                            assignedBy = pObj.optNullableString("assigned_by")
-                        )
-                        taskParts.add(part)
-                        if (pUserId == currentUserId && pStatus == "active") {
-                            myParticipantStatus = "active"
-                            myRoleName = part.roleName
-                        }
-                    }
-                }
-                participantsStore[taskId] = taskParts
-
-                // Parse role requirements
-                val reqsJson = taskJson.optJSONArray("task_role_requirements")
-                val reqsList = mutableListOf<TaskRoleRequirement>()
-                if (reqsJson != null) {
-                    for (i in 0 until reqsJson.length()) {
-                        val rObj = reqsJson.getJSONObject(i)
-                        reqsList.add(
-                            TaskRoleRequirement(
-                                id = rObj.optString("id", UUID.randomUUID().toString()),
-                                taskId = taskId,
-                                roleId = rObj.optString("role_id"),
-                                requiredCount = rObj.optInt("required_count", 1),
-                                roleName = rObj.optString("role_name", "Role"),
-                                filledCount = rObj.optInt("filled_count", 0)
-                            )
-                        )
-                    }
-                }
-                requirementsStore[taskId] = reqsList
-
-                // Parse advance reminders
-                val advCsv = try {
-                    val advArr = taskJson.optJSONArray("advance_reminders_minutes")
-                    if (advArr != null) {
-                        val nums = mutableListOf<Int>()
-                        for (i in 0 until advArr.length()) nums.add(advArr.getInt(i))
-                        nums.joinToString(",")
-                    } else "0,5"
-                } catch (_: Exception) { "0,5" }
-
-                // Parse LAN targets
-                val lanCsv = try {
-                    val lanArr = taskJson.optJSONArray("lan_target_list")
-                    if (lanArr != null) {
-                        val lans = mutableListOf<String>()
-                        for (i in 0 until lanArr.length()) lans.add(lanArr.getString(i))
-                        lans.joinToString(",")
-                    } else ""
-                } catch (_: Exception) { "" }
-
-                val entity = TaskEntity(
-                    id = taskId,
-                    groupId = taskJson.optString("group_id"),
-                    groupTitle = groupObj.optNullableString("title"),
-                    shiftId = taskJson.optNullableString("shift_id"),
-                    shiftName = shiftObj.optNullableString("name"),
-                    title = taskJson.optNullableString("title") ?: "Untitled Task",
-                    description = taskJson.optNullableString("description"),
-                    location = taskJson.optNullableString("location"),
-                    startsAt = taskJson.optNullableString("starts_at"),
-                    dueAt = taskJson.optNullableString("due_at"),
-                    priority = taskJson.optString("priority", "normal"),
-                    status = taskJson.optString("status", "open"),
-                    visibility = taskJson.optString("visibility", "everyone"),
-                    allowSelfJoin = taskJson.optBoolean("allow_self_join", true),
-                    joinRequiresApproval = taskJson.optBoolean("join_requires_approval", true),
-                    notifyCreatorOnJoin = taskJson.optBoolean("notify_creator_on_join", true),
-                    requiresCompletionConfirmation = taskJson.optBoolean("requires_completion_confirmation", false),
-                    maxParticipants = if (taskJson.has("max_participants") && !taskJson.isNull("max_participants")) taskJson.getInt("max_participants") else null,
-                    createdBy = taskJson.optString("created_by"),
-                    creatorName = taskJson.optNullableString("creator_name"),
-                    createdAt = taskJson.optNullableString("created_at") ?: nowIso(),
-                    updatedAt = taskJson.optNullableString("updated_at") ?: nowIso(),
-                    taskType = taskJson.optString("task_type", "SIMPLE"),
-                    importance = taskJson.optString("importance", "NORMAL"),
-                    urgencyType = taskJson.optString("urgency_type", "BEFORE_DEADLINE"),
-                    executionTime = taskJson.optNullableString("execution_time"),
-                    targetPercentage = if (taskJson.has("target_percentage") && !taskJson.isNull("target_percentage")) taskJson.getInt("target_percentage") else 100,
-                    repeatIntervalMinutes = if (taskJson.has("repeat_interval_minutes") && !taskJson.isNull("repeat_interval_minutes")) taskJson.getInt("repeat_interval_minutes") else null,
-                    alarmType = taskJson.optString("alarm_type", "SOUND_ALERT"),
-                    advanceRemindersMinutesCsv = advCsv,
-                    remindUntilCompleted = taskJson.optBoolean("remind_until_completed", false),
-                    overdueReminderIntervalMinutes = if (taskJson.has("overdue_reminder_interval_minutes") && !taskJson.isNull("overdue_reminder_interval_minutes")) taskJson.getInt("overdue_reminder_interval_minutes") else 5,
-                    maxOverdueReminders = if (taskJson.has("max_overdue_reminders") && !taskJson.isNull("max_overdue_reminders")) taskJson.getInt("max_overdue_reminders") else 3,
-                    responseType = taskJson.optString("response_type", "COMPLETED_NOT_COMPLETED"),
-                    lanTargetListCsv = lanCsv,
-                    currentProgress = taskJson.optInt("current_progress", 0),
-                    lastProgressUpdate = taskJson.optNullableString("last_progress_update"),
-                    isAcknowledged = taskJson.optBoolean("is_acknowledged", false),
-                    acknowledgedAt = taskJson.optNullableString("acknowledged_at"),
-                    completionPolicy = taskJson.optString("completion_policy", "SINGLE_ASSIGNEE"),
-                    responseFormSchemaJson = taskJson.optNullableString("response_form_schema")?.takeIf { it != "[]" }
-                )
-                entities.add(entity)
-
-                val domain = entity.toDomain().copy(
-                    currentUserParticipantStatus = myParticipantStatus,
-                    currentUserRoleName = myRoleName
-                )
-                domainTasks.add(domain)
-
-                // Schedule alarms if task is active and assigned to current user or created by current user
-                if (domain.isAssignedToMe || domain.createdBy == currentUserId) {
-                    try {
-                        taskAlarmScheduler.scheduleAlarmsForTask(domain)
-                    } catch (e: Exception) {
-                        Log.w(tag, "Failed to schedule alarm for synced task: ${e.message}")
-                    }
-                }
-            }
-
-            taskDao.insertTasks(entities)
+            val domainTasks = reconcileTasksFromJson(remoteTasksJson, scheduleAlarms = true)
             // Also pull latest task responses from server so teammates' updates are visible
             runCatching { syncResponsesFromServer(token) }
             Result.success(domainTasks)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun reconcileTasksFromJson(
+        tasksArr: JSONArray,
+        scheduleAlarms: Boolean = true
+    ): List<TaskItem> = withContext(Dispatchers.IO) {
+        val list = List(tasksArr.length()) { idx -> tasksArr.getJSONObject(idx) }
+        reconcileTasksFromJson(list, scheduleAlarms)
+    }
+
+    suspend fun reconcileTasksFromJson(
+        remoteTasksJson: List<JSONObject>,
+        scheduleAlarms: Boolean = true
+    ): List<TaskItem> = withContext(Dispatchers.IO) {
+        val currentUserId = getActiveUserId()
+        val pendingTaskIds = if (!currentUserId.isNullOrBlank()) {
+            TaskzDatabase.getInstance(context).outboxDao()
+                .getPendingEventsForUser(currentUserId)
+                .map { it.taskId }
+                .filter { it.isNotBlank() }
+                .toSet()
+        } else emptySet()
+
+        val entities = mutableListOf<TaskEntity>()
+        val domainTasks = mutableListOf<TaskItem>()
+
+        for (taskJson in remoteTasksJson) {
+            val taskId = taskJson.optString("id")
+            if (taskId.isBlank()) continue
+            val groupObj = taskJson.optJSONObject("task_groups")
+            val shiftObj = taskJson.optJSONObject("shifts")
+
+            val participantsJson = taskJson.optJSONArray("task_participants")
+            val taskParts = mutableListOf<TaskParticipant>()
+            var myParticipantStatus: String? = null
+            var myRoleName: String? = null
+
+            if (participantsJson != null) {
+                for (i in 0 until participantsJson.length()) {
+                    val pObj = participantsJson.getJSONObject(i)
+                    val pUserId = pObj.optString("user_id")
+                    val pStatus = pObj.optString("status", "active")
+                    val part = TaskParticipant(
+                        id = pObj.optString("id", UUID.randomUUID().toString()),
+                        taskId = taskId,
+                        userId = pUserId,
+                        userName = pObj.optNullableString("full_name") ?: "Employee",
+                        userEmployeeId = pObj.optNullableString("employee_id") ?: "",
+                        roleName = pObj.optNullableString("role_name"),
+                        status = pStatus,
+                        joinedAt = pObj.optNullableString("joined_at") ?: nowIso(),
+                        assignedBy = pObj.optNullableString("assigned_by")
+                    )
+                    taskParts.add(part)
+                    if (pUserId == currentUserId && pStatus == "active") {
+                        myParticipantStatus = "active"
+                        myRoleName = part.roleName
+                    }
+                }
+                participantsStore[taskId] = taskParts
+            }
+
+            val reqsJson = taskJson.optJSONArray("task_role_requirements")
+            if (reqsJson != null) {
+                val reqsList = mutableListOf<TaskRoleRequirement>()
+                for (i in 0 until reqsJson.length()) {
+                    val rObj = reqsJson.getJSONObject(i)
+                    reqsList.add(
+                        TaskRoleRequirement(
+                            id = rObj.optString("id", UUID.randomUUID().toString()),
+                            taskId = taskId,
+                            roleId = rObj.optString("role_id"),
+                            requiredCount = rObj.optInt("required_count", 1),
+                            roleName = rObj.optString("role_name", "Role"),
+                            filledCount = rObj.optInt("filled_count", 0)
+                        )
+                    )
+                }
+                requirementsStore[taskId] = reqsList
+            }
+
+            val advCsv = try {
+                val advArr = taskJson.optJSONArray("advance_reminders_minutes")
+                if (advArr != null) {
+                    val nums = mutableListOf<Int>()
+                    for (i in 0 until advArr.length()) nums.add(advArr.getInt(i))
+                    nums.joinToString(",")
+                } else "0,5"
+            } catch (_: Exception) { "0,5" }
+
+            val lanCsv = try {
+                val lanArr = taskJson.optJSONArray("lan_target_list")
+                if (lanArr != null) {
+                    val lans = mutableListOf<String>()
+                    for (i in 0 until lanArr.length()) lans.add(lanArr.getString(i))
+                    lans.joinToString(",")
+                } else ""
+            } catch (_: Exception) { "" }
+
+            val targetRolesCsv = try {
+                val trArr = taskJson.optJSONArray("target_role_codes")
+                if (trArr != null) {
+                    val roles = mutableListOf<String>()
+                    for (i in 0 until trArr.length()) roles.add(trArr.getString(i))
+                    roles.joinToString(",")
+                } else ""
+            } catch (_: Exception) { "" }
+
+            val existing = taskDao.getTaskById(taskId)
+            if (taskId in pendingTaskIds && existing != null) {
+                // Keep unsynced local optimistic state intact until outbox settles
+                domainTasks.add(existing.toDomain())
+                continue
+            }
+
+            val entity = TaskEntity(
+                id = taskId,
+                groupId = taskJson.optString("group_id", existing?.groupId.orEmpty()),
+                groupTitle = groupObj.optNullableString("title") ?: existing?.groupTitle,
+                shiftId = taskJson.optNullableString("shift_id"),
+                shiftName = shiftObj.optNullableString("name") ?: existing?.shiftName,
+                title = taskJson.optNullableString("title") ?: "Untitled Task",
+                description = taskJson.optNullableString("description"),
+                location = taskJson.optNullableString("location"),
+                startsAt = taskJson.optNullableString("starts_at"),
+                dueAt = taskJson.optNullableString("due_at"),
+                priority = taskJson.optString("priority", "normal"),
+                status = taskJson.optString("status", "open"),
+                visibility = taskJson.optString("visibility", "everyone"),
+                allowSelfJoin = taskJson.optBoolean("allow_self_join", true),
+                joinRequiresApproval = taskJson.optBoolean("join_requires_approval", true),
+                notifyCreatorOnJoin = taskJson.optBoolean("notify_creator_on_join", true),
+                requiresCompletionConfirmation = taskJson.optBoolean("requires_completion_confirmation", false),
+                maxParticipants = if (taskJson.has("max_participants") && !taskJson.isNull("max_participants")) taskJson.getInt("max_participants") else null,
+                createdBy = taskJson.optString("created_by"),
+                creatorName = taskJson.optNullableString("creator_name") ?: existing?.creatorName,
+                createdAt = taskJson.optNullableString("created_at") ?: nowIso(),
+                updatedAt = taskJson.optNullableString("updated_at") ?: nowIso(),
+                taskType = taskJson.optString("task_type", "SIMPLE"),
+                importance = taskJson.optString("importance", "NORMAL"),
+                urgencyType = taskJson.optString("urgency_type", "BEFORE_DEADLINE"),
+                executionTime = taskJson.optNullableString("execution_time"),
+                targetPercentage = if (taskJson.has("target_percentage") && !taskJson.isNull("target_percentage")) taskJson.getInt("target_percentage") else 100,
+                repeatIntervalMinutes = if (taskJson.has("repeat_interval_minutes") && !taskJson.isNull("repeat_interval_minutes")) taskJson.getInt("repeat_interval_minutes") else null,
+                alarmType = taskJson.optString("alarm_type", "SOUND_ALERT"),
+                advanceRemindersMinutesCsv = advCsv,
+                remindUntilCompleted = taskJson.optBoolean("remind_until_completed", false),
+                overdueReminderIntervalMinutes = if (taskJson.has("overdue_reminder_interval_minutes") && !taskJson.isNull("overdue_reminder_interval_minutes")) taskJson.getInt("overdue_reminder_interval_minutes") else 5,
+                maxOverdueReminders = if (taskJson.has("max_overdue_reminders") && !taskJson.isNull("max_overdue_reminders")) taskJson.getInt("max_overdue_reminders") else 3,
+                responseType = taskJson.optString("response_type", "COMPLETED_NOT_COMPLETED"),
+                lanTargetListCsv = lanCsv,
+                currentProgress = taskJson.optInt("current_progress", 0),
+                lastProgressUpdate = taskJson.optNullableString("last_progress_update"),
+                isAcknowledged = taskJson.optBoolean("is_acknowledged", false),
+                acknowledgedAt = taskJson.optNullableString("acknowledged_at"),
+                completionPolicy = taskJson.optString("completion_policy", "SINGLE_ASSIGNEE"),
+                responseFormSchemaJson = taskJson.optNullableString("response_form_schema")?.takeIf { it != "[]" },
+                scopeLevel = taskJson.optNullableString("scope_level") ?: "CENTRE",
+                zoneId = taskJson.optNullableString("zone_id"),
+                stateId = taskJson.optNullableString("state_id"),
+                cityId = taskJson.optNullableString("city_id"),
+                centreId = taskJson.optNullableString("centre_id"),
+                targetRoleCodesCsv = targetRolesCsv,
+                version = taskJson.optLong("version", 1L),
+                localSyncState = "SYNCED"
+            )
+            entities.add(entity)
+
+            val domain = entity.toDomain().copy(
+                currentUserParticipantStatus = myParticipantStatus,
+                currentUserRoleName = myRoleName
+            )
+            domainTasks.add(domain)
+
+            if (scheduleAlarms && (domain.isAssignedToMe || domain.createdBy == currentUserId || domain.targetRoleCodes.isNotEmpty())) {
+                try {
+                    taskAlarmScheduler.scheduleAlarmsForTask(domain)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to schedule alarm for synced task: ${e.message}")
+                }
+            }
+        }
+
+        if (entities.isNotEmpty()) {
+            taskDao.insertTasks(entities)
+        }
+        domainTasks
     }
 
     suspend fun syncTaskResponses(taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -1761,6 +1933,7 @@ class TaskRepository(
                 }
             }
 
+            val (activeRole, scopeLevel, scopeId) = currentRbacOutboxMeta(task?.scopeLevel?.code)
             val outboxEvent = com.example.data.local.entity.OutboxEventEntity(
                 eventId = responseId,
                 userId = userId,
@@ -1768,7 +1941,10 @@ class TaskRepository(
                 operationType = "TASK_RESPONSE",
                 payloadJson = payload.toString(),
                 syncStatus = "PENDING",
-                createdAt = System.currentTimeMillis()
+                createdAt = System.currentTimeMillis(),
+                activeRole = activeRole,
+                scopeLevel = scopeLevel,
+                scopeId = scopeId
             )
             val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
 
@@ -1927,6 +2103,7 @@ class TaskRepository(
             val payload = JSONObject().apply {
                 put("deviceTimestamp", nowIso)
             }
+            val (activeRole, scopeLevel, scopeId) = currentRbacOutboxMeta()
             val outboxEvent = com.example.data.local.entity.OutboxEventEntity(
                 eventId = eventId,
                 userId = userId,
@@ -1934,7 +2111,10 @@ class TaskRepository(
                 operationType = "TASK_ACKNOWLEDGEMENT",
                 payloadJson = payload.toString(),
                 syncStatus = "PENDING",
-                createdAt = System.currentTimeMillis()
+                createdAt = System.currentTimeMillis(),
+                activeRole = activeRole,
+                scopeLevel = scopeLevel,
+                scopeId = scopeId
             )
             val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
 

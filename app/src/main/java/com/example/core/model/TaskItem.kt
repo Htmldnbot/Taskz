@@ -112,7 +112,16 @@ data class TaskItem(
     val isAcknowledged: Boolean = false,
     val acknowledgedAt: String? = null,
     val completionPolicy: CompletionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
-    val responseFormSchemaJson: String? = null
+    val responseFormSchemaJson: String? = null,
+    // Enterprise RBAC & Scope extensions
+    val scopeLevel: ScopeLevel = ScopeLevel.CENTRE,
+    val zoneId: String? = null,
+    val stateId: String? = null,
+    val cityId: String? = null,
+    val centreId: String? = null,
+    val targetRoleCodes: List<String> = emptyList(),
+    val version: Long = 1L,
+    val localSyncState: String = "SYNCED" // SYNCED | PENDING_SYNC | FAILED
 ) {
     val isAssignedToMe: Boolean
         get() = currentUserParticipantStatus == "active"

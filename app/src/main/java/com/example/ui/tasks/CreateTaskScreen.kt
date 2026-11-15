@@ -89,23 +89,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.example.core.model.AlarmType
 import com.example.core.model.CompletionPolicy
+import com.example.core.model.OrgCentre
+import com.example.core.model.OrgCity
+import com.example.core.model.OrgState
+import com.example.core.model.OrgZone
 import com.example.core.model.ResponseType
+import com.example.core.model.ScopeLevel
+import com.example.core.model.ScopedMemberSearchResult
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskImportance
 import com.example.core.model.TaskItem
 import com.example.core.model.TaskType
+import com.example.core.model.TaskzRole
 import com.example.core.model.TimeUrgency
 import com.example.core.model.UserProfile
 import kotlinx.coroutines.launch
 
-enum class TaskScopeLevel(val label: String, val icon: ImageVector) {
-    LAN("LAN / Room", Icons.Default.Router),
-    TEST_CENTRE("Test Centre", Icons.Default.Business),
-    CITY("City", Icons.Default.LocationCity),
-    STATE("State", Icons.Default.LocationOn),
-    NATIONAL("National", Icons.Default.Public)
+enum class TaskScopeLevel(val label: String, val icon: ImageVector, val mappedScope: ScopeLevel) {
+    LAN("LAN / Room", Icons.Default.Router, ScopeLevel.CENTRE),
+    TEST_CENTRE("Test Centre", Icons.Default.Business, ScopeLevel.CENTRE),
+    CITY("City", Icons.Default.LocationCity, ScopeLevel.CITY),
+    STATE("State", Icons.Default.LocationOn, ScopeLevel.STATE),
+    ZONE("Zone", Icons.Default.Public, ScopeLevel.ZONE),
+    NATIONAL("National", Icons.Default.Public, ScopeLevel.GLOBAL)
 }
 
 enum class SimpleTaskPriority(
@@ -155,7 +165,7 @@ enum class SimpleTaskType(val title: String, val subtitle: String) {
     PROGRESSIVE("Progressive (% Done)", "Assignee updates % completion progress")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CreateTaskScreen(
     tasksViewModel: TasksViewModel,
@@ -167,29 +177,103 @@ fun CreateTaskScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val authContext by tasksViewModel.authContextFlow.collectAsStateWithLifecycle()
+    val orgHierarchy by tasksViewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val groups by tasksViewModel.taskGroupsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val searchResults by tasksViewModel.directoryEmployees.collectAsStateWithLifecycle(initialValue = emptyList())
+    val scopedSearchResults by tasksViewModel.scopedMembers.collectAsStateWithLifecycle(initialValue = emptyList())
     val isLoading by tasksViewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
+        if (orgHierarchy.centres.isEmpty()) {
+            tasksViewModel.refreshOrgHierarchy()
+        }
         tasksViewModel.actionEvent.collect { message ->
             snackbarHostState.showSnackbar(message)
         }
+    }
+
+    val allowedScopeEnums = remember(authContext.activeRole, authContext.isActive) {
+        tasksViewModel.allowedTaskScopes()
+    }
+    val availableUiScopes = remember(allowedScopeEnums) {
+        TaskScopeLevel.values().filter { it.mappedScope in allowedScopeEnums }
     }
 
     // 1. Basic Info
     var title by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
 
-    // 2. Scope Level (LAN, Test Centre, City, State, National)
+    // 2. Scope Level & Cascaded Org Hierarchy
     var selectedScope by rememberSaveable { mutableStateOf(TaskScopeLevel.TEST_CENTRE) }
+    LaunchedEffect(availableUiScopes) {
+        if (selectedScope !in availableUiScopes && availableUiScopes.isNotEmpty()) {
+            selectedScope = availableUiScopes.first()
+        }
+    }
+
     var lanText by rememberSaveable { mutableStateOf("LAN 1") }
-    var cityName by rememberSaveable { mutableStateOf("Jaipur") }
-    var stateName by rememberSaveable { mutableStateOf("Rajasthan") }
+    var cityName by rememberSaveable { mutableStateOf(authContext.scope.cityName ?: "Jaipur") }
+    var stateName by rememberSaveable { mutableStateOf(authContext.scope.stateName ?: "Rajasthan") }
     var selectedGroup by remember { mutableStateOf<TaskGroup?>(null) }
     var centreDropdownExpanded by remember { mutableStateOf(false) }
+
+    var selectedZone by remember { mutableStateOf<OrgZone?>(null) }
+    var selectedState by remember { mutableStateOf<OrgState?>(null) }
+    var selectedCity by remember { mutableStateOf<OrgCity?>(null) }
+    var selectedCentre by remember { mutableStateOf<OrgCentre?>(null) }
+    var zoneExpanded by remember { mutableStateOf(false) }
+    var stateExpanded by remember { mutableStateOf(false) }
+    var cityExpanded by remember { mutableStateOf(false) }
+    var orgCentreExpanded by remember { mutableStateOf(false) }
+
+    val isGlobalRole = authContext.activeRole in setOf(TaskzRole.SUPER_ADMIN, TaskzRole.COMMAND_CENTER)
+    val availableZones = remember(orgHierarchy.zones, authContext.scope, isGlobalRole) {
+        if (isGlobalRole || authContext.scope.zoneId == null) orgHierarchy.zones
+        else orgHierarchy.zones.filter { it.id == authContext.scope.zoneId }
+    }
+    val availableStates = remember(orgHierarchy.states, selectedZone, authContext.scope, isGlobalRole) {
+        orgHierarchy.states.filter { st ->
+            (selectedZone == null || st.zoneId == selectedZone!!.id) &&
+                (isGlobalRole || authContext.scope.stateId == null || authContext.activeRole == TaskzRole.ZOM || st.id == authContext.scope.stateId)
+        }
+    }
+    val availableCities = remember(orgHierarchy.cities, selectedState, selectedZone, authContext.scope, isGlobalRole) {
+        orgHierarchy.cities.filter { ct ->
+            (selectedState == null || ct.stateId == selectedState!!.id) &&
+                (selectedZone == null || ct.zoneId == selectedZone!!.id) &&
+                (isGlobalRole || authContext.scope.cityId == null || authContext.activeRole.hierarchyRank >= TaskzRole.ROM.hierarchyRank || ct.id == authContext.scope.cityId)
+        }
+    }
+    val availableCentres = remember(orgHierarchy.centres, selectedCity, selectedState, selectedZone, authContext.scope, isGlobalRole) {
+        orgHierarchy.centres.filter { c ->
+            (selectedCity == null || c.cityId == selectedCity!!.id) &&
+                (selectedState == null || c.stateId == selectedState!!.id) &&
+                (selectedZone == null || c.zoneId == selectedZone!!.id) &&
+                (isGlobalRole || authContext.scope.centreId == null || authContext.activeRole.hierarchyRank >= TaskzRole.VCO.hierarchyRank || c.id == authContext.scope.centreId)
+        }
+    }
+
+    LaunchedEffect(orgHierarchy, authContext.scope) {
+        if (selectedZone == null && authContext.scope.zoneId != null) {
+            selectedZone = orgHierarchy.zones.firstOrNull { it.id == authContext.scope.zoneId }
+        }
+        if (selectedState == null && authContext.scope.stateId != null) {
+            selectedState = orgHierarchy.states.firstOrNull { it.id == authContext.scope.stateId }
+        }
+        if (selectedCity == null && authContext.scope.cityId != null) {
+            selectedCity = orgHierarchy.cities.firstOrNull { it.id == authContext.scope.cityId }
+        }
+        if (selectedCentre == null && authContext.scope.centreId != null) {
+            selectedCentre = orgHierarchy.centres.firstOrNull { it.id == authContext.scope.centreId }
+        }
+        if (selectedZone == null && availableZones.size == 1) selectedZone = availableZones.first()
+        if (selectedState == null && availableStates.size == 1) selectedState = availableStates.first()
+        if (selectedCity == null && availableCities.size == 1) selectedCity = availableCities.first()
+        if (selectedCentre == null && availableCentres.size == 1) selectedCentre = availableCentres.first()
+    }
 
     // 3. Task Priority
     var selectedPriority by rememberSaveable { mutableStateOf(SimpleTaskPriority.MEDIUM) }
@@ -208,7 +292,8 @@ fun CreateTaskScreen(
     var selectedSnoozeOption by rememberSaveable { mutableStateOf("10") } // "5", "10", "20", "custom"
     var customSnoozeMinutes by rememberSaveable { mutableStateOf("15") }
 
-    // 7. Who can join & Member Invitations
+    // 7. Target Roles, Who Can Join & Member Invitations
+    val selectedTargetRoles = remember { mutableStateListOf<String>() }
     var whoCanJoinScope by rememberSaveable { mutableStateOf("Test Centre") }
     var allowSelfJoin by rememberSaveable { mutableStateOf(true) }
     var memberSearchQuery by rememberSaveable { mutableStateOf("") }
@@ -280,11 +365,35 @@ fun CreateTaskScreen(
             selectedSnoozeOption.toIntOrNull() ?: 10
         }
 
+        val resolvedScopeLevel = selectedScope.mappedScope
+        val resolvedZoneId = when (resolvedScopeLevel) {
+            ScopeLevel.GLOBAL -> null
+            ScopeLevel.ZONE -> selectedZone?.id ?: authContext.scope.zoneId
+            ScopeLevel.STATE -> selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId
+            ScopeLevel.CITY -> selectedCity?.zoneId ?: selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId
+            ScopeLevel.CENTRE -> selectedCentre?.zoneId ?: selectedCity?.zoneId ?: authContext.scope.zoneId
+        }
+        val resolvedStateId = when (resolvedScopeLevel) {
+            ScopeLevel.GLOBAL, ScopeLevel.ZONE -> null
+            ScopeLevel.STATE -> selectedState?.id ?: authContext.scope.stateId
+            ScopeLevel.CITY -> selectedCity?.stateId ?: selectedState?.id ?: authContext.scope.stateId
+            ScopeLevel.CENTRE -> selectedCentre?.stateId ?: selectedCity?.stateId ?: authContext.scope.stateId
+        }
+        val resolvedCityId = when (resolvedScopeLevel) {
+            ScopeLevel.GLOBAL, ScopeLevel.ZONE, ScopeLevel.STATE -> null
+            ScopeLevel.CITY -> selectedCity?.id ?: authContext.scope.cityId
+            ScopeLevel.CENTRE -> selectedCentre?.cityId ?: selectedCity?.id ?: authContext.scope.cityId
+        }
+        val resolvedCentreId = if (resolvedScopeLevel == ScopeLevel.CENTRE) {
+            selectedCentre?.id ?: authContext.scope.centreId
+        } else null
+
         val resolvedLocation = when (selectedScope) {
-            TaskScopeLevel.LAN -> "LAN: ${lanText.ifBlank { "All LANs" }} • ${selectedGroup?.title ?: "Jaipur"}"
-            TaskScopeLevel.TEST_CENTRE -> selectedGroup?.title ?: "Centre 141 • Jaipur"
-            TaskScopeLevel.CITY -> "City: ${cityName.ifBlank { "Jaipur" }}, $stateName"
-            TaskScopeLevel.STATE -> "State: ${stateName.ifBlank { "Rajasthan" }}"
+            TaskScopeLevel.LAN -> "LAN: ${lanText.ifBlank { "All LANs" }} • ${selectedCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Centre"}"
+            TaskScopeLevel.TEST_CENTRE -> selectedCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Centre 141 • Jaipur"
+            TaskScopeLevel.CITY -> "City: ${selectedCity?.name ?: cityName.ifBlank { "Jaipur" }}, ${selectedState?.name ?: stateName}"
+            TaskScopeLevel.STATE -> "State: ${selectedState?.name ?: stateName.ifBlank { "Rajasthan" }}"
+            TaskScopeLevel.ZONE -> "Zone: ${selectedZone?.name ?: authContext.scope.zoneName ?: "Assigned Zone"}"
             TaskScopeLevel.NATIONAL -> "All India (National Operations)"
         }
 
@@ -295,7 +404,6 @@ fun CreateTaskScreen(
         val now = java.time.LocalDateTime.now()
         var targetDateTime = now.withHour(alarmHour).withMinute(alarmMinute).withSecond(0).withNano(0)
         if (targetDateTime.isBefore(now)) {
-            // If the exact time has already passed today, schedule for next occurrence or +5 minutes
             targetDateTime = targetDateTime.plusDays(1)
         }
         val scheduledInstant = targetDateTime.atZone(java.time.ZoneId.systemDefault()).toInstant()
@@ -303,7 +411,7 @@ fun CreateTaskScreen(
 
         val newTask = TaskItem(
             groupId = selectedGroup?.id ?: "centre_141",
-            groupTitle = selectedGroup?.title ?: "141 · Yagyavalkya Institute of Technology",
+            groupTitle = selectedGroup?.title ?: selectedCentre?.name ?: "General Operations",
             shiftId = preselectedShiftId,
             title = title.trim(),
             description = description.trim().takeIf { it.isNotBlank() },
@@ -311,7 +419,7 @@ fun CreateTaskScreen(
             startsAt = scheduledIso,
             dueAt = scheduledIso,
             priority = selectedPriority.priorityString,
-            visibility = if (whoCanJoinScope == "National") "everyone" else whoCanJoinScope.lowercase(),
+            visibility = if (selectedScope == TaskScopeLevel.NATIONAL) "everyone" else resolvedScopeLevel.code.lowercase(),
             allowSelfJoin = allowSelfJoin,
             joinRequiresApproval = false,
             requiresCompletionConfirmation = false,
@@ -326,7 +434,13 @@ fun CreateTaskScreen(
             overdueReminderIntervalMinutes = resolvedSnoozeMinutes,
             responseType = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) ResponseType.PERCENTAGE else ResponseType.YES_NO,
             lanTargetList = parsedLans,
-            completionPolicy = CompletionPolicy.SINGLE_ASSIGNEE
+            completionPolicy = CompletionPolicy.SINGLE_ASSIGNEE,
+            scopeLevel = resolvedScopeLevel,
+            zoneId = resolvedZoneId,
+            stateId = resolvedStateId,
+            cityId = resolvedCityId,
+            centreId = resolvedCentreId,
+            targetRoleCodes = selectedTargetRoles.toList()
         )
 
         tasksViewModel.createTask(
@@ -452,7 +566,7 @@ fun CreateTaskScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "2. Scope Level (Where does this task apply?)",
+                        text = "2. Scope Level (${authContext.activeRole.displayName})",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -461,7 +575,7 @@ fun CreateTaskScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        items(TaskScopeLevel.values()) { scope ->
+                        items(availableUiScopes) { scope ->
                             val isSelected = selectedScope == scope
                             FilterChip(
                                 selected = isSelected,
@@ -474,12 +588,13 @@ fun CreateTaskScreen(
                                         modifier = Modifier.size(16.dp)
                                     )
                                 },
-                                shape = RoundedCornerShape(20.dp)
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.testTag("create_scope_${scope.name.lowercase()}")
                             )
                         }
                     }
 
-                    // Contextual Field according to Scope
+                    // Contextual Field & Cascaded Organizational Selectors
                     when (selectedScope) {
                         TaskScopeLevel.LAN -> {
                             OutlinedTextField(
@@ -493,59 +608,200 @@ fun CreateTaskScreen(
                             )
                         }
                         TaskScopeLevel.TEST_CENTRE -> {
-                            ExposedDropdownMenuBox(
-                                expanded = centreDropdownExpanded,
-                                onExpandedChange = { centreDropdownExpanded = it },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedGroup?.title ?: "Select Examination Centre",
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Examination Centre") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreDropdownExpanded) },
-                                    modifier = Modifier
-                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                        .fillMaxWidth(),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = centreDropdownExpanded,
-                                    onDismissRequest = { centreDropdownExpanded = false }
+                            if (availableCentres.isNotEmpty()) {
+                                ExposedDropdownMenuBox(
+                                    expanded = orgCentreExpanded,
+                                    onExpandedChange = { orgCentreExpanded = it },
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    groups.forEach { group ->
-                                        DropdownMenuItem(
-                                            text = { Text(group.title) },
-                                            onClick = {
-                                                selectedGroup = group
-                                                centreDropdownExpanded = false
-                                            }
-                                        )
+                                    OutlinedTextField(
+                                        value = selectedCentre?.let { "${it.code} · ${it.name}" } ?: "Select Examination Centre",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Target Examination Centre") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = orgCentreExpanded) },
+                                        modifier = Modifier
+                                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                            .fillMaxWidth()
+                                            .testTag("create_org_centre_dropdown"),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = orgCentreExpanded,
+                                        onDismissRequest = { orgCentreExpanded = false }
+                                    ) {
+                                        availableCentres.forEach { centre ->
+                                            DropdownMenuItem(
+                                                text = { Text("${centre.code} · ${centre.name}") },
+                                                onClick = {
+                                                    selectedCentre = centre
+                                                    orgCentreExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                ExposedDropdownMenuBox(
+                                    expanded = centreDropdownExpanded,
+                                    onExpandedChange = { centreDropdownExpanded = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedGroup?.title ?: "Select Examination Centre",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Examination Centre") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreDropdownExpanded) },
+                                        modifier = Modifier
+                                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                            .fillMaxWidth(),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = centreDropdownExpanded,
+                                        onDismissRequest = { centreDropdownExpanded = false }
+                                    ) {
+                                        groups.forEach { group ->
+                                            DropdownMenuItem(
+                                                text = { Text(group.title) },
+                                                onClick = {
+                                                    selectedGroup = group
+                                                    centreDropdownExpanded = false
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                         TaskScopeLevel.CITY -> {
-                            OutlinedTextField(
-                                value = cityName,
-                                onValueChange = { cityName = it },
-                                label = { Text("Target City") },
-                                placeholder = { Text("e.g., Jaipur, Delhi, Mumbai") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
-                            )
+                            if (availableCities.isNotEmpty()) {
+                                ExposedDropdownMenuBox(
+                                    expanded = cityExpanded,
+                                    onExpandedChange = { cityExpanded = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedCity?.name ?: "Select Target City",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Target City (Propagates to all Centres in City)") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) },
+                                        modifier = Modifier
+                                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                            .fillMaxWidth()
+                                            .testTag("create_org_city_dropdown"),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = cityExpanded,
+                                        onDismissRequest = { cityExpanded = false }
+                                    ) {
+                                        availableCities.forEach { city ->
+                                            DropdownMenuItem(
+                                                text = { Text("${city.name} (${city.code})") },
+                                                onClick = {
+                                                    selectedCity = city
+                                                    cityName = city.name
+                                                    cityExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    value = cityName,
+                                    onValueChange = { cityName = it },
+                                    label = { Text("Target City") },
+                                    placeholder = { Text("e.g., Jaipur, Delhi, Mumbai") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                            }
                         }
                         TaskScopeLevel.STATE -> {
-                            OutlinedTextField(
-                                value = stateName,
-                                onValueChange = { stateName = it },
-                                label = { Text("Target State") },
-                                placeholder = { Text("e.g., Rajasthan, Maharashtra") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
-                            )
+                            if (availableStates.isNotEmpty()) {
+                                ExposedDropdownMenuBox(
+                                    expanded = stateExpanded,
+                                    onExpandedChange = { stateExpanded = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedState?.name ?: "Select Target State",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Target State / Region") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
+                                        modifier = Modifier
+                                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                            .fillMaxWidth()
+                                            .testTag("create_org_state_dropdown"),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = stateExpanded,
+                                        onDismissRequest = { stateExpanded = false }
+                                    ) {
+                                        availableStates.forEach { st ->
+                                            DropdownMenuItem(
+                                                text = { Text("${st.name} (${st.code})") },
+                                                onClick = {
+                                                    selectedState = st
+                                                    stateName = st.name
+                                                    stateExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    value = stateName,
+                                    onValueChange = { stateName = it },
+                                    label = { Text("Target State") },
+                                    placeholder = { Text("e.g., Rajasthan, Maharashtra") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                            }
+                        }
+                        TaskScopeLevel.ZONE -> {
+                            ExposedDropdownMenuBox(
+                                expanded = zoneExpanded,
+                                onExpandedChange = { zoneExpanded = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedZone?.name ?: "Select Target Zone",
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Target Zone") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
+                                    modifier = Modifier
+                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                        .fillMaxWidth()
+                                        .testTag("create_org_zone_dropdown"),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = zoneExpanded,
+                                    onDismissRequest = { zoneExpanded = false }
+                                ) {
+                                    availableZones.forEach { z ->
+                                        DropdownMenuItem(
+                                            text = { Text("${z.name} (${z.code})") },
+                                            onClick = {
+                                                selectedZone = z
+                                                zoneExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                         TaskScopeLevel.NATIONAL -> {
                             OutlinedCard(
@@ -556,7 +812,7 @@ fun CreateTaskScreen(
                                     Icon(Icons.Default.Public, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Applies across all centres nationwide (All India operations).",
+                                        text = "Global Scope: Propagates across all zones and centres via single canonical task record.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1005,18 +1261,38 @@ fun CreateTaskScreen(
                     }
 
                     Text(
-                        text = "Who has access to view and join this task?",
+                        text = "Target Roles in Scope (Optional)",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        text = "Creates ONE canonical task visible to all selected roles inside this scope — zero duplicate rows.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(listOf("Test Centre", "City", "State", "National", "LAN Only")) { scope ->
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val selectableTargetRoles = listOf(
+                            TaskzRole.IT_MANAGER,
+                            TaskzRole.VCO,
+                            TaskzRole.CITY_HEAD,
+                            TaskzRole.ROM,
+                            TaskzRole.ZOM,
+                            TaskzRole.COMMAND_CENTER
+                        )
+                        selectableTargetRoles.forEach { role ->
+                            val isSelected = selectedTargetRoles.contains(role.code)
                             FilterChip(
-                                selected = whoCanJoinScope == scope,
-                                onClick = { whoCanJoinScope = scope },
-                                label = { Text(scope) },
-                                shape = RoundedCornerShape(16.dp)
+                                selected = isSelected,
+                                onClick = {
+                                    if (isSelected) selectedTargetRoles.remove(role.code)
+                                    else selectedTargetRoles.add(role.code)
+                                },
+                                label = { Text(role.displayName) },
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.testTag("target_role_chip_${role.code.lowercase()}")
                             )
                         }
                     }
@@ -1032,7 +1308,7 @@ fun CreateTaskScreen(
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                             )
                             Text(
-                                text = "Eligible employees in this scope can join the task directly",
+                                text = "Eligible personnel in this scope can join the task directly",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1073,7 +1349,7 @@ fun CreateTaskScreen(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
                     Text(
-                        text = "Invite Members via Search (Name, Email, or Phone)",
+                        text = "Invite Scoped Members (Name, Role, Emp ID, Email, or Mobile)",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                     )
 
@@ -1081,13 +1357,19 @@ fun CreateTaskScreen(
                         value = memberSearchQuery,
                         onValueChange = {
                             memberSearchQuery = it
-                            tasksViewModel.searchEmployees(it)
+                            tasksViewModel.searchScopedMembers(
+                                query = it,
+                                roleCode = selectedTargetRoles.singleOrNull(),
+                                centreId = selectedCentre?.id ?: authContext.scope.centreId
+                            )
                         },
-                        label = { Text("Search Employee") },
-                        placeholder = { Text("Type name, email, or mobile...") },
+                        label = { Text("Search Scoped Directory") },
+                        placeholder = { Text("Name, Emp ID, email, or phone...") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("create_task_member_search"),
                         shape = RoundedCornerShape(10.dp)
                     )
 
@@ -1117,45 +1399,105 @@ fun CreateTaskScreen(
                         }
                     }
 
-                    // Search Results List
-                    if (memberSearchQuery.isNotBlank() && searchResults.isNotEmpty()) {
+                    // Search Results List showing full scoped member identity
+                    if (memberSearchQuery.isNotBlank() && (scopedSearchResults.isNotEmpty() || searchResults.isNotEmpty())) {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                searchResults.take(4).forEach { candidate ->
-                                    val isAdded = selectedInvitees.any { it.id == candidate.id || it.employeeId == candidate.employeeId }
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                if (!isAdded) selectedInvitees.add(candidate)
-                                                else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (scopedSearchResults.isNotEmpty()) {
+                                    scopedSearchResults.take(5).forEach { member ->
+                                        val asProfile = UserProfile(
+                                            id = member.id,
+                                            employeeId = member.employeeId,
+                                            fullName = member.fullName,
+                                            email = member.email,
+                                            mobile = member.mobile.orEmpty(),
+                                            activeRoleCode = member.activeRoleCode,
+                                            assignedRoleCodes = member.assignedRoles.ifEmpty { listOf(member.activeRoleCode) },
+                                            centreId = member.centreId,
+                                            centreCode = member.centreCode,
+                                            cityName = member.cityName,
+                                            isActive = member.isActive
+                                        )
+                                        val isAdded = selectedInvitees.any { it.id == member.id || it.employeeId == member.employeeId }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    if (!isAdded) selectedInvitees.add(asProfile)
+                                                    else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
+                                                }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(34.dp)
+                                                        .clip(CircleShape)
+                                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        text = member.fullName.take(2).uppercase(),
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Column {
+                                                    Text(
+                                                        text = "${member.fullName} • ${TaskzRole.fromCode(member.activeRoleCode).displayName}",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                    )
+                                                    Text(
+                                                        text = listOfNotNull(
+                                                            "ID: ${member.employeeId}",
+                                                            member.email?.takeIf { it.isNotBlank() },
+                                                            member.centreCode?.let { "Centre $it" } ?: member.cityName,
+                                                            member.mobile?.takeIf { it.isNotBlank() }
+                                                        ).joinToString(" • "),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
                                             }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(32.dp)
-                                                    .clip(CircleShape)
-                                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                                contentAlignment = Alignment.Center
+                                            Button(
+                                                onClick = {
+                                                    if (!isAdded) selectedInvitees.add(asProfile)
+                                                    else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
+                                                },
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = if (isAdded) androidx.compose.material3.ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                                ) else androidx.compose.material3.ButtonDefaults.buttonColors()
                                             ) {
-                                                Text(
-                                                    text = candidate.fullName.take(2).uppercase(),
-                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                )
+                                                Text(if (isAdded) "Added ✓" else "+ Add", style = MaterialTheme.typography.labelMedium)
                                             }
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
+                                        }
+                                    }
+                                } else {
+                                    searchResults.take(4).forEach { candidate ->
+                                        val isAdded = selectedInvitees.any { it.id == candidate.id || it.employeeId == candidate.employeeId }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    if (!isAdded) selectedInvitees.add(candidate)
+                                                    else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
+                                                }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = candidate.fullName,
+                                                    text = "${candidate.fullName} • ${candidate.resolvedActiveRole.displayName}",
                                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                                                 )
                                                 Text(
@@ -1164,20 +1506,15 @@ fun CreateTaskScreen(
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
-                                        }
-
-                                        Button(
-                                            onClick = {
-                                                if (!isAdded) selectedInvitees.add(candidate)
-                                                else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
-                                            },
-                                            shape = RoundedCornerShape(8.dp),
-                                            colors = if (isAdded) androidx.compose.material3.ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                            ) else androidx.compose.material3.ButtonDefaults.buttonColors()
-                                        ) {
-                                            Text(if (isAdded) "Added ✓" else "+ Add", style = MaterialTheme.typography.labelMedium)
+                                            Button(
+                                                onClick = {
+                                                    if (!isAdded) selectedInvitees.add(candidate)
+                                                    else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
+                                                },
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Text(if (isAdded) "Added ✓" else "+ Add", style = MaterialTheme.typography.labelMedium)
+                                            }
                                         }
                                     }
                                 }

@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.core.model.TaskzRole
 import com.example.core.model.UserProfile
 import com.example.core.network.SupabaseConfig
 import com.example.data.remote.GoogleAuthManager
@@ -88,7 +89,9 @@ class AuthViewModel(
         mobile: String,
         password: String,
         confirmPassword: String,
-        selectedPhotoUri: Uri?
+        selectedPhotoUri: Uri?,
+        onboardingRole: TaskzRole = TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ) {
         val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         val trimmedName = fullName.trim()
@@ -128,13 +131,16 @@ class AuthViewModel(
                 photoFilename = "avatar_${System.currentTimeMillis()}.jpg"
             }
 
+            val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else TaskzRole.IT_MANAGER
             val result = authRepository.signUp(
                 employeeId = normalizedEmpId,
                 password = password,
                 fullName = trimmedName,
                 mobile = normalizedMobile,
                 photoBytes = photoBytes,
-                photoFilename = photoFilename
+                photoFilename = photoFilename,
+                onboardingRole = safeRole,
+                centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
             )
 
             result.fold(
@@ -259,7 +265,9 @@ class AuthViewModel(
         fullName: String,
         mobile: String,
         employeeId: String,
-        selectedPhotoUri: Uri? = null
+        selectedPhotoUri: Uri? = null,
+        onboardingRole: TaskzRole = TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ) {
         val trimmedEmail = email.trim().lowercase()
         val trimmedName = fullName.trim()
@@ -296,6 +304,7 @@ class AuthViewModel(
                 photoFilename = "avatar_${System.currentTimeMillis()}.jpg"
             }
 
+            val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else TaskzRole.IT_MANAGER
             val result = authRepository.signUpWithEmail(
                 email = trimmedEmail,
                 password = password,
@@ -303,7 +312,9 @@ class AuthViewModel(
                 fullName = trimmedName,
                 mobile = normalizedMobile,
                 photoBytes = photoBytes,
-                photoFilename = photoFilename
+                photoFilename = photoFilename,
+                onboardingRole = safeRole,
+                centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
             )
 
             result.fold(
@@ -364,7 +375,9 @@ class AuthViewModel(
     fun completeGoogleProfile(
         fullName: String,
         mobile: String,
-        employeeId: String
+        employeeId: String,
+        onboardingRole: TaskzRole = TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ) {
         val trimmedName = fullName.trim()
         val normalizedMobile = normalizeMobile(mobile)
@@ -385,10 +398,13 @@ class AuthViewModel(
 
         viewModelScope.launch {
             _loginState.value = AuthUiState.Loading
+            val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else TaskzRole.IT_MANAGER
             val result = authRepository.completeGoogleProfile(
                 employeeId = normalizedEmpId,
                 fullName = trimmedName,
-                mobile = normalizedMobile
+                mobile = normalizedMobile,
+                onboardingRole = safeRole,
+                centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
             )
             result.fold(
                 onSuccess = { profile ->

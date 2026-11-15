@@ -38,8 +38,11 @@ class AuthRepository(
         fullName: String,
         mobile: String,
         photoBytes: ByteArray? = null,
-        photoFilename: String? = null
+        photoFilename: String? = null,
+        onboardingRole: com.example.core.model.TaskzRole = com.example.core.model.TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ): Result<UserProfile> {
+        val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else com.example.core.model.TaskzRole.IT_MANAGER
         val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
         val session = supabaseClient.signUp(
@@ -72,7 +75,9 @@ class AuthRepository(
             fallbackFullName = fullName.trim(),
             fallbackMobile = normalizedMobile,
             photoBytes = photoBytes,
-            photoFilename = photoFilename
+            photoFilename = photoFilename,
+            onboardingRole = safeRole,
+            centreCode = centreCode
         )
     }
 
@@ -86,8 +91,11 @@ class AuthRepository(
         fullName: String,
         mobile: String,
         photoBytes: ByteArray? = null,
-        photoFilename: String? = null
+        photoFilename: String? = null,
+        onboardingRole: com.example.core.model.TaskzRole = com.example.core.model.TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ): Result<UserProfile> {
+        val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else com.example.core.model.TaskzRole.IT_MANAGER
         val cleanEmail = email.trim().lowercase()
         val trimmedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
@@ -125,7 +133,9 @@ class AuthRepository(
             fallbackFullName = fullName.trim(),
             fallbackMobile = normalizedMobile,
             photoBytes = photoBytes,
-            photoFilename = photoFilename
+            photoFilename = photoFilename,
+            onboardingRole = safeRole,
+            centreCode = centreCode
         )
     }
 
@@ -135,7 +145,9 @@ class AuthRepository(
         fallbackFullName: String,
         fallbackMobile: String,
         photoBytes: ByteArray?,
-        photoFilename: String?
+        photoFilename: String?,
+        onboardingRole: com.example.core.model.TaskzRole = com.example.core.model.TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ): Result<UserProfile> {
         val activeToken = session.accessToken
         var photoPath: String? = null
@@ -158,6 +170,15 @@ class AuthRepository(
             }
         }
 
+        val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else com.example.core.model.TaskzRole.IT_MANAGER
+        runCatching {
+            supabaseClient.setInitialOnboardingRole(
+                accessToken = activeToken,
+                roleCode = safeRole.code,
+                centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
+            )
+        }
+
         var remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull()
         if (remoteProfile == null) {
             kotlinx.coroutines.delay(400)
@@ -173,6 +194,14 @@ class AuthRepository(
             )
             if (completed.isSuccess) {
                 remoteProfile = completed.getOrNull()
+                runCatching {
+                    supabaseClient.setInitialOnboardingRole(
+                        accessToken = activeToken,
+                        roleCode = safeRole.code,
+                        centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
+                    )
+                }
+                remoteProfile = supabaseClient.fetchProfileById(activeToken, session.userId).getOrNull() ?: remoteProfile
             }
         }
 
@@ -337,12 +366,15 @@ class AuthRepository(
     suspend fun completeGoogleProfile(
         employeeId: String,
         fullName: String,
-        mobile: String
+        mobile: String,
+        onboardingRole: com.example.core.model.TaskzRole = com.example.core.model.TaskzRole.IT_MANAGER,
+        centreCode: String? = null
     ): Result<UserProfile> {
         val validToken = getValidAccessToken().getOrElse { return Result.failure(it) }
         val session = userPrefs.getUserSession()
         val normalizedEmpId = SupabaseConfig.normalizeEmployeeId(employeeId)
         val normalizedMobile = SupabaseConfig.normalizeMobile(mobile)
+        val safeRole = if (onboardingRole.isOnboardingAllowed) onboardingRole else com.example.core.model.TaskzRole.IT_MANAGER
 
         val completedProfile = supabaseClient.completeMyProfile(
             accessToken = validToken,
@@ -351,16 +383,25 @@ class AuthRepository(
             mobile = normalizedMobile
         ).getOrElse { return Result.failure(it) }
 
-        if (!completedProfile.isActive) {
+        runCatching {
+            supabaseClient.setInitialOnboardingRole(
+                accessToken = validToken,
+                roleCode = safeRole.code,
+                centreCode = centreCode?.trim()?.takeIf { it.isNotBlank() }
+            )
+        }
+        val refreshedProfile = supabaseClient.fetchProfileById(validToken, completedProfile.id).getOrNull() ?: completedProfile
+
+        if (!refreshedProfile.isActive) {
             return Result.failure(IOException("Your Taskz account is currently inactive. Please contact the administrator."))
         }
 
-        val signedUrl = if (!completedProfile.profilePhotoPath.isNullOrBlank()) {
-            supabaseClient.getSignedProfilePhotoUrl(validToken, completedProfile.profilePhotoPath).getOrNull()
+        val signedUrl = if (!refreshedProfile.profilePhotoPath.isNullOrBlank()) {
+            supabaseClient.getSignedProfilePhotoUrl(validToken, refreshedProfile.profilePhotoPath).getOrNull()
         } else {
             null
         }
-        val finalProfile = completedProfile.copy(avatarSignedUrl = signedUrl)
+        val finalProfile = refreshedProfile.copy(avatarSignedUrl = signedUrl)
 
         userPrefs.saveSession(
             accessToken = validToken,
@@ -561,16 +602,36 @@ class AuthRepository(
     }
 
     /**
-     * Logout from Supabase Auth and clear local session/cached profile.
+     * Logout from Supabase Auth, deactivate only this device's push token, disconnect realtime,
+     * cancel active user alarms, and wipe all user-scoped Room/in-memory caches so another user
+     * on the same device can never observe the previous user's data.
      */
     suspend fun logout() {
+        val app = runCatching { com.example.TaskzApplication.instance }.getOrNull()
         val session = userPrefs.getUserSession()
-        if (!session.accessToken.isNullOrBlank()) {
-            supabaseClient.logout(session.accessToken)
+
+        // 1. Deactivate ONLY this device's token before invalidating JWT
+        runCatching { app?.deviceTokenManager?.deactivateThisDeviceOnly() }
+
+        // 2. Cancel alarms belonging to the signing-out user
+        runCatching {
+            val scheduler = com.example.alarm.TaskAlarmScheduler(app!!)
+            val tasks = app.database.taskDao().getTaskIdsSnapshot()
+            tasks.forEach { scheduler.cancelAlarmsForTask(it) }
         }
+
+        // 3. Invalidate Supabase session & disconnect realtime / clear caches
+        if (!session.accessToken.isNullOrBlank()) {
+            runCatching { supabaseClient.logout(session.accessToken) }
+        }
+        if (app != null) {
+            runCatching { app.taskzSyncManager.onLogout() }
+        } else {
+            profileDao.clearProfile()
+            syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Signed out")
+        }
+        userPrefs.clearSyncCursor()
         userPrefs.clearSession()
-        profileDao.clearProfile()
-        syncMetadataDao.updateSyncStatus(SyncStatus.OFFLINE.name, "Signed out")
     }
 
     /**

@@ -15,6 +15,7 @@ import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncStatus
 import com.example.data.local.TaskzDatabase
 import com.example.data.remote.SupabaseClient
+import com.example.data.remote.SupabaseHttpException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -105,6 +106,7 @@ class SyncWorker(
         outboxDao.deleteLegacyPreMigrationEvents(activeUserId)
         val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         if (pendingEvents.isEmpty()) {
+            runCatching { TaskzApplication.instance.taskzSyncManager.syncNow() }
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
             if (remaining == 0) {
                 db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
@@ -114,6 +116,7 @@ class SyncWorker(
 
         Log.d(TAG, "Processing ${pendingEvents.size} pending outbox events for user $activeUserId")
         var hasRetryableFailure = false
+        var authPaused = false
 
         for (event in pendingEvents) {
             val now = System.currentTimeMillis()
@@ -356,6 +359,100 @@ class SyncWorker(
                         }
                     }
 
+                    "INCIDENT_ESCALATE" -> {
+                        val payload = JSONObject(event.payloadJson)
+                        val incidentId = payload.optString("incidentId", event.taskId)
+                        val targetLevel = payload.optString("targetLevel", "VCO")
+                        val reason = payload.optString("reason").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                        var res = supabaseClient.escalateSystemIncident(
+                            accessToken = token,
+                            incidentId = incidentId,
+                            targetLevel = targetLevel,
+                            reason = reason,
+                            clientOperationId = event.eventId
+                        )
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.escalateSystemIncident(
+                                    accessToken = token,
+                                    incidentId = incidentId,
+                                    targetLevel = targetLevel,
+                                    reason = reason,
+                                    clientOperationId = event.eventId
+                                )
+                            }
+                        }
+                        if (res.isSuccess) {
+                            outboxDao.markEventSynced(event.id, "INCIDENT_ESCALATED", System.currentTimeMillis())
+                            db.systemIncidentDao().updateSyncStatus(incidentId, "SYNCED", null)
+                        } else {
+                            val ex = res.exceptionOrNull()
+                            when {
+                                ex is SupabaseHttpException && ex.isAuthFailure -> {
+                                    outboxDao.resetSendingToPendingForUser(activeUserId)
+                                    authPaused = true
+                                }
+                                ex is SupabaseHttpException && ex.isConflict -> {
+                                    outboxDao.markEventSynced(event.id, "CONFLICT_SERVER_WINS", System.currentTimeMillis())
+                                }
+                                else -> {
+                                    val err = ex?.message ?: "Incident escalation sync error"
+                                    val isPermanent = err.contains("not authorized", true) ||
+                                        err.contains("forbidden", true) ||
+                                        err.contains("invalid escalation", true)
+                                    outboxDao.markEventFailed(
+                                        event.id,
+                                        err,
+                                        if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE",
+                                        System.currentTimeMillis()
+                                    )
+                                    if (!isPermanent) hasRetryableFailure = true
+                                }
+                            }
+                        }
+                    }
+
+                    "TASK_UPDATE" -> {
+                        val payload = JSONObject(event.payloadJson)
+                        val taskId = payload.optString("task_id", event.taskId)
+                        val updates = payload.optJSONObject("updates") ?: payload
+                        var res = supabaseClient.updateTaskFields(token, taskId, updates)
+                        if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                            val forceRes = authRepo.forceRefreshAccessToken()
+                            if (forceRes.isSuccess) {
+                                token = forceRes.getOrThrow()
+                                res = supabaseClient.updateTaskFields(token, taskId, updates)
+                            }
+                        }
+                        if (res.isSuccess) {
+                            outboxDao.markEventSynced(event.id, "TASK_UPDATED", System.currentTimeMillis())
+                        } else {
+                            val ex = res.exceptionOrNull()
+                            when {
+                                ex is SupabaseHttpException && ex.isAuthFailure -> {
+                                    outboxDao.resetSendingToPendingForUser(activeUserId)
+                                    authPaused = true
+                                }
+                                ex is SupabaseHttpException && ex.isConflict -> {
+                                    outboxDao.markEventSynced(event.id, "CONFLICT_SERVER_WINS", System.currentTimeMillis())
+                                }
+                                else -> {
+                                    val err = ex?.message ?: "Task update sync error"
+                                    val isPermanent = err.contains("forbidden", true) || err.contains("not authorized", true)
+                                    outboxDao.markEventFailed(
+                                        event.id,
+                                        err,
+                                        if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE",
+                                        System.currentTimeMillis()
+                                    )
+                                    if (!isPermanent) hasRetryableFailure = true
+                                }
+                            }
+                        }
+                    }
+
                     else -> {
                         outboxDao.markEventFailed(
                             event.id,
@@ -365,12 +462,39 @@ class SyncWorker(
                         )
                     }
                 }
+                if (authPaused) break
+            } catch (e: SupabaseHttpException) {
+                Log.w(TAG, "HTTP ${e.statusCode} on event ${event.id}: ${e.message}")
+                when {
+                    e.isAuthFailure -> {
+                        outboxDao.resetSendingToPendingForUser(activeUserId)
+                        authPaused = true
+                        break
+                    }
+                    e.isConflict -> {
+                        outboxDao.markEventSynced(event.id, "CONFLICT_SERVER_WINS", System.currentTimeMillis())
+                    }
+                    else -> {
+                        outboxDao.markEventFailed(event.id, e.message, "FAILED_RETRYABLE", System.currentTimeMillis())
+                        hasRetryableFailure = true
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Sync error on event ${event.id}", e)
                 outboxDao.markEventFailed(event.id, e.message ?: "Exception", "FAILED_RETRYABLE", System.currentTimeMillis())
                 hasRetryableFailure = true
             }
         }
+
+        if (authPaused) {
+            db.syncMetadataDao().updateSyncStatus(
+                SyncStatus.ERROR.name,
+                "Authentication paused: Please sign in again to resume synchronization"
+            )
+            return@withContext Result.failure()
+        }
+
+        runCatching { TaskzApplication.instance.taskzSyncManager.syncNow() }
 
         val remainingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         val remainingPending = remainingEvents.size
@@ -426,6 +550,11 @@ class SyncWorker(
             obj.put("requirements", cleanReqs)
         }
         return obj
+    }
+
+    private fun isAuthExpiredError(err: Throwable?): Boolean {
+        if (err is SupabaseHttpException && err.isAuthFailure) return true
+        return isAuthExpiredError(err?.message)
     }
 
     private fun isAuthExpiredError(msg: String?): Boolean {

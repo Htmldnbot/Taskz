@@ -25,5 +25,8 @@ data class OutboxEventEntity(
     val syncStatus: String = "PENDING", // PENDING, SENDING, PENDING_VERIFICATION, SYNCED, FAILED_RETRYABLE, FAILED_PERMANENT
     val lastError: String? = null,
     val serverAcknowledgement: String? = null,
-    val transactionId: String = eventId
+    val transactionId: String = eventId,
+    val activeRole: String = "IT_MANAGER",
+    val scopeLevel: String = "CENTRE",
+    val scopeId: String? = null
 )

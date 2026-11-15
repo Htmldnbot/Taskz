@@ -12,12 +12,21 @@ interface NotificationDao {
     @Query("SELECT * FROM cached_notifications WHERE userId = :userId ORDER BY createdAt DESC")
     fun getNotificationsFlow(userId: String): Flow<List<NotificationEntity>>
 
+    @Query("SELECT COUNT(*) FROM cached_notifications WHERE userId = :userId AND isRead = 0")
+    fun getUnreadCountFlow(userId: String): Flow<Int>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNotifications(notifications: List<NotificationEntity>)
 
     @Query("UPDATE cached_notifications SET isRead = 1 WHERE id = :id")
     suspend fun markAsRead(id: String)
 
+    @Query("UPDATE cached_notifications SET isRead = 1 WHERE userId = :userId")
+    suspend fun markAllAsReadForUser(userId: String)
+
     @Query("DELETE FROM cached_notifications WHERE id = :id")
     suspend fun deleteNotification(id: String)
+
+    @Query("DELETE FROM cached_notifications")
+    suspend fun clearAll()
 }

@@ -175,6 +175,11 @@ fun TaskDetailScreen(
     val unlockTimeText = scheduledMillis?.let {
         TaskItem.formatForDisplay(java.time.Instant.ofEpochMilli(it).toString())
     } ?: (currentTask.executionTime ?: currentTask.dueAt ?: "")
+    val canAssign = viewModel.canAssignTask(currentTask)
+    val canAcknowledge = viewModel.canAcknowledgeTask(currentTask)
+    val canComplete = viewModel.canCompleteTask(currentTask)
+    val isPendingSync = currentTask.localSyncState.equals("PENDING_SYNC", ignoreCase = true) ||
+        currentTask.status.equals("pending_sync", ignoreCase = true)
 
     BackHandler(onBack = onBackClick)
 
@@ -269,6 +274,50 @@ fun TaskDetailScreen(
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = "Scope: ${currentTask.scopeLevel.label}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isPendingSync) TaskzWarning.copy(alpha = 0.2f) else TaskzSuccess.copy(alpha = 0.14f)
+                        ) {
+                            Text(
+                                text = if (isPendingSync) "PENDING SYNC" else "SYNCED",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPendingSync) TaskzWarning else TaskzSuccess
+                                ),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                        currentTask.targetRoleCodes.forEach { roleCode ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                            ) {
+                                Text(
+                                    text = com.example.core.model.TaskzRole.fromCode(roleCode).displayName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
 
@@ -441,7 +490,7 @@ fun TaskDetailScreen(
                             ) {
                                 Button(
                                     onClick = { viewModel.acknowledgeAlarm(currentTask.id) },
-                                    enabled = !isLockedBeforeTime,
+                                    enabled = canAcknowledge && !isLockedBeforeTime,
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                     modifier = Modifier
                                         .weight(1.5f)
@@ -449,12 +498,18 @@ fun TaskDetailScreen(
                                 ) {
                                     Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (isLockedBeforeTime) "Locked Until Time" else "Acknowledge Alarm")
+                                    Text(
+                                        when {
+                                            !canAcknowledge -> "Oversight View Only"
+                                            isLockedBeforeTime -> "Locked Until Time"
+                                            else -> "Acknowledge Alarm"
+                                        }
+                                    )
                                 }
 
                                 OutlinedButton(
                                     onClick = { viewModel.snoozeAlarm(currentTask.id, 5) },
-                                    enabled = !isLockedBeforeTime,
+                                    enabled = canAcknowledge && !isLockedBeforeTime,
                                     modifier = Modifier
                                         .weight(1f)
                                         .testTag("btn_snooze_detail")
@@ -506,6 +561,24 @@ fun TaskDetailScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    if (!canComplete) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .testTag("oversight_view_only_banner")
+                        ) {
+                            Text(
+                                text = "View-Only Oversight: Your active role can monitor this scoped task, while execution responses are submitted by the assigned target role.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+
                     if (isLockedBeforeTime) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
@@ -556,7 +629,7 @@ fun TaskDetailScreen(
                             Slider(
                                 value = responsePercentage,
                                 onValueChange = { responsePercentage = it },
-                                enabled = !isLockedBeforeTime,
+                                enabled = canComplete && !isLockedBeforeTime,
                                 valueRange = 0f..100f,
                                 steps = 19
                             )
@@ -569,7 +642,7 @@ fun TaskDetailScreen(
                                     FilterChip(
                                         selected = responsePercentage.toInt() == p.toInt(),
                                         onClick = { responsePercentage = p },
-                                        enabled = !isLockedBeforeTime,
+                                        enabled = canComplete && !isLockedBeforeTime,
                                         label = { Text("${p.toInt()}%") }
                                     )
                                 }
@@ -584,7 +657,7 @@ fun TaskDetailScreen(
                                         percentage = responsePercentage.toInt()
                                     )
                                 },
-                                enabled = !isLockedBeforeTime,
+                                enabled = canComplete && !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -598,14 +671,14 @@ fun TaskDetailScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             TaskzTextField(
                                 value = responseNumeric1,
-                                onValueChange = { if (!isLockedBeforeTime) responseNumeric1 = it },
+                                onValueChange = { if (canComplete && !isLockedBeforeTime) responseNumeric1 = it },
                                 label = "Registered Candidates Count",
                                 placeholder = "e.g., 250"
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             TaskzTextField(
                                 value = responseNumeric2,
-                                onValueChange = { if (!isLockedBeforeTime) responseNumeric2 = it },
+                                onValueChange = { if (canComplete && !isLockedBeforeTime) responseNumeric2 = it },
                                 label = "Pending / Absent Candidates Count",
                                 placeholder = "e.g., 12"
                             )
@@ -621,7 +694,7 @@ fun TaskDetailScreen(
                                     responseNumeric1 = ""
                                     responseNumeric2 = ""
                                 },
-                                enabled = !isLockedBeforeTime,
+                                enabled = canComplete && !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Submit Count Update")
@@ -711,7 +784,7 @@ fun TaskDetailScreen(
                                                 responseValue = "YES"
                                             )
                                         },
-                                        enabled = !isLockedBeforeTime,
+                                        enabled = canComplete && !isLockedBeforeTime,
                                         colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
                                         modifier = Modifier
                                             .weight(1f)
@@ -729,7 +802,7 @@ fun TaskDetailScreen(
                                                 responseValue = "NO"
                                             )
                                         },
-                                        enabled = !isLockedBeforeTime,
+                                        enabled = canComplete && !isLockedBeforeTime,
                                         colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
                                         modifier = Modifier
                                             .weight(1f)
@@ -746,7 +819,7 @@ fun TaskDetailScreen(
                         ResponseType.TEXT_RESPONSE -> {
                             TaskzTextField(
                                 value = responseText,
-                                onValueChange = { if (!isLockedBeforeTime) responseText = it },
+                                onValueChange = { if (canComplete && !isLockedBeforeTime) responseText = it },
                                 label = "Operational Status Report",
                                 placeholder = "Enter brief status report..."
                             )
@@ -760,7 +833,7 @@ fun TaskDetailScreen(
                                     )
                                     responseText = ""
                                 },
-                                enabled = !isLockedBeforeTime,
+                                enabled = canComplete && !isLockedBeforeTime,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Submit Report")
@@ -777,7 +850,7 @@ fun TaskDetailScreen(
                                         FilterChip(
                                             selected = selectedLanForResponse == lan,
                                             onClick = { selectedLanForResponse = lan },
-                                            enabled = !isLockedBeforeTime,
+                                            enabled = canComplete && !isLockedBeforeTime,
                                             label = { Text(lan) }
                                         )
                                     }
@@ -794,7 +867,7 @@ fun TaskDetailScreen(
                                         lanNumber = if (currentTask.lanTargetList.isNotEmpty()) selectedLanForResponse else null
                                     )
                                 },
-                                enabled = !isLockedBeforeTime,
+                                enabled = canComplete && !isLockedBeforeTime,
                                 colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -822,7 +895,7 @@ fun TaskDetailScreen(
                                             )
                                         }
                                     },
-                                    enabled = !isLockedBeforeTime,
+                                    enabled = canComplete && !isLockedBeforeTime,
                                     colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
                                     modifier = Modifier.weight(1f)
                                 ) {
@@ -1019,19 +1092,23 @@ fun TaskDetailScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            if (canAssign) {
+                Spacer(modifier = Modifier.height(10.dp))
 
-            Button(
-                onClick = {
-                    showAssignDialog = true
-                    viewModel.searchEmployees("")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(imageVector = Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Add Participant to Task")
+                Button(
+                    onClick = {
+                        showAssignDialog = true
+                        viewModel.searchScopedMembers("")
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("btn_add_participant"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Add Participant to Task")
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))

@@ -59,4 +59,10 @@ interface TaskResponseDao {
 
     @Query("DELETE FROM cached_task_acknowledgements WHERE taskId = :taskId")
     suspend fun deleteAcknowledgementsForTask(taskId: String)
+
+    @Query("DELETE FROM cached_task_responses")
+    suspend fun clearAllResponses()
+
+    @Query("DELETE FROM cached_task_acknowledgements")
+    suspend fun clearAllAcknowledgements()
 }

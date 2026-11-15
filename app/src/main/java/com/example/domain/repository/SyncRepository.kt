@@ -123,6 +123,18 @@ class SyncRepository(
      */
     suspend fun manualSync(): Result<SyncMetadata> {
         val now = System.currentTimeMillis()
+        val syncMgr = runCatching { TaskzApplication.instance.taskzSyncManager }.getOrNull()
+        if (syncMgr != null) {
+            val res = syncMgr.syncNow(forceFull = false)
+            val meta = syncMetadataDao.getSyncMetadata()?.toDomain() ?: SyncMetadata(
+                lastServerFetch = now,
+                lastSuccessfulSync = now,
+                pendingSyncCount = 0,
+                status = if (res.isSuccess) SyncStatus.SYNCED else SyncStatus.OFFLINE,
+                statusMessage = res.exceptionOrNull()?.message ?: "Synced"
+            )
+            return if (res.isSuccess) Result.success(meta) else Result.failure(res.exceptionOrNull() ?: IOException("Sync failed"))
+        }
 
         if (!networkMonitor.isCurrentlyConnected()) {
             syncMetadataDao.updateSyncStatus(
@@ -235,6 +247,7 @@ class SyncRepository(
         payloadJson: String,
         eventId: String = UUID.randomUUID().toString()
     ): Long {
+        val ctx = runCatching { TaskzApplication.instance.permissionManager.getCurrentContext() }.getOrNull()
         val event = OutboxEventEntity(
             eventId = eventId,
             userId = userId,
@@ -242,7 +255,10 @@ class SyncRepository(
             operationType = operationType,
             payloadJson = payloadJson,
             syncStatus = "PENDING",
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            activeRole = ctx?.activeRole?.code ?: "IT_MANAGER",
+            scopeLevel = ctx?.scope?.effectiveScopeLevel?.code ?: "CENTRE",
+            scopeId = ctx?.scope?.centreId ?: ctx?.scope?.cityId
         )
         val id = outboxDao.enqueueEvent(event)
         syncMetadataDao.updateSyncStatus(SyncStatus.PENDING.name, "Pending operations")

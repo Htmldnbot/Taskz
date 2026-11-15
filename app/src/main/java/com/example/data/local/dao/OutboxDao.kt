@@ -72,4 +72,10 @@ interface OutboxDao {
 
     @Query("DELETE FROM outbox_events WHERE syncStatus = 'SYNCED'")
     suspend fun clearSyncedEvents()
+
+    @Query("DELETE FROM outbox_events WHERE userId = :userId")
+    suspend fun clearEventsForUser(userId: String)
+
+    @Query("DELETE FROM outbox_events")
+    suspend fun clearAll()
 }

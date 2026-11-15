@@ -75,8 +75,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.RadioButton
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
+import com.example.core.model.TaskzRole
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -338,7 +343,9 @@ fun IncidentHistoryScreen(
                     IncidentItemCard(
                         incident = incident,
                         onClick = { viewModel.selectIncidentForDetail(incident) },
-                        onLongClick = { incidentToDelete = incident }
+                        onLongClick = if (viewModel.canEditIncident(incident)) {
+                            { incidentToDelete = incident }
+                        } else null
                     )
                 }
             }
@@ -376,11 +383,19 @@ fun IncidentHistoryScreen(
         )
     }
 
-    // Incident Details Dialog
+    // Incident Details Dialog with Escalation
     if (selectedIncident != null) {
         IncidentDetailDialog(
             incident = selectedIncident!!,
             audits = selectedAudits,
+            canEscalate = viewModel.canEscalateIncident(selectedIncident!!),
+            onEscalate = { targetLevel, reason ->
+                viewModel.escalateIncident(
+                    incidentId = selectedIncident!!.id,
+                    targetLevel = targetLevel,
+                    reason = reason
+                )
+            },
             onDismiss = { viewModel.dismissIncidentDetail() }
         )
     }
@@ -532,6 +547,56 @@ fun IncidentItemCard(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+
+            // Status, Escalation Level & Scope Badges
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val isEscalated = incident.status.equals("ESCALATED", ignoreCase = true)
+                val isResolved = incident.status.equals("RESOLVED", ignoreCase = true)
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = when {
+                        isEscalated -> MaterialTheme.colorScheme.errorContainer
+                        isResolved -> Color(0xFFE8F5E9)
+                        else -> MaterialTheme.colorScheme.primaryContainer
+                    }
+                ) {
+                    Text(
+                        text = incident.status.uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = when {
+                            isEscalated -> MaterialTheme.colorScheme.onErrorContainer
+                            isResolved -> Color(0xFF2E7D32)
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Text(
+                        text = "Level: ${TaskzRole.fromCode(incident.escalationLevel).displayName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = incident.scopeLevel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -540,9 +605,21 @@ fun IncidentItemCard(
 fun IncidentDetailDialog(
     incident: SystemIncident,
     audits: List<SystemIncidentAudit>,
+    canEscalate: Boolean = false,
+    onEscalate: (String, String?) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
     val scroll = rememberScrollState()
+    var showEscalatePicker by remember { mutableStateOf(false) }
+    val currentLevelRole = TaskzRole.fromCode(incident.escalationLevel)
+    val higherChain = remember(incident.escalationLevel) {
+        val higher = TaskzRole.escalationChain.filter { it.hierarchyRank > currentLevelRole.hierarchyRank }
+        if (higher.isNotEmpty()) higher else listOf(TaskzRole.SUPER_ADMIN)
+    }
+    var selectedTargetRole by remember(incident.id, incident.escalationLevel) {
+        mutableStateOf(higherChain.first())
+    }
+    var escalationReason by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -559,6 +636,9 @@ fun IncidentDetailDialog(
                     .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                DetailRow("Status", incident.status.uppercase())
+                DetailRow("Escalation Level", currentLevelRole.displayName)
+                DetailRow("Scope", incident.scopeLevel)
                 DetailRow("Centre", "${incident.centreCode} · ${incident.centreName}")
                 DetailRow("Location", "${incident.districtName}, ${incident.stateName}")
                 DetailRow("Examination", incident.examName)
@@ -594,12 +674,91 @@ fun IncidentDetailDialog(
                 }
             }
         },
+        dismissButton = {
+            if (canEscalate) {
+                Button(
+                    onClick = { showEscalatePicker = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("btn_escalate_incident")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Escalate")
+                }
+            }
+        },
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text("Close")
             }
         }
     )
+
+    if (showEscalatePicker) {
+        AlertDialog(
+            onDismissRequest = { showEscalatePicker = false },
+            title = { Text("Escalate Incident", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Select target authority in the operational escalation chain:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    higherChain.forEach { role ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedTargetRole = role }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selectedTargetRole == role,
+                                onClick = { selectedTargetRole = role }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = role.displayName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (selectedTargetRole == role) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = escalationReason,
+                        onValueChange = { escalationReason = it },
+                        label = { Text("Escalation Notes (Optional)") },
+                        placeholder = { Text("Describe urgency or required intervention...") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("incident_escalation_reason_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onEscalate(selectedTargetRole.code, escalationReason.takeIf { it.isNotBlank() })
+                        showEscalatePicker = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("btn_confirm_escalate_incident")
+                ) {
+                    Text("Confirm Escalation")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEscalatePicker = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable

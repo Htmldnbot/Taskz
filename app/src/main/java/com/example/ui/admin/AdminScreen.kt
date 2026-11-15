@@ -63,7 +63,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import com.example.core.model.AdminAuditEntry
+import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
+import com.example.core.model.TaskzRole
 import com.example.core.model.UserProfile
 import com.example.ui.common.TaskzTextField
 import com.example.ui.theme.TaskzError
@@ -79,12 +93,16 @@ fun AdminScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val users by viewModel.users.collectAsStateWithLifecycle()
     val requests by viewModel.resetRequests.collectAsStateWithLifecycle()
+    val orgHierarchy by viewModel.orgHierarchy.collectAsStateWithLifecycle()
+    val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
     val isLoadingUsers by viewModel.isLoadingUsers.collectAsStateWithLifecycle()
     val isLoadingRequests by viewModel.isLoadingRequests.collectAsStateWithLifecycle()
+    val isLoadingAudits by viewModel.isLoadingAudits.collectAsStateWithLifecycle()
     val actionState by viewModel.actionState.collectAsStateWithLifecycle()
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedRequestForReset by remember { mutableStateOf<PasswordResetRequest?>(null) }
+    var userToManageAccess by remember { mutableStateOf<UserProfile?>(null) }
 
     Column(
         modifier = modifier
@@ -128,7 +146,15 @@ fun AdminScreen(
 
             IconButton(
                 onClick = {
-                    if (selectedTab == 0) viewModel.loadAllUsers() else viewModel.loadResetRequests()
+                    when (selectedTab) {
+                        0 -> {
+                            viewModel.loadAllUsers()
+                            viewModel.loadOrgHierarchy()
+                        }
+                        1 -> viewModel.loadResetRequests()
+                        3 -> viewModel.loadAuditLogs()
+                        else -> viewModel.loadAllUsers()
+                    }
                 },
                 modifier = Modifier.testTag("admin_refresh_button")
             ) {
@@ -227,6 +253,15 @@ fun AdminScreen(
                 text = { Text("Work Roles", fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("admin_tab_work_roles")
             )
+            Tab(
+                selected = selectedTab == 3,
+                onClick = {
+                    selectedTab = 3
+                    viewModel.loadAuditLogs()
+                },
+                text = { Text("Audit Logs", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("admin_tab_audit_logs")
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -237,7 +272,7 @@ fun AdminScreen(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 label = "Search Employees",
-                placeholder = "Search by ID or Full Name...",
+                placeholder = "Search by ID, Name, Email, or Role...",
                 leadingIcon = Icons.Default.Search,
                 testTag = "admin_search_input"
             )
@@ -248,7 +283,9 @@ fun AdminScreen(
                 if (searchQuery.isBlank()) users
                 else users.filter {
                     it.employeeId.contains(searchQuery, ignoreCase = true) ||
-                            it.fullName.contains(searchQuery, ignoreCase = true)
+                        it.fullName.contains(searchQuery, ignoreCase = true) ||
+                        (it.email?.contains(searchQuery, ignoreCase = true) == true) ||
+                        it.activeRoleCode.contains(searchQuery, ignoreCase = true)
                 }
             }
 
@@ -269,6 +306,7 @@ fun AdminScreen(
                     items(filteredUsers, key = { it.id }) { user ->
                         UserAdminCard(
                             user = user,
+                            onManageAccess = { userToManageAccess = user },
                             onToggleActive = { viewModel.toggleUserStatus(user) }
                         )
                     }
@@ -298,9 +336,30 @@ fun AdminScreen(
                     }
                 }
             }
-        } else {
+        } else if (selectedTab == 2) {
             // Work Roles Tab
             WorkRolesScreen(viewModel = workRolesViewModel)
+        } else {
+            // Audit Logs Tab
+            if (isLoadingAudits && auditLogs.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(strokeWidth = 3.dp)
+                }
+            } else if (auditLogs.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "No governance audit logs recorded yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(auditLogs, key = { it.id }) { entry ->
+                        AdminAuditLogCard(entry = entry)
+                    }
+                }
+            }
         }
     }
 
@@ -318,11 +377,33 @@ fun AdminScreen(
             }
         )
     }
+
+    if (userToManageAccess != null) {
+        UserAccessEditorDialog(
+            user = userToManageAccess!!,
+            orgHierarchy = orgHierarchy,
+            onDismiss = { userToManageAccess = null },
+            onSave = { roles, activeRole, zoneId, stateId, cityId, centreId, isActive ->
+                viewModel.updateUserAccess(
+                    targetUser = userToManageAccess!!,
+                    roleCodes = roles,
+                    activeRoleCode = activeRole,
+                    zoneId = zoneId,
+                    stateId = stateId,
+                    cityId = cityId,
+                    centreId = centreId,
+                    isActive = isActive
+                )
+                userToManageAccess = null
+            }
+        )
+    }
 }
 
 @Composable
 private fun UserAdminCard(
     user: UserProfile,
+    onManageAccess: () -> Unit,
     onToggleActive: () -> Unit
 ) {
     Card(
@@ -330,95 +411,489 @@ private fun UserAdminCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val photoModel = user.avatarSignedUrl
-            if (!photoModel.isNullOrBlank()) {
-                AsyncImage(
-                    model = photoModel,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = user.fullName.take(2).uppercase().ifBlank { "EM" },
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val photoModel = user.avatarSignedUrl
+                if (!photoModel.isNullOrBlank()) {
+                    AsyncImage(
+                        model = photoModel,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
                     )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = user.fullName,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (user.isAdmin) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = user.appRole.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (user.isAdmin) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            text = user.fullName.take(2).uppercase().ifBlank { "EM" },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = user.fullName,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (user.isAdmin) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = user.resolvedActiveRole.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (user.isAdmin) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
                     Text(
-                        text = "ID: ${user.employeeId}",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "•  ${user.mobile}",
+                        text = listOfNotNull(
+                            "ID: ${user.employeeId}",
+                            user.mobile.takeIf { it.isNotBlank() },
+                            user.centreCode?.let { "Centre $it" } ?: user.cityName ?: user.stateName
+                        ).joinToString(" • "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    if (user.assignedRoleCodes.isNotEmpty()) {
+                        Text(
+                            text = "Assigned: ${user.assignedRoleCodes.joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
-            // Status Toggle Button
-            Button(
-                onClick = onToggleActive,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (user.isActive) TaskzError.copy(alpha = 0.15f) else TaskzSuccess.copy(alpha = 0.15f),
-                    contentColor = if (user.isActive) TaskzError else TaskzSuccess
-                ),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.testTag("toggle_status_${user.employeeId}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                OutlinedButton(
+                    onClick = onManageAccess,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("admin_manage_access_${user.employeeId}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ManageAccounts,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Roles & Scope")
+                }
+
+                Button(
+                    onClick = onToggleActive,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (user.isActive) TaskzError.copy(alpha = 0.15f) else TaskzSuccess.copy(alpha = 0.15f),
+                        contentColor = if (user.isActive) TaskzError else TaskzSuccess
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("toggle_status_${user.employeeId}")
+                ) {
+                    Text(
+                        text = if (user.isActive) "Deactivate" else "Activate",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdminAuditLogCard(entry: AdminAuditEntry) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = entry.action,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
                 Text(
-                    text = if (user.isActive) "Deactivate" else "Activate",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                    text = entry.createdAt.take(19).replace("T", " "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = "By ${entry.adminName ?: "Super Admin"} -> ${entry.targetName ?: entry.targetEmployeeId ?: entry.targetUserId ?: "System"}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (entry.metadataJson.isNotBlank() && entry.metadataJson != "{}") {
+                Text(
+                    text = entry.metadataJson,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UserAccessEditorDialog(
+    user: UserProfile,
+    orgHierarchy: OrgHierarchyData,
+    onDismiss: () -> Unit,
+    onSave: (
+        roles: List<String>,
+        activeRole: String?,
+        zoneId: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        isActive: Boolean
+    ) -> Unit
+) {
+    val selectedRoles = remember(user.id) {
+        mutableStateOf(
+            user.assignedRoleCodes
+                .map { TaskzRole.fromCode(it).code }
+                .ifEmpty { listOf(user.resolvedActiveRole.code) }
+                .toSet()
+        )
+    }
+    var activeRoleCode by remember(user.id) { mutableStateOf(user.resolvedActiveRole.code) }
+    var selectedZoneId by remember(user.id) { mutableStateOf(user.zoneId) }
+    var selectedStateId by remember(user.id) { mutableStateOf(user.stateId) }
+    var selectedCityId by remember(user.id) { mutableStateOf(user.cityId) }
+    var selectedCentreId by remember(user.id) { mutableStateOf(user.centreId) }
+    var isActive by remember(user.id) { mutableStateOf(user.isActive) }
+
+    var activeRoleExpanded by remember { mutableStateOf(false) }
+    var zoneExpanded by remember { mutableStateOf(false) }
+    var stateExpanded by remember { mutableStateOf(false) }
+    var cityExpanded by remember { mutableStateOf(false) }
+    var centreExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Manage Roles & Scope", fontWeight = FontWeight.Bold)
+                Text(
+                    text = "${user.fullName} (${user.employeeId})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Assigned Roles", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                TaskzRole.entries.forEach { role ->
+                    val checked = selectedRoles.value.contains(role.code)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = { isChecked ->
+                                val next = if (isChecked) {
+                                    selectedRoles.value + role.code
+                                } else {
+                                    selectedRoles.value - role.code
+                                }
+                                selectedRoles.value = next
+                                if (!next.contains(activeRoleCode) && next.isNotEmpty()) {
+                                    activeRoleCode = next.first()
+                                }
+                            }
+                        )
+                        Text(role.displayName, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = activeRoleExpanded,
+                    onExpandedChange = { activeRoleExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = TaskzRole.fromCode(activeRoleCode).displayName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Active Role") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = activeRoleExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = activeRoleExpanded,
+                        onDismissRequest = { activeRoleExpanded = false }
+                    ) {
+                        selectedRoles.value.forEach { code ->
+                            DropdownMenuItem(
+                                text = { Text(TaskzRole.fromCode(code).displayName) },
+                                onClick = {
+                                    activeRoleCode = code
+                                    activeRoleExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Zone Dropdown
+                ExposedDropdownMenuBox(
+                    expanded = zoneExpanded,
+                    onExpandedChange = { zoneExpanded = it }
+                ) {
+                    val zoneLabel = orgHierarchy.zones.firstOrNull { it.id == selectedZoneId }?.name ?: "None (All / Unassigned)"
+                    OutlinedTextField(
+                        value = zoneLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Assigned Zone") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = zoneExpanded, onDismissRequest = { zoneExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                selectedZoneId = null
+                                selectedStateId = null
+                                selectedCityId = null
+                                selectedCentreId = null
+                                zoneExpanded = false
+                            }
+                        )
+                        orgHierarchy.zones.forEach { z ->
+                            DropdownMenuItem(
+                                text = { Text("${z.name} (${z.code})") },
+                                onClick = {
+                                    selectedZoneId = z.id
+                                    zoneExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // State Dropdown
+                val filteredStates = orgHierarchy.states.filter { selectedZoneId == null || it.zoneId == selectedZoneId }
+                ExposedDropdownMenuBox(
+                    expanded = stateExpanded,
+                    onExpandedChange = { stateExpanded = it }
+                ) {
+                    val stateLabel = orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name ?: "None"
+                    OutlinedTextField(
+                        value = stateLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Assigned State") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = stateExpanded, onDismissRequest = { stateExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                selectedStateId = null
+                                selectedCityId = null
+                                selectedCentreId = null
+                                stateExpanded = false
+                            }
+                        )
+                        filteredStates.forEach { st ->
+                            DropdownMenuItem(
+                                text = { Text("${st.name} (${st.code})") },
+                                onClick = {
+                                    selectedStateId = st.id
+                                    selectedZoneId = st.zoneId
+                                    stateExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // City Dropdown
+                val filteredCities = orgHierarchy.cities.filter {
+                    (selectedStateId == null || it.stateId == selectedStateId) &&
+                        (selectedZoneId == null || it.zoneId == selectedZoneId)
+                }
+                ExposedDropdownMenuBox(
+                    expanded = cityExpanded,
+                    onExpandedChange = { cityExpanded = it }
+                ) {
+                    val cityLabel = orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "None"
+                    OutlinedTextField(
+                        value = cityLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Assigned City") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = cityExpanded, onDismissRequest = { cityExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                selectedCityId = null
+                                selectedCentreId = null
+                                cityExpanded = false
+                            }
+                        )
+                        filteredCities.forEach { ct ->
+                            DropdownMenuItem(
+                                text = { Text("${ct.name} (${ct.code})") },
+                                onClick = {
+                                    selectedCityId = ct.id
+                                    selectedStateId = ct.stateId
+                                    selectedZoneId = ct.zoneId
+                                    cityExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Centre Dropdown
+                val filteredCentres = orgHierarchy.centres.filter {
+                    (selectedCityId == null || it.cityId == selectedCityId) &&
+                        (selectedStateId == null || it.stateId == selectedStateId) &&
+                        (selectedZoneId == null || it.zoneId == selectedZoneId)
+                }
+                ExposedDropdownMenuBox(
+                    expanded = centreExpanded,
+                    onExpandedChange = { centreExpanded = it }
+                ) {
+                    val centreLabel = orgHierarchy.centres.firstOrNull { it.id == selectedCentreId }?.let { "${it.code} · ${it.name}" } ?: "None"
+                    OutlinedTextField(
+                        value = centreLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Assigned Centre") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreExpanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = centreExpanded, onDismissRequest = { centreExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                selectedCentreId = null
+                                centreExpanded = false
+                            }
+                        )
+                        filteredCentres.forEach { c ->
+                            DropdownMenuItem(
+                                text = { Text("${c.code} · ${c.name}") },
+                                onClick = {
+                                    selectedCentreId = c.id
+                                    selectedCityId = c.cityId
+                                    selectedStateId = c.stateId
+                                    selectedZoneId = c.zoneId
+                                    centreExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Account Active", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Switch(checked = isActive, onCheckedChange = { isActive = it })
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        selectedRoles.value.toList(),
+                        activeRoleCode,
+                        selectedZoneId,
+                        selectedStateId,
+                        selectedCityId,
+                        selectedCentreId,
+                        isActive
+                    )
+                },
+                enabled = selectedRoles.value.isNotEmpty(),
+                modifier = Modifier.testTag("btn_save_user_access")
+            ) {
+                Text("Save Access")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

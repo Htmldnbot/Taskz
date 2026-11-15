@@ -85,13 +85,88 @@ class SystemIncidentRepository(
             }
             val remoteList = res.getOrDefault(emptyList())
             if (remoteList.isNotEmpty()) {
-                systemIncidentDao.insertIncidents(remoteList.map { SystemIncidentEntity.fromDomain(it) })
+                val pendingIds = systemIncidentDao.getPendingIncidents().map { it.id }.toSet()
+                val safeRemote = remoteList.filter { it.id !in pendingIds }
+                if (safeRemote.isNotEmpty()) {
+                    systemIncidentDao.insertIncidents(safeRemote.map { SystemIncidentEntity.fromDomain(it) })
+                }
             }
             Result.success(remoteList.size)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to sync incidents from Supabase: ${e.message}")
             Result.failure(e)
         }
+    }
+
+    suspend fun reconcileIncidentsFromJson(incidentsArr: org.json.JSONArray): List<SystemIncident> = withContext(Dispatchers.IO) {
+        val pendingIds = systemIncidentDao.getPendingIncidents().map { it.id }.toSet()
+        val entities = mutableListOf<SystemIncidentEntity>()
+        val domains = mutableListOf<SystemIncident>()
+        for (i in 0 until incidentsArr.length()) {
+            val o = incidentsArr.optJSONObject(i) ?: continue
+            val id = o.optString("id")
+            if (id.isBlank() || id in pendingIds) continue
+            val incidentMillis = parseIsoMillisOrNow(o.optString("incident_time"))
+            val createdMillis = parseIsoMillisOrNow(o.optString("created_at"))
+            val updatedMillis = parseIsoMillisOrNow(o.optString("updated_at"))
+            val displayTime = runCatching {
+                java.time.Instant.ofEpochMilli(incidentMillis)
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"))
+            }.getOrDefault("10:00 AM")
+
+            fun optStr(k: String): String? =
+                if (!o.has(k) || o.isNull(k)) null else o.optString(k, "").trim().takeIf { it.isNotEmpty() && !it.equals("null", true) }
+
+            val domain = SystemIncident(
+                id = id,
+                submissionId = optStr("submission_id") ?: id,
+                centreId = optStr("centre_id"),
+                examSessionId = optStr("exam_session_id"),
+                stateName = optStr("state_name") ?: "",
+                districtName = optStr("district_name") ?: "",
+                centreCode = optStr("centre_code") ?: "",
+                centreName = optStr("centre_name") ?: "",
+                examDate = optStr("exam_date") ?: "",
+                examName = optStr("exam_name") ?: "",
+                shiftName = optStr("shift_name") ?: "",
+                lanName = optStr("lan_name") ?: "",
+                macAddress = optStr("mac_address") ?: "",
+                ipAddress = optStr("ip_address") ?: "",
+                lockedSystemNumber = optStr("locked_system_number") ?: "",
+                newlyAllocatedSystemNumber = optStr("newly_allocated_system_number"),
+                candidateShifted = o.optBoolean("candidate_shifted", false),
+                incidentTime = displayTime,
+                incidentTimestampMillis = incidentMillis,
+                reason = optStr("reason") ?: "",
+                itManagerName = optStr("it_manager_name") ?: "",
+                createdBy = optStr("created_by") ?: "",
+                createdAt = createdMillis,
+                updatedAt = updatedMillis,
+                syncStatus = "SYNCED",
+                scopeLevel = optStr("scope_level") ?: "CENTRE",
+                zoneId = optStr("zone_id"),
+                stateId = optStr("state_id"),
+                cityId = optStr("city_id"),
+                status = optStr("status") ?: "OPEN",
+                escalationLevel = optStr("escalation_level") ?: "IT_MANAGER",
+                assignedTo = optStr("assigned_to"),
+                version = o.optLong("version", 1L)
+            )
+            domains.add(domain)
+            entities.add(SystemIncidentEntity.fromDomain(domain))
+        }
+        if (entities.isNotEmpty()) {
+            systemIncidentDao.insertIncidents(entities)
+        }
+        domains
+    }
+
+    private fun parseIsoMillisOrNow(raw: String?): Long {
+        if (raw.isNullOrBlank() || raw.equals("null", true)) return System.currentTimeMillis()
+        return runCatching { java.time.Instant.parse(raw.trim()).toEpochMilli() }
+            .recoverCatching { java.time.OffsetDateTime.parse(raw.trim()).toInstant().toEpochMilli() }
+            .getOrDefault(System.currentTimeMillis())
     }
 
     val allIncidentsFlow: Flow<List<SystemIncident>> = systemIncidentDao.getAllIncidentsFlow().map { entities ->
@@ -107,6 +182,10 @@ class SystemIncidentRepository(
         systemIncidentDao.getIncidentsForCentreFlow(centreId).map { entities ->
             entities.map { it.toDomain() }
         }
+
+    suspend fun getIncidentById(incidentId: String): SystemIncident? = withContext(Dispatchers.IO) {
+        systemIncidentDao.getIncidentById(incidentId)?.toDomain()
+    }
 
     suspend fun getActiveUserId(): String {
         return userPrefs.getUserSession().userId ?: ""
@@ -377,10 +456,15 @@ class SystemIncidentRepository(
             val userId = session.userId ?: getActiveUserId()
             val userName = session.employeeId ?: ""
 
+            val ctx = runCatching { TaskzApplication.instance.permissionManager.getCurrentContext() }.getOrNull()
             val finalIncident = incident.copy(
                 createdBy = userId,
                 creatorName = userName,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = System.currentTimeMillis(),
+                zoneId = incident.zoneId ?: ctx?.scope?.zoneId,
+                stateId = incident.stateId ?: ctx?.scope?.stateId,
+                cityId = incident.cityId ?: ctx?.scope?.cityId,
+                centreId = incident.centreId ?: ctx?.scope?.centreId
             )
 
             // 1. Save locally in Room first (Durable Offline-First)
@@ -416,6 +500,9 @@ class SystemIncidentRepository(
                 put("id", finalIncident.id)
                 put("submissionId", finalIncident.submissionId)
                 put("centreId", finalIncident.centreId)
+                put("zoneId", finalIncident.zoneId)
+                put("stateId", finalIncident.stateId)
+                put("cityId", finalIncident.cityId)
                 put("lockedSystemNumber", finalIncident.lockedSystemNumber)
                 put("newlyAllocatedSystemNumber", finalIncident.newlyAllocatedSystemNumber)
                 put("candidateShifted", finalIncident.candidateShifted)
@@ -437,7 +524,10 @@ class SystemIncidentRepository(
                     operationType = "SYSTEM_INCIDENT_SUBMISSION",
                     payloadJson = payloadJson.toString(),
                     syncStatus = "PENDING",
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    activeRole = ctx?.activeRole?.code ?: "IT_MANAGER",
+                    scopeLevel = finalIncident.scopeLevel,
+                    scopeId = finalIncident.centreId
                 )
             )
 
@@ -461,6 +551,79 @@ class SystemIncidentRepository(
             Result.success(finalIncident)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save incident", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun escalateIncident(
+        incidentId: String,
+        targetLevel: String,
+        reason: String?
+    ): Result<SystemIncident> = withContext(Dispatchers.IO) {
+        try {
+            val existing = systemIncidentDao.getIncidentById(incidentId)?.toDomain()
+                ?: return@withContext Result.failure(NoSuchElementException("Incident not found"))
+            val cleanLevel = targetLevel.trim().uppercase()
+            val session = userPrefs.getUserSession()
+            val userId = session.userId ?: getActiveUserId()
+            val ctx = runCatching { TaskzApplication.instance.permissionManager.getCurrentContext() }.getOrNull()
+            val clientOpId = UUID.randomUUID().toString()
+
+            val updatedLocal = existing.copy(
+                status = "ESCALATED",
+                escalationLevel = cleanLevel,
+                updatedAt = System.currentTimeMillis(),
+                updatedBy = userId,
+                syncStatus = "PENDING"
+            )
+            systemIncidentDao.insertIncident(SystemIncidentEntity.fromDomain(updatedLocal))
+            systemIncidentDao.insertAudit(
+                SystemIncidentAuditEntity(
+                    id = UUID.randomUUID().toString(),
+                    incidentId = incidentId,
+                    changedBy = userId,
+                    changedByName = ctx?.fullName ?: getActiveUserName(),
+                    changedAt = System.currentTimeMillis(),
+                    action = "ESCALATED",
+                    previousValues = existing.escalationLevel,
+                    newValues = "Escalated to $cleanLevel: ${reason.orEmpty()}"
+                )
+            )
+
+            val payload = JSONObject().apply {
+                put("incidentId", incidentId)
+                put("targetLevel", cleanLevel)
+                if (!reason.isNullOrBlank()) put("reason", reason.trim())
+            }
+            val outboxRowId = outboxDao.enqueueEvent(
+                OutboxEventEntity(
+                    eventId = clientOpId,
+                    userId = userId,
+                    taskId = incidentId,
+                    operationType = "INCIDENT_ESCALATE",
+                    payloadJson = payload.toString(),
+                    syncStatus = "PENDING",
+                    createdAt = System.currentTimeMillis(),
+                    activeRole = ctx?.activeRole?.code ?: "IT_MANAGER",
+                    scopeLevel = existing.scopeLevel,
+                    scopeId = existing.centreId
+                )
+            )
+
+            val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
+                val res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
+                if (res.isSuccess) {
+                    val synced = updatedLocal.copy(syncStatus = "SYNCED")
+                    systemIncidentDao.insertIncident(SystemIncidentEntity.fromDomain(synced))
+                    outboxDao.markEventSynced(outboxRowId, "INCIDENT_ESCALATED", System.currentTimeMillis())
+                    return@withContext Result.success(synced)
+                }
+            }
+            SyncWorker.enqueueSync(context)
+            Result.success(updatedLocal)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to escalate incident", e)
             Result.failure(e)
         }
     }

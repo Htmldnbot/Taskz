@@ -1,0 +1,2402 @@
+TASKZ — COMPLETE PRODUCTION-GRADE ROLE, SCOPE, TASK, INCIDENT, REAL-TIME, PUSH NOTIFICATION & OFFLINE-FIRST SYSTEM
+
+You are working on an existing Android application called Taskz.
+
+This is NOT a request to rebuild the application from scratch.
+
+You must first inspect the existing Android project, Supabase schema, RPCs, RLS policies, authentication, notification system, local storage, offline functionality, task system, incident system, roles and existing UI.
+
+Then implement the following complete system into the existing architecture without breaking already-working functionality.
+
+---
+
+1. PRIMARY OBJECTIVE
+
+Taskz must become a reliable production-grade organizational task and incident management application with:
+
+- role-based access control
+- multi-role users
+- active-role switching
+- geographic/organizational scope
+- automatic task propagation
+- role-targeted tasks
+- scope-aware incidents
+- secure member search
+- centralized permission management
+- Supabase backend authorization
+- real-time updates
+- Android push notifications
+- offline-first operation
+- automatic background synchronization
+- automatic resynchronization after network recovery
+- battery-efficient background operation
+- multi-device notification support
+- conflict-safe/idempotent synchronization
+
+The user must NOT need to manually press a Sync button.
+
+---
+
+2. EXISTING PROJECT MUST BE PRESERVED
+
+Before making changes, inspect:
+
+Android
+
+- package name
+- Gradle configuration
+- Kotlin/Java architecture
+- Activities
+- Fragments
+- Compose screens if used
+- ViewModels
+- repositories
+- Supabase client
+- authentication/session handling
+- local database/cache
+- DataStore/SharedPreferences
+- WorkManager
+- notification code
+- navigation
+- task screens
+- incident screens
+- user/member screens
+- existing permission code
+- existing realtime code
+- existing offline code
+
+Supabase
+
+Inspect all existing relevant tables, especially:
+
+- profiles
+- work_roles
+- tasks
+- task_participants
+- task_groups
+- group_members
+- group_visible_users
+- task_visible_users
+- task_role_requirements
+- task_join_requests
+- task_acknowledgements
+- task_activity_log
+- task_responses
+- task_reminders
+- task_attachments
+- task_comments
+- task_completion_requests
+- notifications
+- device_tokens
+- system_incidents
+- system_incident_audit
+- shifts
+- client_events
+- user_sync_state
+- app_settings
+
+Inspect:
+
+- primary keys
+- foreign keys
+- indexes
+- constraints
+- triggers
+- RLS
+- RPCs
+- helper functions
+- existing notification logic
+- existing sync logic
+
+Reuse existing architecture wherever possible.
+
+Do NOT create duplicate systems unnecessarily.
+
+---
+
+3. USER ROLES
+
+Newly joined staff must NOT automatically receive high-level administrative roles.
+
+New users must initially be assigned only an operational starting role:
+
+- IT MANAGER
+  OR
+- VCO
+
+Higher roles must be assigned by an authorized administrator.
+
+Existing "work_roles" must be used.
+
+Do NOT create duplicate role-definition tables if "work_roles" already provides this functionality.
+
+Supported organizational roles include:
+
+- IT MANAGER
+- VCO
+- CITY HEAD / HOM
+- ROM
+- ZOM
+- COMMAND CENTER / SPOC
+- SUPER ADMIN
+
+Preserve any existing project-specific role names if they already exist, but map them correctly to the hierarchy.
+
+---
+
+4. MULTI-ROLE USERS
+
+A single user may have multiple assigned roles.
+
+Example:
+
+User A:
+
+- IT MANAGER
+- VCO
+
+The user must NOT be able to assign roles to themselves.
+
+The user must NOT be able to promote themselves.
+
+Roles must come from server-side authorization.
+
+The app must display the roles actually assigned to the logged-in user.
+
+---
+
+5. ACTIVE ROLE SELECTOR
+
+If a user has multiple roles, provide an active-role selector.
+
+Example:
+
+Active Role:
+
+[ IT MANAGER ▼ ]
+
+Available:
+
+- IT MANAGER
+- VCO
+
+Only roles actually assigned to the user may appear.
+
+When active role changes:
+
+1. invalidate role-specific cache
+2. reload assigned roles
+3. reload current scope
+4. reload permissions
+5. reload tasks
+6. reload incidents
+7. reload notifications
+8. recalculate dashboard counts
+9. refresh realtime subscriptions
+10. refresh UI
+11. remove stale data belonging to previous role/scope
+
+Never show data from the previous role after switching.
+
+---
+
+6. ORGANIZATIONAL HIERARCHY
+
+Implement the following scope hierarchy.
+
+ZONE
+↓
+STATE / REGION
+↓
+CITY
+↓
+CENTRE
+↓
+LAN / SYSTEM / OPERATIONAL USER
+
+Scope must be derived from actual user/profile/group/organizational data.
+
+Do not hard-code city/state/zone permissions only inside Android code.
+
+Backend authorization must enforce scope.
+
+---
+
+7. ROLE → DEFAULT SCOPE
+
+IT MANAGER
+
+Primary scope:
+
+CENTRE
+
+IT Manager should normally see:
+
+- centre-level tasks
+- centre-level incidents
+- relevant LAN/system status
+- relevant centre users
+- relevant centre operational information
+
+IT Manager must NOT automatically see unrelated centres.
+
+---
+
+VCO
+
+Primary scope:
+
+CENTRE + authorized CITY scope
+
+VCO should see:
+
+- centre tasks
+- city-level tasks relevant to their city
+- centre incidents
+- city incidents
+- relevant users
+- IT Manager coordination information
+
+---
+
+CITY HEAD / HOM
+
+Primary scope:
+
+CITY
+
+Can view/manage authorized:
+
+- city tasks
+- city incidents
+- centres under that city
+- relevant users
+- operational overview
+
+---
+
+ROM
+
+Primary scope:
+
+STATE / REGION
+
+Can view/manage:
+
+- state/region tasks
+- state/region incidents
+- cities under their region
+- relevant centres
+- relevant operational information
+
+---
+
+ZOM
+
+Primary scope:
+
+ZONE
+
+Can view/manage:
+
+- zone tasks
+- zone incidents
+- states/regions under zone
+- cities
+- centres
+- relevant operational information
+
+---
+
+SUPER ADMIN
+
+Global scope.
+
+Can access:
+
+- all authorized tasks
+- all incidents
+- all users
+- all roles
+- all centres
+- all cities
+- all regions
+- all zones
+- groups
+- system overview
+- administrative controls
+
+---
+
+8. CENTRALIZED PERMISSION MANAGER
+
+Do NOT scatter permission checks throughout the Android UI.
+
+Create or improve a centralized service such as:
+
+"TaskzPermissionManager"
+
+It should expose functionality similar to:
+
+getAssignedRoles()
+getActiveRole()
+getUserScope()
+
+canViewTask()
+canCreateTask()
+canEditTask()
+canAssignTask()
+canReassignTask()
+canCompleteTask()
+canAcknowledgeTask()
+canDeleteTask()
+
+canViewIncident()
+canCreateIncident()
+canEditIncident()
+canAssignIncident()
+canResolveIncident()
+
+canSearchUser()
+canManageUsers()
+canManageRoles()
+canManageGroups()
+
+canCreateCentreTask()
+canCreateCityTask()
+canCreateStateTask()
+canCreateZoneTask()
+canCreateGlobalTask()
+
+Permission checks must consider:
+
+- assigned role
+- active role
+- geographic scope
+- task scope
+- incident scope
+- ownership
+- task state
+- backend authorization
+
+Android UI checks are for UX only.
+
+Supabase/backend authorization remains the final authority.
+
+---
+
+9. TASK SCOPE TYPES
+
+Tasks must support scope levels:
+
+- CENTRE
+- CITY
+- STATE / REGION
+- ZONE
+- GLOBAL
+
+Where appropriate, tasks may also have:
+
+- role target
+- specific user target
+- specific group target
+- specific centre target
+- specific operational target
+
+---
+
+10. AUTOMATIC TASK PROPAGATION
+
+This is critical.
+
+The task creator must NOT manually select every LAN/user when creating a scope-level task.
+
+CENTRE TASK
+
+If a task is created for:
+
+Centre C001
+
+then relevant authorized users/LANs at Centre C001 automatically become eligible according to task targeting rules.
+
+Example:
+
+Centre Task
+↓
+Centre C001
+↓
+Relevant LANs/users
+↓
+IT Managers/VCO/other required roles
+
+---
+
+CITY TASK
+
+If a task is created for:
+
+Jaipur City
+
+it must automatically apply to:
+
+Jaipur
+↓
+all relevant centres
+↓
+all relevant LANs/users
+
+No manual assignment of every centre/user should be required.
+
+---
+
+STATE / REGION TASK
+
+Example:
+
+Rajasthan State Task
+
+Propagation:
+
+Rajasthan
+↓
+all relevant cities
+↓
+all relevant centres
+↓
+all relevant LANs/users
+
+---
+
+ZONE TASK
+
+Example:
+
+North Zone Task
+
+Propagation:
+
+North Zone
+↓
+all relevant states/regions
+↓
+all relevant cities
+↓
+all relevant centres
+↓
+all relevant LANs/users
+
+---
+
+GLOBAL TASK
+
+Global task:
+
+GLOBAL
+↓
+all relevant authorized users
+
+---
+
+11. IMPORTANT: DO NOT CREATE THOUSANDS OF DUPLICATE TASK ROWS
+
+Prefer a single logical task with:
+
+- scope
+- scope ID
+- target role
+- target group
+- visibility rules
+- participant rules
+
+Use existing:
+
+- task_groups
+- task_participants
+- task_visible_users
+- task_role_requirements
+
+and existing RPC architecture wherever appropriate.
+
+Only create task instances if the existing architecture genuinely requires them.
+
+Do not create unnecessary duplicate task records for every LAN/user.
+
+---
+
+12. TASK VISIBILITY VS ACTION PERMISSION
+
+These are different.
+
+A user may be able to:
+
+VIEW
+
+but not:
+
+EDIT
+ASSIGN
+REASSIGN
+DELETE
+COMPLETE
+
+For example:
+
+A City Head may see a centre-level task relevant to their city but may not be allowed to edit the task.
+
+Implement this distinction correctly.
+
+---
+
+13. TASK ROLE TARGETING
+
+Tasks may target:
+
+- IT MANAGER
+- VCO
+- CITY HEAD
+- ROM
+- ZOM
+- COMMAND CENTER / SPOC
+- SUPER ADMIN
+- specific group
+- specific user
+
+Example:
+
+Task:
+
+"Check LAN connectivity"
+
+Scope:
+
+CENTRE
+
+Target:
+
+IT MANAGER
+
+Only relevant IT Managers should receive actionable assignment/notification.
+
+---
+
+14. TASK ASSIGNMENT
+
+When a task becomes actionable for a user:
+
+1. backend determines eligibility
+2. task becomes visible/actionable
+3. appropriate participant/visibility state is created or resolved
+4. notification event is created
+5. push notification is sent
+6. realtime event is delivered if app is active
+7. local cache is updated
+
+Do NOT rely only on Android-side filtering.
+
+---
+
+15. MEMBER SEARCH
+
+When searching users/members, show:
+
+- Name
+- Role
+- Employee ID
+- Email
+- City
+- Centre
+- Mobile number if permitted
+
+Search results must respect current user's authorization scope.
+
+Example:
+
+IT Manager at Centre A must NOT be able to browse unrestricted users from unrelated centres.
+
+When adding someone to a task, show the same identity information so the correct person can be selected.
+
+---
+
+16. ADMIN USER MANAGEMENT
+
+SUPER ADMIN must have an administrative UI.
+
+It should support:
+
+Search user
+↓
+Open profile
+↓
+View assigned roles
+↓
+Add role
+↓
+Remove role
+↓
+Change role
+↓
+Change authorized scope
+↓
+Change city
+↓
+Change centre
+↓
+Save
+↓
+Audit log
+
+Normal users must not be able to:
+
+- change their own role
+- promote themselves
+- change another user's role
+- bypass scope
+
+Use existing "admin_audit_log" if appropriate.
+
+---
+
+17. ROLE CHANGES MUST PROPAGATE AUTOMATICALLY
+
+If Super Admin changes:
+
+User B:
+
+IT MANAGER
+
+to:
+
+VCO
+
+then User B's app must automatically receive the updated role information.
+
+The next time the app is active/resumed, it must refresh.
+
+If realtime is available, the change should be detected immediately.
+
+The role change must also invalidate:
+
+- cached permissions
+- cached tasks
+- cached incidents
+- cached dashboard counts
+- subscriptions
+
+---
+
+18. INCIDENT SYSTEM
+
+Apply the same organizational scope system to "system_incidents".
+
+IT MANAGER
+
+Centre incidents.
+
+VCO
+
+Centre + authorized city incidents.
+
+CITY HEAD
+
+City incidents.
+
+ROM
+
+State/region incidents.
+
+ZOM
+
+Zone incidents.
+
+SUPER ADMIN
+
+All incidents.
+
+---
+
+19. INCIDENT ESCALATION
+
+Incident visibility must support proper escalation.
+
+Example:
+
+Centre incident
+
+Relevant Centre IT Manager
+↓
+VCO
+↓
+City Head
+↓
+ROM
+↓
+ZOM
+↓
+Super Admin
+
+Only relevant authorized escalation recipients should receive notifications.
+
+Do not notify unrelated locations.
+
+---
+
+20. REAL-TIME SYSTEM
+
+Taskz must have production-grade real-time synchronization.
+
+Use Supabase Realtime for active-app live updates.
+
+When the app is open:
+
+- maintain appropriate realtime subscriptions
+- receive relevant task changes
+- receive incident changes
+- receive notification changes
+- update UI automatically
+- do not require manual refresh
+
+Subscribe only to relevant data.
+
+Do not subscribe the device to the entire database unnecessarily.
+
+---
+
+21. REAL-TIME EVENT TYPES
+
+Support events such as:
+
+TASK_CREATED
+TASK_ASSIGNED
+TASK_REASSIGNED
+TASK_UPDATED
+TASK_COMPLETED
+TASK_CANCELLED
+TASK_DELETED
+
+INCIDENT_CREATED
+INCIDENT_UPDATED
+INCIDENT_ASSIGNED
+INCIDENT_ESCALATED
+INCIDENT_RESOLVED
+
+NOTIFICATION_CREATED
+
+ROLE_CHANGED
+SCOPE_CHANGED
+GROUP_CHANGED
+
+Use event-driven cache invalidation/update.
+
+Do not redownload the entire database for every event.
+
+---
+
+22. CRITICAL: REALTIME IS NOT THE SAME AS PUSH
+
+Do NOT assume a Supabase realtime WebSocket can reliably wake a terminated Android app.
+
+Use two separate mechanisms:
+
+REALTIME
+
+Primarily for:
+
+- app open
+- foreground
+- active live UI
+
+PUSH NOTIFICATION
+
+For:
+
+- background
+- locked phone
+- suspended app
+- killed process
+
+The user should receive important notifications even when Taskz is not open.
+
+---
+
+23. ANDROID PUSH NOTIFICATIONS
+
+Implement proper Android push infrastructure appropriate for the existing project, preferably Firebase Cloud Messaging if compatible with the existing Android architecture.
+
+Do not put server secrets/service-role keys inside the APK.
+
+Push sending must happen server-side.
+
+When a task is assigned:
+
+Backend
+↓
+Notification event
+↓
+Push service
+↓
+Android device
+↓
+Taskz notification
+↓
+Deep link to task
+
+---
+
+24. TASK ASSIGNMENT NOTIFICATION
+
+When a task is assigned:
+
+Notification should contain useful information:
+
+- Task title
+- Task type
+- Importance
+- Due time if applicable
+- Scope
+- Centre/city/state/zone
+- appropriate action
+
+Example:
+
+"New Task Assigned"
+
+"Check LAN connectivity"
+
+Centre: C001
+Due: 07:00 AM
+
+Tap notification:
+
+→ Taskz
+→ Task details
+
+Do not send notifications to unauthorized users.
+
+---
+
+25. DUPLICATE NOTIFICATION PROTECTION
+
+The same logical event must not generate repeated notifications due to:
+
+- realtime duplication
+- retry
+- network reconnect
+- multiple backend calls
+- duplicate queue processing
+
+Use event IDs/idempotency where necessary.
+
+---
+
+26. DEVICE TOKEN MANAGEMENT
+
+Use existing "device_tokens" if appropriate.
+
+Maintain device-level information such as:
+
+- user ID
+- push token
+- device ID
+- app version
+- platform
+- last seen
+- active/inactive
+
+Automatically handle token refresh.
+
+If same user is logged into multiple devices:
+
+All authorized active devices should receive relevant notifications.
+
+Do not assume one user equals one device.
+
+---
+
+27. LOGOUT
+
+When user logs out:
+
+- invalidate session
+- stop user-specific realtime subscriptions
+- deactivate/remove device notification association as appropriate
+- clear sensitive local cached data
+- clear active-role state
+
+Another user must not see the previous user's cached data.
+
+---
+
+28. OFFLINE-FIRST ARCHITECTURE
+
+Taskz must continue working when the device loses network.
+
+When offline:
+
+- show previously synchronized authorized data
+- allow permitted offline actions
+- queue mutations locally
+- never lose pending operations
+- clearly show sync state
+
+Use a durable local database/queue appropriate to the existing project.
+
+Do not store sensitive authorization state insecurely.
+
+---
+
+29. OFFLINE OPERATION QUEUE
+
+Every offline mutation must have:
+
+- unique operation ID
+- task ID/incident ID if applicable
+- user ID
+- action
+- payload
+- local timestamp
+- active role
+- scope
+- retry count
+- status
+
+Statuses:
+
+PENDING
+SYNCING
+SYNCED
+FAILED
+
+The queue must survive:
+
+- app restart
+- process kill
+- phone restart
+
+---
+
+30. OFFLINE EXAMPLE
+
+User completes a task while offline.
+
+UI:
+
+"Completed — Pending Sync"
+
+Local queue:
+
+operation_id = unique ID
+
+When network returns:
+
+Local operation
+↓
+Server
+↓
+idempotency check
+↓
+server acknowledgement
+↓
+local operation = SYNCED
+
+Then UI changes to:
+
+"Synced"
+
+Never falsely display server-confirmed status before the server accepts the operation.
+
+---
+
+31. AUTOMATIC NETWORK RECOVERY
+
+The user must NEVER need to press:
+
+"Sync"
+
+When network returns:
+
+Android detects connectivity
+↓
+Taskz schedules sync
+↓
+pending operations upload
+↓
+server responses received
+↓
+latest authorized data fetched
+↓
+cache updated
+↓
+UI updated
+
+Use Android "WorkManager" for reliable deferred background synchronization where appropriate.
+
+Use network constraints.
+
+Do not use a permanent foreground service for normal sync.
+
+---
+
+32. BATTERY OPTIMIZATION
+
+Battery consumption is critical.
+
+DO NOT:
+
+- poll every few seconds
+- run a permanent background service
+- maintain unnecessary WebSockets while app is fully inactive
+- continuously track GPS
+- repeatedly download entire task database
+- wake device unnecessarily
+- create aggressive retry loops
+
+PREFER:
+
+- FCM push
+- Supabase Realtime while app is active
+- WorkManager
+- network constraints
+- incremental synchronization
+- local caching
+- event-driven updates
+- exponential backoff
+
+The system must be battery efficient.
+
+---
+
+33. NETWORK STATE HANDLING
+
+Handle:
+
+ONLINE
+OFFLINE
+WIFI
+MOBILE DATA
+WEAK NETWORK
+NETWORK LOST
+NETWORK RESTORED
+
+When network changes:
+
+Do not immediately create dozens of requests.
+
+Use a centralized:
+
+"TaskzSyncManager"
+
+to control synchronization.
+
+---
+
+34. SYNC MANAGER
+
+Create a centralized synchronization layer.
+
+Suggested architecture:
+
+TaskzPermissionManager
+        ↓
+TaskzSyncManager
+        ↓
+RealtimeManager
+        ↓
+PushNotificationManager
+        ↓
+OfflineQueue
+        ↓
+LocalDatabase/Cache
+        ↓
+Repository Layer
+        ↓
+Supabase
+
+Do not scatter sync code across every screen.
+
+---
+
+35. SYNC STRATEGY
+
+Use incremental/delta synchronization where possible.
+
+Do not:
+
+download all tasks
+download all incidents
+download all users
+
+on every launch.
+
+Instead:
+
+- synchronize changes since last sync
+- update only affected records
+- invalidate cache only where necessary
+- use server timestamps/version markers where appropriate
+
+Use existing "user_sync_state" if suitable.
+
+---
+
+36. CONFLICT HANDLING
+
+Server state is authoritative.
+
+Handle:
+
+- stale local task
+- task reassigned while offline
+- task completed elsewhere
+- incident resolved elsewhere
+- role changed while offline
+- scope changed while offline
+- duplicate mutation
+- retry after timeout
+- partial synchronization
+- deleted records
+- permission revoked while offline
+
+Never overwrite newer server data with stale local data.
+
+---
+
+37. IDEMPOTENCY
+
+Every important client mutation should support idempotency/client operation IDs.
+
+If:
+
+operation ABC
+
+is sent three times because of network retries:
+
+Server must execute it only once.
+
+Subsequent requests should return the existing result.
+
+Do not create duplicate:
+
+- task completion
+- acknowledgement
+- incident update
+- participant assignment
+- notification
+- activity log
+
+because of retries.
+
+---
+
+38. ROLE/SCOPE CHANGE WHILE OFFLINE
+
+If a user's role or scope changes while their device is offline:
+
+When the device reconnects:
+
+1. validate current session
+2. fetch current roles
+3. fetch current scope
+4. invalidate old role cache
+5. invalidate old scope cache
+6. reconcile pending operations
+7. refresh tasks
+8. refresh incidents
+9. refresh notifications
+10. refresh dashboard
+11. refresh realtime subscriptions
+
+Do not allow revoked permissions to remain permanently active.
+
+---
+
+39. DASHBOARD
+
+Dashboard must be role-aware.
+
+IT MANAGER
+
+Show:
+
+- My Tasks
+- Centre Tasks
+- My Incidents
+- Centre Incidents
+- LAN/System Status
+- relevant alerts
+
+VCO
+
+Show:
+
+- Centre Tasks
+- City Tasks
+- Centre Incidents
+- City Incidents
+- IT Manager coordination
+- relevant alerts
+
+CITY HEAD
+
+Show:
+
+- City Tasks
+- City Incidents
+- City Overview
+- Centre Overview
+
+ROM
+
+Show:
+
+- State/Region Tasks
+- State/Region Incidents
+- Regional Overview
+
+ZOM
+
+Show:
+
+- Zone Tasks
+- Zone Incidents
+- Zone Overview
+
+SUPER ADMIN
+
+Show:
+
+- Global Tasks
+- Global Incidents
+- Users
+- Roles
+- Centres
+- Groups
+- System Overview
+- Administrative controls
+
+Hide sections the user is not authorized to access.
+
+---
+
+40. COUNTS MUST ALSO BE SCOPE-AWARE
+
+Dashboard counts must NOT be calculated from all database rows followed by local filtering.
+
+Correct:
+
+Server-authorized query
+↓
+only relevant records
+↓
+count
+
+Required counts may include:
+
+- pending tasks
+- overdue tasks
+- assigned tasks
+- open incidents
+- escalated incidents
+- unread notifications
+
+No unauthorized records should influence counts.
+
+---
+
+41. NOTIFICATION SCOPE
+
+Notifications must be generated only for:
+
+- authorized user
+- authorized role
+- authorized scope
+- relevant task/incident
+
+Example:
+
+Centre A task must NOT notify unrelated Centre B employees.
+
+City A task must NOT notify City B users.
+
+State A task must NOT notify unrelated states.
+
+Zone A task must NOT notify unrelated zones.
+
+Global task may notify all authorized recipients.
+
+---
+
+42. SECURITY
+
+This is critical.
+
+Do NOT implement security only like:
+
+if (role == "SUPER_ADMIN") ...
+
+Android checks are not security.
+
+Supabase RLS/RPC/backend authorization must enforce access.
+
+Use:
+
+auth.uid()
+
+as the trusted identity.
+
+Do not trust:
+
+- user-supplied user ID
+- client role
+- client scope
+- hidden UI
+- request payload claiming admin privileges
+
+Do not use:
+
+USING (true)
+
+or:
+
+WITH CHECK (true)
+
+for normal authenticated users unless there is an explicitly justified public/read-only case.
+
+Do not put:
+
+- Supabase service-role key
+- push server credentials
+- privileged secrets
+
+inside the APK.
+
+---
+
+43. RLS REQUIREMENTS
+
+RLS must enforce:
+
+- user identity
+- role
+- scope
+- task visibility
+- incident visibility
+- participant access
+- notification access
+- user management permissions
+
+Use helper functions where appropriate.
+
+Reuse existing:
+
+- "is_active_user"
+- "can_manage_group"
+
+and other existing authorization helpers if compatible.
+
+Do not create conflicting duplicate authorization systems.
+
+---
+
+44. EXISTING RPCs
+
+Inspect and reuse existing RPCs such as:
+
+- "assign_user_to_task"
+- "copy_shift"
+- "create_task_atomic"
+- "request_task_join"
+
+Do not blindly replace existing RPCs.
+
+If an RPC must change:
+
+- preserve existing callers
+- preserve return types unless migration is safely handled
+- preserve security
+- document the change
+- update Android code accordingly
+
+---
+
+45. EXISTING TASK SYSTEM MUST CONTINUE WORKING
+
+Do not break:
+
+- task creation
+- task assignment
+- task completion
+- acknowledgements
+- reminders
+- comments
+- attachments
+- groups
+- shifts
+- join requests
+- activity logs
+- notifications
+- offline behavior
+
+All existing working features must continue to work.
+
+---
+
+46. INCIDENT SYSTEM MUST CONTINUE WORKING
+
+Do not break:
+
+- incident creation
+- incident updates
+- assignment
+- escalation
+- resolution
+- incident audit
+- incident notifications
+
+Apply scope authorization consistently.
+
+---
+
+47. MEMBER SEARCH SECURITY
+
+Search must be server-authorized.
+
+Do not download all profiles and filter locally.
+
+Example:
+
+IT Manager:
+
+Search only relevant centre users.
+
+VCO:
+
+Search relevant centre/city users.
+
+City Head:
+
+Search relevant city users.
+
+ROM:
+
+Search relevant state users.
+
+ZOM:
+
+Search relevant zone users.
+
+Super Admin:
+
+Search globally.
+
+---
+
+48. AUTOMATIC TASK + INCIDENT NOTIFICATION FLOW
+
+The final architecture should behave approximately like:
+
+TASK CREATED
+     ↓
+SERVER AUTHORIZATION
+     ↓
+SCOPE RESOLUTION
+     ↓
+ROLE TARGETING
+     ↓
+ELIGIBLE USERS RESOLVED
+     ↓
+TASK VISIBILITY/PARTICIPATION
+     ↓
+NOTIFICATION EVENT
+     ↓
+PUSH NOTIFICATION
+     +
+REALTIME EVENT
+     ↓
+ANDROID
+     ↓
+LOCAL CACHE UPDATE
+     ↓
+UI UPDATE
+
+For offline devices:
+
+SERVER EVENT
+     ↓
+PUSH NOTIFICATION
+     ↓
+USER OPENS APP
+     ↓
+LATEST SERVER STATE
+     ↓
+LOCAL CACHE UPDATE
+
+---
+
+49. APP OPEN / RESUME
+
+When Taskz starts or returns to foreground:
+
+1. validate authentication
+2. validate session
+3. fetch assigned roles
+4. validate active role
+5. fetch scope
+6. process pending local operations
+7. perform incremental sync
+8. refresh notification state
+9. establish appropriate realtime subscriptions
+10. update dashboard
+11. update tasks
+12. update incidents
+
+Do not perform unnecessary full database downloads.
+
+---
+
+50. APP CLOSED / KILLED
+
+When app process is killed:
+
+Do not depend on a persistent WebSocket.
+
+Important user-facing events must use push notification infrastructure.
+
+When user taps notification:
+
+Notification
+↓
+Taskz launch
+↓
+Authenticate/restore session
+↓
+Load latest authorized task/incident
+↓
+Open relevant screen
+
+Never trust notification payload alone for authorization.
+
+Always verify the object against the current backend authorization.
+
+---
+
+51. PHONE REBOOT
+
+After device reboot:
+
+- push notification capability must recover
+- token registration must recover if necessary
+- WorkManager scheduled work must remain recoverable
+- app must not require manual sync
+
+---
+
+52. MULTIPLE DEVICES
+
+If User A has:
+
+Phone 1
+Phone 2
+
+Both should receive relevant notifications.
+
+Device token handling must be device-specific.
+
+Logging out from Phone 1 must not accidentally disable notifications on Phone 2.
+
+---
+
+53. NOTIFICATION DEEP LINKS
+
+Notification should open the exact relevant location:
+
+Task notification
+→ Task Details
+
+Incident notification
+→ Incident Details
+
+Role notification
+→ Role/Profile
+
+Admin notification
+→ relevant administrative screen
+
+After opening, refresh from server before allowing sensitive actions.
+
+---
+
+54. NOTIFICATION TYPES
+
+Support clear notification categories/channels, for example:
+
+- Task Assignment
+- Task Reminder
+- Task Update
+- Incident
+- Incident Escalation
+- System Alert
+- Administrative Alert
+
+Use Android notification channels appropriately.
+
+Do not spam users.
+
+---
+
+55. IMPORTANT / URGENT EVENTS
+
+Where appropriate, critical operational events may use higher notification importance.
+
+Do not abuse high-priority notifications.
+
+Only genuinely important events should wake the user/device aggressively.
+
+---
+
+56. BATTERY + DATA USAGE REQUIREMENT
+
+The app must be optimized for operational environments where many devices are active simultaneously.
+
+Avoid:
+
+- polling
+- full database refreshes
+- unnecessary realtime channels
+- repeated downloads
+- repeated image/file downloads
+- infinite retries
+
+Prefer:
+
+- push
+- realtime only when useful
+- local cache
+- incremental sync
+- compressed/small payloads
+- WorkManager
+- backoff
+- event-driven updates
+
+---
+
+57. OFFLINE DATA SECURITY
+
+Cached data must respect user authorization.
+
+If user logs out:
+
+Clear or securely invalidate user-specific cached information.
+
+Do not allow:
+
+User A logs out
+↓
+User B logs in
+↓
+User B sees User A's tasks/incidents
+
+This must be explicitly tested.
+
+---
+
+58. ADMIN AUDIT
+
+Important administrative operations should be auditable:
+
+- role assignment
+- role removal
+- scope change
+- centre change
+- city change
+- user activation/deactivation
+- task reassignment
+- incident reassignment
+
+Use existing "admin_audit_log" where appropriate.
+
+---
+
+59. NO DESTRUCTIVE MIGRATION
+
+Do not drop working tables.
+
+Do not delete working RPCs.
+
+Do not remove working RLS unless replaced safely.
+
+Do not change production data destructively.
+
+Do not reset existing users/tasks just for implementation.
+
+Use additive migrations where possible.
+
+---
+
+60. DATABASE INDEXING
+
+Inspect query patterns and create appropriate indexes for:
+
+- user ID
+- role ID
+- centre ID
+- city ID
+- state/region ID
+- zone ID
+- task scope
+- incident scope
+- notification recipient
+- notification unread state
+- timestamps
+- sync/version columns
+
+Do not create unnecessary duplicate indexes.
+
+---
+
+61. REALTIME SUBSCRIPTION MANAGEMENT
+
+Realtime subscriptions must be lifecycle-aware.
+
+When:
+
+App starts
+→ subscribe
+
+App active
+→ maintain
+
+Active role changes
+→ unsubscribe old scope
+→ subscribe new scope
+
+User logs out
+→ unsubscribe everything user-specific
+
+App background
+→ do not maintain unnecessary resource-heavy connections
+
+App resumes
+→ reconcile data
+→ restore required realtime subscriptions
+
+Avoid duplicate subscriptions.
+
+---
+
+62. SYNC VERSIONING
+
+Where practical, maintain:
+
+- last sync timestamp
+- last processed event ID
+- server version/revision
+- local version
+
+Use these to prevent:
+
+- duplicate processing
+- missed updates
+- unnecessary downloads
+
+Existing "user_sync_state" should be evaluated and reused if appropriate.
+
+---
+
+63. ERROR HANDLING
+
+Network/API errors must not crash the app.
+
+Handle:
+
+- timeout
+- 401
+- 403
+- 404
+- 409 conflict
+- 429 rate limit
+- 5xx server error
+- offline
+- malformed payload
+- expired session
+
+Use appropriate retry rules.
+
+Do not retry authorization failures indefinitely.
+
+---
+
+64. RETRY STRATEGY
+
+For transient failures:
+
+Use exponential backoff.
+
+Example concept:
+
+retry 1
+↓
+short delay
+
+retry 2
+↓
+longer delay
+
+retry 3
+↓
+longer delay
+
+Use jitter where appropriate.
+
+Never create an infinite aggressive retry loop.
+
+---
+
+65. USER EXPERIENCE
+
+The user should feel that Taskz is always synchronized.
+
+Do not expose unnecessary technical complexity.
+
+Show a small unobtrusive state if needed:
+
+- Online
+- Offline
+- Syncing
+- Pending Sync
+- Synced
+
+Do not require the user to manually initiate synchronization.
+
+---
+
+66. TESTING — ROLE TESTS
+
+Test:
+
+Test A
+
+New employee signs up.
+
+Expected:
+
+Only IT MANAGER or VCO can be assigned initially.
+
+Test B
+
+User has IT MANAGER + VCO.
+
+Expected:
+
+Active role selector shows exactly those roles.
+
+Test C
+
+User attempts self-promotion.
+
+Expected:
+
+Denied by backend.
+
+Test D
+
+Super Admin assigns CITY HEAD.
+
+Expected:
+
+Role appears automatically after refresh/realtime sync.
+
+Test E
+
+Super Admin removes role.
+
+Expected:
+
+Role disappears and permissions are revoked.
+
+---
+
+67. TESTING — SCOPE TESTS
+
+Centre
+
+Centre task visible to relevant centre users only.
+
+City
+
+City task visible to all relevant centres/users in that city.
+
+State
+
+State task visible to relevant cities/centres/users.
+
+Zone
+
+Zone task visible to relevant states/cities/centres/users.
+
+Global
+
+Global task visible to authorized global recipients.
+
+Unrelated users must not see them.
+
+---
+
+68. TESTING — INCIDENT TESTS
+
+Create centre incident.
+
+Verify:
+
+IT Manager sees it.
+
+Relevant VCO sees it.
+
+Relevant City Head sees it if escalation/visibility rules permit.
+
+Unrelated city does not see it.
+
+ROM sees state-level authorized incident.
+
+ZOM sees zone-level authorized incident.
+
+Super Admin sees everything.
+
+---
+
+69. TESTING — MEMBER SEARCH
+
+Search from:
+
+IT Manager
+VCO
+City Head
+ROM
+ZOM
+Super Admin
+
+Verify that search results are restricted to authorized scope.
+
+Verify identity fields:
+
+- Name
+- Role
+- Employee ID
+- Email
+- City
+- Centre
+
+---
+
+70. TESTING — REALTIME
+
+Test:
+
+User A assigns task to User B.
+
+User B app open.
+
+Expected:
+
+Immediate task update.
+
+---
+
+71. TESTING — PUSH
+
+User B app in background.
+
+Expected:
+
+Push notification appears automatically.
+
+---
+
+72. TESTING — KILLED APP
+
+Taskz process is killed.
+
+Task assigned to User B.
+
+Expected:
+
+Push notification still reaches device.
+
+---
+
+73. TESTING — OFFLINE
+
+User B goes offline.
+
+Task-related changes occur.
+
+Expected:
+
+No crash.
+
+No lost local state.
+
+---
+
+74. TESTING — RECONNECT
+
+Device reconnects after:
+
+5 minutes
+30 minutes
+several hours
+
+Expected:
+
+Automatic synchronization.
+
+No Sync button required.
+
+---
+
+75. TESTING — OFFLINE ACTION
+
+User completes task while offline.
+
+Expected:
+
+Pending Sync.
+
+Network returns.
+
+Expected:
+
+Automatically uploaded.
+
+Server accepts once.
+
+UI changes to Synced.
+
+---
+
+76. TESTING — DUPLICATE RETRY
+
+Simulate same operation being sent multiple times.
+
+Expected:
+
+Only one server-side mutation.
+
+---
+
+77. TESTING — MULTIPLE DEVICES
+
+Same user logs into two devices.
+
+Task assigned.
+
+Expected:
+
+Both authorized devices receive notification.
+
+---
+
+78. TESTING — TOKEN REFRESH
+
+Simulate push token refresh.
+
+Expected:
+
+New token automatically registered.
+
+---
+
+79. TESTING — NETWORK FLAPPING
+
+Repeated:
+
+ONLINE
+OFFLINE
+ONLINE
+OFFLINE
+
+Expected:
+
+No duplicate mutations.
+
+No infinite retry.
+
+No crash.
+
+---
+
+80. TESTING — BATTERY
+
+Verify:
+
+- no aggressive polling
+- no permanent sync service
+- no unnecessary GPS
+- no excessive network requests
+- realtime lifecycle is controlled
+- WorkManager is used appropriately
+- push is used for background notification
+
+---
+
+81. FINAL IMPLEMENTATION REQUIREMENT
+
+Do NOT give a generic tutorial.
+
+You must inspect the actual Taskz project first and then implement this system using the project's existing codebase.
+
+Return:
+
+A. ARCHITECTURE ANALYSIS
+
+Explain the current architecture and exactly where each new component belongs.
+
+B. FILES TO MODIFY
+
+Give exact file paths.
+
+Example:
+
+app/src/main/java/com/taskz/app/...
+
+C. NEW FILES
+
+Give exact files that must be created.
+
+D. COMPLETE CODE
+
+Provide complete production-ready code for every changed/new file.
+
+Do not provide pseudo-code when actual project code is required.
+
+E. SUPABASE SQL
+
+Provide complete SQL migrations for:
+
+- role/scope support
+- RLS
+- helper functions
+- RPC changes
+- notification support
+- sync support
+- idempotency
+- required indexes
+- required triggers
+
+Do not use unsafe broad policies.
+
+F. PUSH NOTIFICATION SETUP
+
+Explain exact Android + backend configuration required.
+
+G. WORKMANAGER
+
+Provide complete implementation for:
+
+- automatic sync
+- network constraints
+- retry
+- backoff
+- pending queue processing
+
+H. REALTIME
+
+Provide complete implementation for:
+
+- subscription
+- lifecycle
+- role/scope changes
+- reconnect
+- duplicate event protection
+
+I. OFFLINE QUEUE
+
+Provide complete implementation for:
+
+- persistent queue
+- operation IDs
+- retries
+- conflict handling
+- server acknowledgement
+
+J. NOTIFICATIONS
+
+Provide:
+
+- token registration
+- token refresh
+- notification handling
+- deep links
+- duplicate protection
+- logout cleanup
+
+K. SECURITY
+
+Explain exactly how RLS/backend authorization prevents users from bypassing Android UI restrictions.
+
+L. TESTING
+
+Provide a complete test matrix for:
+
+- roles
+- scopes
+- tasks
+- incidents
+- notifications
+- realtime
+- offline
+- reconnect
+- multi-device
+- battery
+- security
+
+---
+
+82. NON-NEGOTIABLE RULES
+
+1. Do not rebuild Taskz from scratch.
+2. Do not replace working architecture unnecessarily.
+3. Do not duplicate existing tables/RPCs unnecessarily.
+4. Do not weaken RLS.
+5. Do not use service-role credentials in Android.
+6. Do not trust client-provided roles.
+7. Do not trust client-provided scope.
+8. Do not fetch all data and filter locally.
+9. Do not use aggressive polling.
+10. Do not use an always-running foreground service for normal sync.
+11. Do not depend on a WebSocket to wake a killed Android app.
+12. Use push notifications for background/terminated-app alerts.
+13. Use realtime for active live updates.
+14. Use WorkManager for reliable deferred background synchronization.
+15. Use persistent local queue for offline operations.
+16. Use idempotency for mutations.
+17. Do not lose offline operations.
+18. Do not allow unauthorized notifications.
+19. Do not allow self-role-promotion.
+20. Do not allow stale role/scope data after role changes.
+21. Do not require manual Sync.
+22. Keep battery and mobile-data consumption low.
+23. Preserve existing Taskz functionality.
+24. Preserve existing authentication.
+25. Preserve existing task and incident functionality.
+26. Preserve existing offline functionality where already implemented.
+27. Do not expose sensitive cached data between users.
+28. Server authorization is always the final authority.
+
+---
+
+83. FINAL USER EXPERIENCE
+
+The final Taskz experience must work like this:
+
+NORMAL ONLINE
+
+Task assigned
+↓
+Backend resolves authorized user
+↓
+Notification created
+↓
+Push notification
++
+Realtime event
+↓
+User sees notification immediately
+↓
+Task appears automatically
+
+APP OPEN
+
+Realtime update
+↓
+Local cache update
+↓
+UI instantly updates
+
+APP BACKGROUND
+
+Push notification
+↓
+User sees Android notification
+↓
+Tap
+↓
+Taskz opens
+↓
+Latest server state loaded
+
+APP KILLED
+
+Push notification
+↓
+User taps
+↓
+Taskz opens
+↓
+Session restored
+↓
+Latest authorized data loaded
+
+OFFLINE
+
+User loses network
+↓
+Cached authorized data remains available
+↓
+Allowed actions are queued locally
+↓
+Status = Pending Sync
+
+NETWORK RETURNS
+
+Android detects network
+↓
+WorkManager/sync coordinator runs
+↓
+Pending operations upload
+↓
+Server acknowledges
+↓
+Latest changes downloaded
+↓
+Cache reconciled
+↓
+UI updates automatically
+
+NO MANUAL SYNC BUTTON.
+
+ROLE CHANGE
+
+Admin changes role
+↓
+Backend updates role
+↓
+Realtime/push/sync detects change
+↓
+Old permissions/cache invalidated
+↓
+New role loaded
+↓
+New scope loaded
+↓
+Dashboard/tasks/incidents/notifications refresh
+
+SCOPE TASK
+
+Centre Task
+→ relevant centre users
+
+City Task
+→ relevant cities → centres → users
+
+State Task
+→ state → cities → centres → users
+
+Zone Task
+→ zone → states → cities → centres → users
+
+Global Task
+→ all authorized recipients
+
+The entire system must feel automatic, real-time, secure, offline-capable and battery-efficient.
+
+IMPLEMENT THIS IN THE EXISTING TASKZ PROJECT, NOT AS A NEW DEMO PROJECT.

@@ -2,10 +2,13 @@ package com.example.ui.incidents
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.TaskzApplication
+import com.example.core.model.AuthorizationContext
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.TaskGroup
 import com.example.domain.repository.SystemIncidentRepository
+import com.example.domain.security.TaskzPermissionManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -68,8 +71,11 @@ data class QuickEntryFormState(
 )
 
 class SystemIncidentViewModel(
-    private val repository: SystemIncidentRepository
+    private val repository: SystemIncidentRepository,
+    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager
 ) : ViewModel() {
+
+    val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
 
     private val _currentTab = MutableStateFlow(0) // 0=Quick Entry, 1=History, 2=Reports
     val currentTab: StateFlow<Int> = _currentTab.asStateFlow()
@@ -159,8 +165,9 @@ class SystemIncidentViewModel(
 
     val filteredIncidents: StateFlow<List<SystemIncident>> = combine(
         allIncidents,
-        _filterState
-    ) { incidents, filter ->
+        _filterState,
+        permissionManager.contextFlow
+    ) { incidents, filter, _ ->
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
         val yesterdayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
@@ -168,7 +175,7 @@ class SystemIncidentViewModel(
         val activeUid = currentUserId.value
         val activeUName = currentUserName.value
 
-        incidents.filter { item ->
+        incidents.filter { permissionManager.canViewIncident(it) }.filter { item ->
             // Search Query
             val q = filter.searchQuery
             val matchesQuery = q.isBlank() ||
@@ -611,6 +618,28 @@ class SystemIncidentViewModel(
     fun syncPending() {
         viewModelScope.launch {
             repository.syncPendingIncidents()
+        }
+    }
+
+    fun canEditIncident(incident: SystemIncident): Boolean = permissionManager.canEditIncident(incident)
+    fun canEscalateIncident(incident: SystemIncident): Boolean = permissionManager.canEscalateIncident(incident)
+    fun canResolveIncident(incident: SystemIncident): Boolean = permissionManager.canResolveIncident(incident)
+
+    fun escalateIncident(
+        incidentId: String,
+        targetLevel: String,
+        reason: String?,
+        onComplete: (Result<SystemIncident>) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val result = repository.escalateIncident(incidentId, targetLevel, reason)
+            result.onSuccess { updated ->
+                if (_selectedIncident.value?.id == incidentId) {
+                    _selectedIncident.value = updated
+                    _incidentAudits.value = repository.getAuditsForIncident(incidentId)
+                }
+            }
+            onComplete(result)
         }
     }
 

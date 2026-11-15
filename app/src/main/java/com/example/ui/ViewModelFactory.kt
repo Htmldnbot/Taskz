@@ -28,16 +28,37 @@ class TaskzViewModelFactory(
                 AuthViewModel(app.authRepository, app.googleAuthManager) as T
             }
             modelClass.isAssignableFrom(HomeViewModel::class.java) -> {
-                HomeViewModel(app.authRepository, app.profileRepository, app.syncRepository, app.taskRepository) as T
+                HomeViewModel(
+                    authRepository = app.authRepository,
+                    profileRepository = app.profileRepository,
+                    syncRepository = app.syncRepository,
+                    taskRepository = app.taskRepository,
+                    taskzSyncManager = app.taskzSyncManager,
+                    permissionManager = app.permissionManager
+                ) as T
             }
             modelClass.isAssignableFrom(ProfileViewModel::class.java) -> {
-                ProfileViewModel(app.profileRepository, app.authRepository) as T
+                ProfileViewModel(
+                    profileRepository = app.profileRepository,
+                    authRepository = app.authRepository,
+                    taskzSyncManager = app.taskzSyncManager,
+                    permissionManager = app.permissionManager,
+                    deviceTokenManager = app.deviceTokenManager
+                ) as T
             }
             modelClass.isAssignableFrom(AdminViewModel::class.java) -> {
-                AdminViewModel(app.adminRepository) as T
+                AdminViewModel(
+                    adminRepository = app.adminRepository,
+                    taskzSyncManager = app.taskzSyncManager
+                ) as T
             }
             modelClass.isAssignableFrom(TasksViewModel::class.java) -> {
-                TasksViewModel(app.taskRepository) as T
+                TasksViewModel(
+                    taskRepository = app.taskRepository,
+                    adminRepository = app.adminRepository,
+                    permissionManager = app.permissionManager,
+                    taskzSyncManager = app.taskzSyncManager
+                ) as T
             }
             modelClass.isAssignableFrom(GroupsViewModel::class.java) -> {
                 GroupsViewModel(app.taskRepository) as T
@@ -49,7 +70,10 @@ class TaskzViewModelFactory(
                 WorkRolesViewModel(app.taskRepository) as T
             }
             modelClass.isAssignableFrom(SystemIncidentViewModel::class.java) -> {
-                SystemIncidentViewModel(app.systemIncidentRepository) as T
+                SystemIncidentViewModel(
+                    repository = app.systemIncidentRepository,
+                    permissionManager = app.permissionManager
+                ) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
