@@ -231,28 +231,42 @@ fun CreateTaskScreen(
 
     val isGlobalRole = authContext.activeRole in setOf(TaskzRole.SUPER_ADMIN, TaskzRole.COMMAND_CENTER)
     val availableZones = remember(orgHierarchy.zones, authContext.scope, isGlobalRole) {
-        if (isGlobalRole || authContext.scope.zoneId == null) orgHierarchy.zones
-        else orgHierarchy.zones.filter { it.id == authContext.scope.zoneId }
+        if (isGlobalRole) orgHierarchy.zones
+        else orgHierarchy.zones.filter { authContext.scope.zoneId != null && it.id == authContext.scope.zoneId }
     }
-    val availableStates = remember(orgHierarchy.states, selectedZone, authContext.scope, isGlobalRole) {
+    val availableStates = remember(orgHierarchy.states, selectedZone, authContext.scope, authContext.activeRole, isGlobalRole) {
         orgHierarchy.states.filter { st ->
-            (selectedZone == null || st.zoneId == selectedZone!!.id) &&
-                (isGlobalRole || authContext.scope.stateId == null || authContext.activeRole == TaskzRole.ZOM || st.id == authContext.scope.stateId)
+            (selectedZone == null || st.zoneId == selectedZone!!.id) && when {
+                isGlobalRole -> true
+                authContext.activeRole == TaskzRole.ZOM -> authContext.scope.zoneId != null && st.zoneId == authContext.scope.zoneId
+                else -> authContext.scope.stateId != null && st.id == authContext.scope.stateId
+            }
         }
     }
-    val availableCities = remember(orgHierarchy.cities, selectedState, selectedZone, authContext.scope, isGlobalRole) {
+    val availableCities = remember(orgHierarchy.cities, selectedState, selectedZone, authContext.scope, authContext.activeRole, isGlobalRole) {
         orgHierarchy.cities.filter { ct ->
             (selectedState == null || ct.stateId == selectedState!!.id) &&
-                (selectedZone == null || ct.zoneId == selectedZone!!.id) &&
-                (isGlobalRole || authContext.scope.cityId == null || authContext.activeRole.hierarchyRank >= TaskzRole.ROM.hierarchyRank || ct.id == authContext.scope.cityId)
+                (selectedZone == null || ct.zoneId == selectedZone!!.id) && when {
+                    isGlobalRole -> true
+                    authContext.activeRole == TaskzRole.ZOM -> authContext.scope.zoneId != null && ct.zoneId == authContext.scope.zoneId
+                    authContext.activeRole == TaskzRole.ROM -> authContext.scope.stateId != null && ct.stateId == authContext.scope.stateId
+                    else -> authContext.scope.cityId != null && ct.id == authContext.scope.cityId
+                }
         }
     }
-    val availableCentres = remember(orgHierarchy.centres, selectedCity, selectedState, selectedZone, authContext.scope, isGlobalRole) {
+    val availableCentres = remember(orgHierarchy.centres, selectedCity, selectedState, selectedZone, authContext.scope, authContext.activeRole, isGlobalRole) {
         orgHierarchy.centres.filter { c ->
             (selectedCity == null || c.cityId == selectedCity!!.id) &&
                 (selectedState == null || c.stateId == selectedState!!.id) &&
-                (selectedZone == null || c.zoneId == selectedZone!!.id) &&
-                (isGlobalRole || authContext.scope.centreId == null || authContext.activeRole.hierarchyRank >= TaskzRole.VCO.hierarchyRank || c.id == authContext.scope.centreId)
+                (selectedZone == null || c.zoneId == selectedZone!!.id) && when {
+                    isGlobalRole -> true
+                    authContext.activeRole == TaskzRole.ZOM -> authContext.scope.zoneId != null && c.zoneId == authContext.scope.zoneId
+                    authContext.activeRole == TaskzRole.ROM -> authContext.scope.stateId != null && c.stateId == authContext.scope.stateId
+                    authContext.activeRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO) ->
+                        (authContext.scope.cityId != null && c.cityId == authContext.scope.cityId) ||
+                            (authContext.scope.centreId != null && c.id == authContext.scope.centreId)
+                    else -> authContext.scope.centreId != null && c.id == authContext.scope.centreId
+                }
         }
     }
 

@@ -1,0 +1,3021 @@
+TASKZ — COMPLETE PRODUCTION AUDIT, SECURITY HARDENING, REALTIME, FCM PUSH, OFFLINE SYNC, RBAC & SCOPE FIX
+
+You are working on the EXISTING Taskz Android project.
+
+I have provided you the current Taskz source code and Supabase implementation.
+
+IMPORTANT:
+
+DO NOT rebuild Taskz from scratch.
+
+DO NOT create a second parallel architecture.
+
+DO NOT replace working features unnecessarily.
+
+DO NOT simply create new demo classes.
+
+You must inspect the EXISTING implementation first and then FIX, HARDEN and COMPLETE it.
+
+The goal is to make the current Taskz implementation production-ready.
+
+---
+
+1. FIRST: AUDIT THE ACTUAL EXISTING CODE
+
+Before changing anything, inspect the actual repository.
+
+The current project already contains major implementations for:
+
+- RBAC
+- multi-role users
+- organizational scope
+- task propagation
+- incidents
+- realtime
+- local Room database
+- offline outbox
+- WorkManager
+- notifications
+- device tokens
+- Supabase RPCs
+- Supabase migrations
+- push notification Edge Function
+- admin role management
+- dashboard
+- synchronization
+
+Do not assume these are missing.
+
+Inspect the actual implementation and determine:
+
+1. what is already correct
+2. what is partially implemented
+3. what is insecure
+4. what is incorrect
+5. what is duplicated
+6. what is disconnected
+7. what is missing
+8. what can cause data leakage
+9. what can cause duplicate notifications
+10. what can cause missed notifications
+11. what can cause offline data loss
+12. what can cause battery drain
+
+Then modify only what is required.
+
+---
+
+2. CURRENT IMPORTANT FILES / SYSTEMS TO INSPECT
+
+Pay special attention to the existing implementation including:
+
+app/src/main/java/com/example/domain/security/TaskzPermissionManager.kt
+
+app/src/main/java/com/example/data/remote/TaskzRealtimeManager.kt
+
+app/src/main/java/com/example/notifications/DeviceTokenManager.kt
+
+app/src/main/java/com/example/notifications/PushNotificationManager.kt
+
+app/src/main/java/com/example/sync/TaskzSyncManager.kt
+
+app/src/main/java/com/example/sync/SyncWorker.kt
+
+app/src/main/java/com/example/data/local/dao/OutboxDao.kt
+
+app/src/main/java/com/example/data/local/entity/OutboxEventEntity.kt
+
+app/src/main/java/com/example/domain/repository/TaskRepository.kt
+
+app/src/main/java/com/example/domain/repository/SystemIncidentRepository.kt
+
+app/src/main/java/com/example/domain/repository/SyncRepository.kt
+
+app/src/main/java/com/example/domain/repository/AdminRepository.kt
+
+app/src/main/java/com/example/ui/admin/AdminScreen.kt
+
+app/src/main/java/com/example/ui/admin/AdminViewModel.kt
+
+app/src/main/java/com/example/ui/incidents/SystemIncidentViewModel.kt
+
+app/src/main/java/com/example/ui/tasks/CreateTaskScreen.kt
+
+app/src/main/java/com/example/ui/tasks/TasksViewModel.kt
+
+app/src/main/java/com/example/core/model/RbacModels.kt
+
+app/src/main/java/com/example/core/model/SyncMetadata.kt
+
+app/src/main/java/com/example/notifications/NotificationDeepLinkRouter.kt
+
+app/src/main/AndroidManifest.xml
+
+app/build.gradle.kts
+
+supabase/migrations/013_rbac_scope_realtime_push_sync.sql
+
+supabase/functions/send-push-notification/index.ts
+
+Also inspect all previous migrations before modifying migration 013.
+
+---
+
+3. DO NOT LOSE EXISTING FUNCTIONALITY
+
+Existing working functionality must remain intact:
+
+- Supabase authentication
+- Google login
+- employee login
+- profile
+- task creation
+- task assignment
+- task completion
+- task acknowledgement
+- task reminders
+- task alarms
+- shifts
+- groups
+- comments
+- attachments
+- task join requests
+- incidents
+- incident history
+- incident escalation
+- admin role management
+- notifications
+- offline queue
+- local cache
+- WorkManager
+- realtime
+- existing UI
+- existing alarm system
+- existing Android build/signing configuration
+
+If a change affects an existing RPC or data model, preserve compatibility or update every caller correctly.
+
+---
+
+4. ROLE SYSTEM
+
+Use existing "work_roles" / "user_roles" architecture.
+
+Do not create a duplicate role-definition system.
+
+Supported roles:
+
+- IT_MANAGER
+- VCO
+- CITY_HEAD
+- ROM
+- ZOM
+- COMMAND_CENTER / SPOC
+- SUPER_ADMIN
+
+Existing project-specific aliases may be preserved if already present, but canonical authorization must be consistent.
+
+---
+
+5. NEW USER ROLE RESTRICTION
+
+A newly joined employee must NOT be able to self-assign:
+
+- CITY_HEAD
+- ROM
+- ZOM
+- COMMAND_CENTER
+- SUPER_ADMIN
+
+Initial onboarding role may only be:
+
+- IT_MANAGER
+- VCO
+
+Existing onboarding RPC:
+
+"set_initial_onboarding_role"
+
+must remain secure.
+
+Verify that the server—not Android UI—enforces this.
+
+Test:
+
+User tries:
+
+"SUPER_ADMIN"
+
+Expected:
+
+SERVER REJECTS.
+
+User tries:
+
+"ROM"
+
+Expected:
+
+SERVER REJECTS.
+
+User tries:
+
+"IT_MANAGER"
+
+Expected:
+
+Allowed.
+
+User tries:
+
+"VCO"
+
+Expected:
+
+Allowed.
+
+---
+
+6. MULTI-ROLE USERS
+
+A user may have multiple roles.
+
+Example:
+
+IT_MANAGER
+VCO
+
+The app must display only the roles actually assigned to that user.
+
+The user must never be able to inject a fake role through local storage or request payload.
+
+---
+
+7. ACTIVE ROLE
+
+Active role must be user-selectable only from assigned roles.
+
+When active role changes:
+
+1. clear role-specific cached task data
+2. clear role-specific incident data
+3. clear role-specific dashboard counts
+4. refresh authorization context
+5. refresh scope
+6. refresh notifications
+7. refresh tasks
+8. refresh incidents
+9. refresh user search permissions
+10. refresh realtime subscriptions
+11. refresh UI
+
+No stale data from the previous active role may remain visible.
+
+---
+
+8. ORGANIZATIONAL HIERARCHY
+
+Maintain:
+
+ZONE
+ ↓
+STATE / REGION
+ ↓
+CITY
+ ↓
+CENTRE
+ ↓
+LAN / SYSTEM / OPERATIONAL USER
+
+Use existing organizational tables:
+
+- org_zones
+- org_states
+- org_cities
+- org_centres
+
+Do not hard-code organizational authorization inside Android.
+
+---
+
+9. ROLE SCOPE
+
+IT_MANAGER
+
+Centre level.
+
+Must normally access:
+
+- own centre tasks
+- own centre incidents
+- centre LAN/system information
+- relevant centre users
+- relevant operational data
+
+---
+
+VCO
+
+Centre + authorized city.
+
+Must access:
+
+- centre tasks
+- city tasks
+- centre incidents
+- city incidents
+- relevant users
+- IT Manager coordination
+
+---
+
+CITY_HEAD
+
+City level.
+
+Must access:
+
+- city tasks
+- city incidents
+- centres in that city
+- relevant users
+- city overview
+
+---
+
+ROM
+
+State/region level.
+
+Must access:
+
+- state/region tasks
+- state/region incidents
+- cities in that state/region
+- relevant centres
+- regional overview
+
+---
+
+ZOM
+
+Zone level.
+
+Must access:
+
+- zone tasks
+- zone incidents
+- states
+- cities
+- centres
+- zone overview
+
+---
+
+SUPER_ADMIN
+
+Global.
+
+Must access all authorized organizational data.
+
+---
+
+10. CRITICAL SECURITY RULE
+
+Never treat "NULL" scope as a wildcard.
+
+Current Android permission logic contains patterns equivalent to:
+
+scope.cityId == null || cityId == null || scope.cityId == cityId
+
+and similar logic for:
+
+- zone
+- state
+- city
+- centre
+
+This must be reviewed and corrected.
+
+Unknown/missing scope must be treated as:
+
+DENY
+
+unless the backend explicitly establishes that the operation is GLOBAL.
+
+Do NOT allow:
+
+NULL = ALL
+
+for normal users.
+
+Only explicit GLOBAL authorization may bypass lower-level scope comparison.
+
+---
+
+11. CENTRAL PERMISSION MANAGER
+
+Keep and improve:
+
+"TaskzPermissionManager"
+
+It must centralize UI permission decisions.
+
+Required methods:
+
+getAssignedRoles()
+getActiveRole()
+getUserScope()
+
+canViewTask()
+canCreateTask()
+canEditTask()
+canAssignTask()
+canReassignTask()
+canCompleteTask()
+canAcknowledgeTask()
+canDeleteTask()
+
+canViewIncident()
+canCreateIncident()
+canEditIncident()
+canAssignIncident()
+canResolveIncident()
+canEscalateIncident()
+
+canSearchUser()
+canManageUsers()
+canManageRoles()
+canManageGroups()
+
+canCreateCentreTask()
+canCreateCityTask()
+canCreateStateTask()
+canCreateZoneTask()
+canCreateGlobalTask()
+
+Android permission manager is NOT the security boundary.
+
+Supabase RLS/RPC remains final authority.
+
+---
+
+12. TASK SCOPE LEVELS
+
+Tasks must support:
+
+CENTRE
+CITY
+STATE
+ZONE
+GLOBAL
+
+Existing UI levels such as:
+
+- LAN
+- TEST_CENTRE
+- CITY
+- STATE
+- ZONE
+- NATIONAL
+
+must be mapped correctly to backend canonical scope levels.
+
+Do not create contradictory scope systems.
+
+---
+
+13. AUTOMATIC TASK PROPAGATION
+
+A creator must NOT manually assign every LAN/user for a scope-level task.
+
+CENTRE TASK
+
+Example:
+
+Centre C001
+
+Automatically applies to relevant authorized users/LANs within C001.
+
+---
+
+CITY TASK
+
+Example:
+
+Jaipur
+
+Automatically applies to:
+
+Jaipur
+→ relevant centres
+→ relevant users/LANs
+
+---
+
+STATE TASK
+
+Example:
+
+Rajasthan
+
+Automatically applies to:
+
+Rajasthan
+→ cities
+→ centres
+→ users/LANs
+
+---
+
+ZONE TASK
+
+Automatically applies to:
+
+Zone
+→ states
+→ cities
+→ centres
+→ users/LANs
+
+---
+
+GLOBAL TASK
+
+Automatically applies to all authorized recipients.
+
+---
+
+14. DO NOT CREATE DUPLICATE TASK ROWS
+
+Prefer:
+
+ONE canonical task
+
+with:
+
+- scope_level
+- zone_id
+- state_id
+- city_id
+- centre_id
+- role targeting
+- group targeting
+- visibility rules
+
+Do not create 500 duplicate task rows for 500 users.
+
+Use existing:
+
+- task_participants
+- task_visible_users
+- task_groups
+- task_role_requirements
+
+appropriately.
+
+---
+
+15. TASK ACTIONABILITY
+
+Visibility and actionability are different.
+
+A user may:
+
+VIEW
+
+but not:
+
+EDIT
+ASSIGN
+REASSIGN
+DELETE
+COMPLETE
+
+The backend must enforce this.
+
+If automatic scope propagation means a user should be actionable, ensure the existing task completion/acknowledgement RPCs recognize that user as authorized.
+
+Do not only create a notification and assume that equals task assignment.
+
+---
+
+16. CRITICAL TASK PROPAGATION ISSUE TO FIX
+
+Existing "create_task_atomic()" automatically creates notifications for eligible users.
+
+However, the current implementation must be verified for:
+
+- participant creation
+- task visibility
+- actionability
+- role targeting
+- notification delivery
+
+Do not let a user receive:
+
+"New Task Assigned"
+
+while backend later rejects:
+
+"complete task"
+
+because no valid participant/authorization relationship exists.
+
+End-to-end assignment must be consistent.
+
+---
+
+17. RECIPIENT LIMIT
+
+Existing automatic propagation contains a limit around:
+
+limit 250
+
+Do NOT silently stop processing at 250 recipients.
+
+For a scope task with more than 250 eligible users:
+
+- task must remain visible to all authorized users
+- notification delivery must process all authorized recipients
+- use batching/pagination/background processing if necessary
+- never truncate silently
+
+Use server-side batching.
+
+Do not create one giant request that can timeout.
+
+---
+
+18. ROLE TARGETING
+
+Tasks may target:
+
+- IT_MANAGER
+- VCO
+- CITY_HEAD
+- ROM
+- ZOM
+- COMMAND_CENTER
+- SUPER_ADMIN
+- specific group
+- specific user
+
+Role targeting must intersect with geographic scope.
+
+Example:
+
+CITY task + IT_MANAGER
+
+means:
+
+only IT Managers in that city/scope.
+
+Not every IT Manager globally.
+
+---
+
+19. MEMBER SEARCH
+
+Member search must be server-side.
+
+Search result should show:
+
+- Name
+- Role
+- Employee ID
+- Email
+- City
+- Centre
+- Mobile if allowed
+
+Search must respect current user scope.
+
+Do NOT download all profiles and filter on Android.
+
+---
+
+20. ADMIN USER MANAGEMENT
+
+Super Admin must be able to:
+
+- search users
+- open profile
+- view roles
+- add role
+- remove role
+- change primary role
+- change active role if required
+- change zone
+- change state
+- change city
+- change centre
+- activate/deactivate user
+- view audit history
+
+Normal users cannot change their own authorization.
+
+---
+
+21. ROLE CHANGE PROPAGATION
+
+Existing RPC:
+
+"admin_update_user_access"
+
+must correctly update:
+
+- roles
+- primary role
+- active role
+- zone
+- state
+- city
+- centre
+- role version
+- scope version
+
+After admin changes a user:
+
+The affected device must automatically learn about the change.
+
+Use:
+
+- realtime while app active
+- push/admin notification where appropriate
+- delta sync on resume/reconnect
+
+---
+
+22. INCIDENT SCOPE
+
+Apply same hierarchy to incidents.
+
+IT_MANAGER:
+
+Centre.
+
+VCO:
+
+Centre + city.
+
+CITY_HEAD:
+
+City.
+
+ROM:
+
+State.
+
+ZOM:
+
+Zone.
+
+SUPER_ADMIN:
+
+Global.
+
+---
+
+23. INCIDENT CREATION SECURITY
+
+Current "system_incidents" insert authorization must be strengthened.
+
+It is not enough to check:
+
+created_by = auth.uid()
+
+Also validate that the caller is authorized for the submitted:
+
+- scope_level
+- zone_id
+- state_id
+- city_id
+- centre_id
+- centre_code
+
+A user must not be able to submit:
+
+scope_level = ZONE
+zone_id = another zone
+
+just by modifying the JSON request.
+
+Backend must derive/validate scope from authenticated authorization context.
+
+---
+
+24. INCIDENT UPDATE SECURITY
+
+Do not allow unauthorized users to alter:
+
+- scope
+- centre
+- city
+- state
+- zone
+- creator
+- escalation authority
+
+through normal update operations.
+
+Scope-changing operations should be admin-only or explicitly authorized.
+
+Prefer immutable organizational scope after incident creation unless an authorized admin performs a controlled correction.
+
+---
+
+25. INCIDENT ESCALATION
+
+Existing escalation flow:
+
+IT_MANAGER
+↓
+VCO
+↓
+CITY_HEAD
+↓
+ROM
+↓
+ZOM
+↓
+SUPER_ADMIN
+
+must be enforced server-side.
+
+Do not allow arbitrary jumps unless the business rule explicitly allows them.
+
+For example, if sequential escalation is required:
+
+IT_MANAGER cannot directly choose SUPER_ADMIN.
+
+If emergency escalation is required, implement an explicit emergency permission rather than accidental bypass.
+
+---
+
+26. RESOLVED INCIDENT
+
+Do NOT allow a resolved incident to be silently escalated again.
+
+Current code keeps status "RESOLVED" when escalation is attempted.
+
+Review this behavior.
+
+Preferred:
+
+Reject escalation of resolved incident unless an explicit authorized reopen/re-escalate workflow exists.
+
+---
+
+27. INCIDENT RECIPIENT NULL-SCOPE BUG
+
+Current escalation recipient conditions include patterns equivalent to:
+
+incident.zone_id is null
+or p.zone_id = incident.zone_id
+
+This can turn NULL into:
+
+"notify everybody in that role."
+
+Do NOT do this.
+
+If an incident has missing scope:
+
+- either reject it
+- repair/backfill it
+- or route only through an explicitly authorized global path
+
+Never use NULL as global wildcard.
+
+---
+
+28. INCIDENT NOTIFICATION LIMIT
+
+Current escalation recipient logic has a finite limit.
+
+Do not silently truncate recipients.
+
+Implement safe batching/pagination for:
+
+- escalation
+- task assignment
+- role-change notifications
+- administrative notifications
+
+---
+
+29. DASHBOARD COUNTS
+
+Current dashboard RPC:
+
+"get_scoped_dashboard_summary()"
+
+must be audited.
+
+Do NOT return global:
+
+- active users
+- centre counts
+- task counts
+- incident counts
+
+to lower-scope roles.
+
+Correct:
+
+CITY_HEAD
+→ city counts
+
+ROM
+→ state/region counts
+
+ZOM
+→ zone counts
+
+SUPER_ADMIN
+→ global counts
+
+IT_MANAGER
+→ centre counts
+
+VCO
+→ centre/city counts according to active role.
+
+---
+
+30. DELTA SYNC
+
+Existing RPC:
+
+"delta_sync_pull(...)"
+
+must be fixed for correct incremental synchronization.
+
+Current pattern must be reviewed where aggregate JSON is combined with:
+
+LIMIT 200
+
+after aggregation.
+
+The intended behavior is:
+
+1. filter authorized records
+2. order by updated_at/version
+3. LIMIT 200
+4. then aggregate JSON
+
+Correct conceptual SQL:
+
+SELECT jsonb_agg(...)
+FROM (
+    SELECT ...
+    FROM ...
+    WHERE authorized
+    ORDER BY updated_at DESC
+    LIMIT 200
+) x;
+
+Apply this correctly to:
+
+- tasks
+- incidents
+- notifications
+
+Do not accidentally return the entire dataset.
+
+---
+
+31. DELTA SYNC AUTHORIZATION
+
+Every record returned by:
+
+"delta_sync_pull"
+
+must already be authorized by backend logic.
+
+Do not:
+
+download everything
+→ Android filter
+
+Instead:
+
+server authorization
+→ only authorized records
+→ Android cache
+
+---
+
+32. SYNC CURSOR SAFETY
+
+Do not advance:
+
+"last_delta_sync_at"
+
+until the relevant server response has been successfully reconciled.
+
+If reconciliation fails halfway:
+
+Do not lose events.
+
+Use:
+
+- timestamp/version cursor
+- overlap window if necessary
+- deterministic upsert
+- event/version comparison
+
+to prevent missed updates.
+
+---
+
+33. OFFLINE-FIRST
+
+Existing Room/outbox system should be preserved and hardened.
+
+Offline actions must survive:
+
+- app process kill
+- app restart
+- phone restart
+- network outage
+- Android background restrictions
+
+---
+
+34. OUTBOX EVENT
+
+Every mutation should have:
+
+operation_id
+user_id
+entity_id
+entity_type
+operation_type
+payload
+created_at
+retry_count
+status
+active_role
+scope
+
+Use existing "client_operation_id" / "client_events" architecture where appropriate.
+
+---
+
+35. IDEMPOTENCY
+
+The same operation must be safe to retry.
+
+Example:
+
+operation ABC
+sent
+timeout
+retry
+retry
+
+Server result:
+
+ONE mutation only.
+
+Do not create:
+
+- duplicate task completion
+- duplicate acknowledgement
+- duplicate incident update
+- duplicate escalation
+- duplicate participant
+- duplicate notification
+
+---
+
+36. SYNC CONCURRENCY
+
+Current architecture contains:
+
+- "TaskzSyncManager.syncNow()"
+- "SyncWorker"
+
+Review whether both can process the same outbox item concurrently.
+
+A Kotlin mutex alone is not sufficient if separate worker/process execution can occur.
+
+Use database-level atomic claim/lease semantics where necessary.
+
+Example concept:
+
+PENDING
+↓ atomic claim
+SYNCING
+↓
+SYNCED
+
+If worker crashes:
+
+SYNCING
+↓ timeout/lease expiry
+PENDING
+
+No operation should be permanently stuck.
+
+---
+
+37. WORKMANAGER
+
+Use WorkManager for reliable background synchronization.
+
+Network constraint:
+
+NetworkType.CONNECTED
+
+Use retry/backoff.
+
+Do not run an always-on foreground service for ordinary sync.
+
+Periodic fallback is allowed, but it must be battery-efficient.
+
+Avoid duplicate workers.
+
+Use unique work names and correct ExistingWorkPolicy.
+
+---
+
+38. NETWORK RETURN
+
+When:
+
+OFFLINE → ONLINE
+
+automatically:
+
+1. detect network
+2. schedule sync
+3. process outbox
+4. pull delta
+5. reconcile
+6. update cache
+7. refresh notifications
+8. update dashboard
+9. restore realtime if app foregrounded
+
+User must NOT press Sync.
+
+---
+
+39. REALTIME
+
+Existing "TaskzRealtimeManager" must be retained and hardened.
+
+Realtime should primarily be used while app is foreground/active.
+
+Do NOT keep an unnecessary WebSocket alive when the app is backgrounded merely for battery reasons.
+
+---
+
+40. REALTIME SUBSCRIPTIONS
+
+Current subscriptions include:
+
+- notifications filtered by user
+- user_roles filtered by user
+- profiles filtered by user
+- tasks
+- system_incidents
+
+Review broad task/incident subscriptions.
+
+Do not subscribe to the entire task/incident table if a narrower authorized subscription/filter is possible.
+
+If Supabase Realtime + RLS is the intended security boundary, verify that actual publication/RLS behavior is correct.
+
+---
+
+41. REALTIME JOIN ACKNOWLEDGEMENT
+
+Current custom WebSocket implementation must not mark realtime as fully connected merely because the WebSocket opened.
+
+Need:
+
+WebSocket connected
+↓
+channel join sent
+↓
+join acknowledgement received
+↓
+channel confirmed
+↓
+realtime READY
+
+Track channel state.
+
+If join fails:
+
+- report failure
+- retry appropriately
+- do not claim full realtime availability
+
+---
+
+42. REALTIME RECONNECT
+
+Handle:
+
+- Wi-Fi loss
+- mobile data loss
+- network switch
+- server disconnect
+- expired session
+- token refresh
+- app resume
+- role switch
+
+Use jittered exponential backoff.
+
+Do not reconnect aggressively.
+
+After network recovery, reconcile with delta sync because realtime may have missed events while disconnected.
+
+---
+
+43. IMPORTANT: REALTIME IS NOT PUSH
+
+Do NOT use Supabase WebSocket as a replacement for Android push.
+
+Realtime:
+
+Foreground/live application
+
+Push:
+
+Background
+Locked phone
+Killed app
+
+Both are required.
+
+---
+
+44. FCM PUSH — EXISTING EDGE FUNCTION
+
+The project ALREADY contains:
+
+supabase/functions/send-push-notification/index.ts
+
+Do not create a duplicate push function.
+
+Inspect and complete this existing function.
+
+It already attempts:
+
+- FCM HTTP v1
+- service-account authentication
+- active device-token lookup
+- invalid token deactivation
+- notification dispatch
+- push_dispatched_at update
+
+Preserve this architecture unless a security/technical correction is required.
+
+---
+
+45. FCM ANDROID INTEGRATION
+
+The Android project must have complete Firebase Cloud Messaging integration.
+
+Inspect:
+
+app/build.gradle.kts
+libs.versions.toml
+AndroidManifest.xml
+TaskzApplication
+notification classes
+
+If missing, add:
+
+- Firebase Messaging dependency
+- Firebase configuration
+- Firebase Messaging Service
+- token refresh handling
+- notification receive handling
+- data payload handling
+- deep-link routing
+
+Do not use fake/local device tokens for actual push.
+
+---
+
+46. DEVICE TOKEN
+
+Current "DeviceTokenManager" has a fallback:
+
+local:<deviceId>
+
+This MUST NOT be treated as a real FCM token for remote push.
+
+Correct behavior:
+
+If no FCM token exists:
+
+do not register fake push token
+
+Wait for real FCM token.
+
+When Firebase provides token:
+
+onNewToken()
+↓
+save token
+↓
+register/update device_tokens
+
+---
+
+47. DEVICE TOKEN TABLE
+
+Use existing "device_tokens".
+
+Maintain:
+
+- user_id
+- device_id
+- token
+- platform
+- device_name
+- app_version
+- is_active
+- last_seen_at
+
+Unique device association must remain.
+
+Multiple devices per user must work.
+
+---
+
+48. MULTI-DEVICE
+
+Same user:
+
+Phone A
+Phone B
+Phone C
+
+All active authorized devices receive relevant notifications.
+
+Logout from Phone A:
+
+Only Phone A token is deactivated.
+
+Phone B/C remain active.
+
+---
+
+49. FCM EDGE FUNCTION SECURITY
+
+Existing Edge Function currently expects service-role authorization.
+
+Preserve:
+
+- service role key server-side only
+- FCM service account secret server-side only
+
+NEVER put:
+
+SUPABASE_SERVICE_ROLE_KEY
+FCM_SERVICE_ACCOUNT_JSON
+FCM private key
+
+inside Android.
+
+---
+
+50. PUSH DISPATCH FLOW
+
+The complete flow must be:
+
+TASK / INCIDENT EVENT
+        ↓
+Backend authorization
+        ↓
+Create notification row
+        ↓
+Identify authorized user IDs
+        ↓
+Trigger send-push-notification
+        ↓
+Find active FCM device tokens
+        ↓
+FCM HTTP v1
+        ↓
+Android device
+        ↓
+Taskz FirebaseMessagingService
+        ↓
+Notification / data handling
+        ↓
+Deep link
+
+This must be actually connected.
+
+Do not leave the Edge Function unused.
+
+---
+
+51. IMPORTANT: HOW EDGE FUNCTION IS TRIGGERED
+
+Determine how existing notification creation invokes:
+
+"send-push-notification".
+
+If currently notifications are only inserted into "notifications" table and the Edge Function is never triggered, implement a secure server-side dispatch mechanism.
+
+Possible architecture:
+
+notification created
+↓
+secure trigger/queue
+↓
+Edge Function
+↓
+FCM
+
+Do not make the Android client call the Edge Function using service credentials.
+
+Do not allow arbitrary client users to send push notifications to arbitrary user IDs.
+
+---
+
+52. PUSH DUPLICATE PROTECTION
+
+Use existing:
+
+"event_key"
+
+and:
+
+notifications(user_id, event_key)
+
+unique constraint.
+
+The same logical event must not create duplicate notification rows.
+
+Also prevent duplicate Android tray notifications.
+
+---
+
+53. PUSH PAYLOAD
+
+Include:
+
+event_key
+category
+deep_link
+task_id
+incident_id
+scope_level
+notification_id
+
+Android must not trust these fields for authorization.
+
+After opening:
+
+fetch latest authorized object
+
+before sensitive actions.
+
+---
+
+54. ANDROID FIREBASE MESSAGE HANDLER
+
+The Firebase messaging service must handle:
+
+Foreground
+
+Receive event and route into app/realtime/cache/notification manager.
+
+Background
+
+Display appropriate notification.
+
+Killed process
+
+Android/FCM must be capable of delivering notification.
+
+Data message
+
+Handle deep-link metadata safely.
+
+Avoid duplicate tray notifications if FCM notification payload already displays the system notification.
+
+Design foreground/background behavior carefully so one event does not produce two notifications.
+
+---
+
+55. NOTIFICATION PERMISSION
+
+Android 13+:
+
+Request:
+
+POST_NOTIFICATIONS
+
+at appropriate time.
+
+If permission denied:
+
+- do not crash
+- keep in-app notification history
+- show appropriate UI explaining notification permission if necessary
+
+---
+
+56. BATTERY
+
+Battery is critical.
+
+Do NOT:
+
+- poll every few seconds
+- run permanent sync foreground service
+- keep WebSocket alive in background unnecessarily
+- wake device repeatedly
+- perform full database downloads
+- repeatedly register device tokens
+- retry infinitely
+
+Prefer:
+
+- FCM
+- foreground realtime
+- WorkManager
+- incremental sync
+- local cache
+- network constraints
+- exponential backoff
+
+---
+
+57. APP CLOSED
+
+If app is killed:
+
+Do NOT depend on WebSocket.
+
+Important event:
+
+Backend
+↓
+FCM
+↓
+Android
+↓
+notification
+
+When user taps:
+
+Taskz launches
+↓
+session restored
+↓
+latest authorization loaded
+↓
+latest task/incident loaded
+↓
+deep link opened
+
+---
+
+58. APP BACKGROUND
+
+When app goes background:
+
+- disconnect unnecessary realtime channels
+- keep WorkManager scheduling
+- FCM remains available
+- do not continuously poll
+
+When app returns foreground:
+
+- delta sync
+- restore realtime
+- process pending operations
+- refresh dashboard
+
+---
+
+59. OFFLINE NOTIFICATION SCENARIO
+
+If phone has no network:
+
+Task assigned on server.
+
+The phone cannot receive FCM until network is restored.
+
+Do NOT claim instant notification while completely offline.
+
+When network returns:
+
+- FCM may deliver notification
+- app performs delta sync
+- latest task appears
+- no manual sync required
+
+---
+
+60. OFFLINE LOCAL ACTION
+
+If user performs allowed action offline:
+
+LOCAL
+↓
+PENDING SYNC
+
+Do not show:
+
+Server confirmed
+
+until backend confirms.
+
+---
+
+61. ROLE/SCOPE CHANGES OFFLINE
+
+If admin changes user's role/scope while user's phone is offline:
+
+When network returns:
+
+authenticate
+↓
+refresh authorization
+↓
+invalidate old cache
+↓
+pull new role/scope
+↓
+process permitted pending operations
+↓
+refresh tasks
+↓
+refresh incidents
+↓
+refresh notifications
+↓
+refresh dashboard
+
+If an offline operation is no longer authorized:
+
+Do NOT send it blindly.
+
+Mark it:
+
+REJECTED / PERMISSION_REVOKED
+
+and explain to user.
+
+---
+
+62. LOCAL CACHE SECURITY
+
+On logout:
+
+- clear user-specific cache
+- clear active role
+- clear authorization cache
+- clear notifications
+- clear sensitive task/incident cache
+- deactivate current device token
+
+Do not allow:
+
+User A logout
+↓
+User B login
+↓
+User A data visible
+
+---
+
+63. ADMIN ROLE CHANGE NOTIFICATION
+
+When admin changes role/scope:
+
+Create notification:
+
+Access & Role Updated
+
+Use existing notification infrastructure.
+
+Push it to affected devices.
+
+On receipt:
+
+- refresh authorization
+- invalidate old cache
+- refresh dashboard
+- refresh realtime subscriptions
+
+---
+
+64. EXISTING ADMIN AUDIT
+
+Preserve:
+
+"admin_audit_log"
+
+Audit:
+
+- role assignment
+- role removal
+- scope change
+- centre change
+- city change
+- state change
+- zone change
+- activation/deactivation
+- task reassignment
+- incident escalation
+
+Do not allow users to modify audit history.
+
+---
+
+65. ORGANIZATIONAL SEED DATA
+
+CRITICAL:
+
+Migration 013 currently contains organizational seed data such as:
+
+- zones
+- states
+- cities
+- centres
+- sample centre codes/names
+
+Do NOT blindly overwrite real production organizational records.
+
+Review all:
+
+ON CONFLICT (...) DO UPDATE
+
+operations.
+
+If seed data is only test/demo data:
+
+- remove it from production migration
+- move it to an explicit development/test seed
+- preserve existing real production records
+
+Do not overwrite a real "C001" simply because a migration contains a sample "C001".
+
+---
+
+66. EXISTING USER BACKFILL
+
+Do NOT assume existing users automatically have correct:
+
+- zone_id
+- state_id
+- city_id
+- centre_id
+- centre_code
+
+Create a safe migration/reconciliation process.
+
+Unmapped users should be clearly identified for Super Admin review.
+
+Do not silently assign them to an arbitrary centre.
+
+---
+
+67. PROFILE ROLE BACKFILL
+
+Review any migration logic that automatically changes existing users into:
+
+IT_MANAGER
+
+or:
+
+SUPER_ADMIN
+
+based only on legacy "app_role".
+
+Do not unintentionally promote existing employees.
+
+Existing authorization should be migrated conservatively.
+
+---
+
+68. DASHBOARD UI
+
+Keep role-specific dashboard.
+
+IT_MANAGER:
+
+- My Tasks
+- Centre Tasks
+- My Incidents
+- Centre Incidents
+- LAN/System status
+
+VCO:
+
+- Centre Tasks
+- City Tasks
+- Centre Incidents
+- City Incidents
+
+CITY_HEAD:
+
+- City Tasks
+- City Incidents
+- City overview
+
+ROM:
+
+- State Tasks
+- State Incidents
+- Regional overview
+
+ZOM:
+
+- Zone Tasks
+- Zone Incidents
+- Zone overview
+
+SUPER_ADMIN:
+
+- Global Tasks
+- Global Incidents
+- Users
+- Roles
+- Centres
+- Groups
+- System Overview
+
+---
+
+69. COUNTS
+
+Counts must be server-authorized.
+
+Do NOT:
+
+fetch all
+↓
+count all
+↓
+hide unauthorized
+
+Correct:
+
+authorized query
+↓
+count
+
+---
+
+70. REALTIME + DELTA SYNC MUST WORK TOGETHER
+
+Realtime is not the source of truth.
+
+Correct model:
+
+Supabase database
+       ↓
+     server
+       ↓
+ ┌─────────────┐
+ │             │
+Realtime      Delta Sync
+ │             │
+ └──────┬──────┘
+        ↓
+ Local database
+        ↓
+ UI
+
+If realtime event is missed:
+
+Delta sync repairs the state.
+
+If delta sync is delayed:
+
+Realtime may update active UI.
+
+Server remains authoritative.
+
+---
+
+71. EVENT DEDUPLICATION
+
+Current realtime manager has bounded deduplication.
+
+Keep it, but ensure deduplication keys are stable.
+
+Do not deduplicate unrelated updates accidentally.
+
+Use:
+
+- table
+- record ID
+- event type
+- commit/version/event ID
+
+where appropriate.
+
+---
+
+72. REALTIME AUTH TOKEN
+
+Ensure realtime authentication uses current Supabase access token.
+
+After token refresh:
+
+- update realtime authorization
+- reconnect if required
+
+Do not keep an expired token indefinitely.
+
+---
+
+73. REALTIME ROLE SWITCH
+
+When active role changes:
+
+disconnect old role channels
+↓
+update auth context
+↓
+connect new role channels
+
+Do not keep both old and new role subscriptions.
+
+---
+
+74. REALTIME FAILURE
+
+If realtime fails:
+
+App must continue functioning through:
+
+- local cache
+- WorkManager
+- delta sync
+- push notifications
+
+Realtime failure must not make Taskz unusable.
+
+---
+
+75. SYNC STATUS UI
+
+Use clear states:
+
+ONLINE
+SYNCING
+SYNCED
+OFFLINE
+PENDING SYNC
+ERROR
+
+Do not force users to manually sync.
+
+---
+
+76. NETWORK FLAPPING
+
+Test:
+
+ONLINE
+OFFLINE
+ONLINE
+OFFLINE
+ONLINE
+
+Expected:
+
+- no duplicate operations
+- no infinite retry
+- no data loss
+- no duplicate notifications
+- no crash
+
+---
+
+77. DEVICE REBOOT
+
+After phone reboot:
+
+- push token must remain/re-register correctly
+- WorkManager must remain scheduled
+- alarms must continue according to existing alarm architecture
+- no manual sync required
+
+Do not break existing TaskBootReceiver/alarm functionality.
+
+---
+
+78. EXISTING ALARM SYSTEM
+
+Do not confuse:
+
+TASK ALARMS
+
+with:
+
+BACKGROUND DATA SYNC.
+
+The existing:
+
+- TaskAlarmActivity
+- TaskAlarmReceiver
+- TaskAlarmScheduler
+- TaskAlarmService
+- TaskBootReceiver
+
+must continue working.
+
+Do not remove the foreground service used for actual critical alarm behavior merely because normal sync must be battery efficient.
+
+The rule is:
+
+NO PERMANENT FOREGROUND SERVICE FOR NORMAL SYNC.
+
+Existing critical alarm service may remain if required by its functionality.
+
+---
+
+79. SECURITY TESTS
+
+Implement/test:
+
+Test 1
+
+IT Manager Centre A requests Centre B task.
+
+Expected:
+
+SERVER DENIES.
+
+Test 2
+
+VCO City A requests City B task.
+
+Expected:
+
+DENIED.
+
+Test 3
+
+ROM State A requests State B incident.
+
+Expected:
+
+DENIED.
+
+Test 4
+
+ZOM Zone A requests Zone B.
+
+Expected:
+
+DENIED.
+
+Test 5
+
+Normal user attempts SUPER_ADMIN role assignment.
+
+Expected:
+
+DENIED.
+
+Test 6
+
+User modifies local active role to SUPER_ADMIN.
+
+Expected:
+
+Backend still treats user as original role.
+
+---
+
+80. TASK TEST MATRIX
+
+Test:
+
+CENTRE task
+CITY task
+STATE task
+ZONE task
+GLOBAL task
+
+with:
+
+- IT_MANAGER
+- VCO
+- CITY_HEAD
+- ROM
+- ZOM
+- SUPER_ADMIN
+
+Verify visibility, actionability and notification independently.
+
+---
+
+81. INCIDENT TEST MATRIX
+
+Test:
+
+CENTRE incident
+CITY incident
+STATE incident
+ZONE incident
+
+Verify:
+
+- visibility
+- escalation
+- recipient scope
+- resolution
+- audit
+- notification
+
+---
+
+82. PUSH TEST MATRIX
+
+Test:
+
+App open
+
+Expected:
+
+Realtime + notification as designed.
+
+App background
+
+Expected:
+
+FCM push.
+
+App killed
+
+Expected:
+
+FCM push.
+
+Phone locked
+
+Expected:
+
+FCM notification according to Android notification policy.
+
+Multiple devices
+
+Expected:
+
+All active authorized devices.
+
+Invalid token
+
+Expected:
+
+Token deactivated.
+
+Duplicate event
+
+Expected:
+
+One notification.
+
+---
+
+83. FCM SERVER TEST
+
+Verify actual:
+
+notification row
+↓
+push dispatch
+↓
+Edge Function
+↓
+FCM HTTP v1
+↓
+real Android device
+
+Do NOT mark the implementation complete merely because the Edge Function compiles.
+
+Test with a real FCM token.
+
+---
+
+84. EDGE FUNCTION ERROR HANDLING
+
+Improve existing "send-push-notification" if required.
+
+Handle:
+
+- invalid service account
+- OAuth failure
+- invalid token
+- expired token
+- rate limiting
+- transient FCM error
+- partial delivery failure
+- retry
+- duplicate event
+
+Do not mark all tokens inactive for temporary server errors.
+
+Only deactivate tokens when FCM explicitly indicates permanent invalidation such as unregistered token.
+
+---
+
+85. PUSH BATCHING
+
+Current function loops through device tokens one by one.
+
+For large deployments, evaluate batching/concurrency safely.
+
+Do not create:
+
+- one request per recipient from Android
+- uncontrolled parallel requests
+
+Use server-side controlled dispatch.
+
+---
+
+86. PUSH AUTHORIZATION
+
+The Edge Function must NEVER trust a random client payload like:
+
+{
+  "user_ids": ["all users"]
+}
+
+The caller must be trusted server-side.
+
+Preferred:
+
+- service-role-only invocation
+- internal notification dispatcher
+- server-generated recipient list
+
+Never expose service-role authorization to Android.
+
+---
+
+87. NOTIFICATION READ STATE
+
+Read/unread state must remain user-specific.
+
+One user marking a notification read must not mark it read for another device/user.
+
+Multiple devices for same user may synchronize read state appropriately.
+
+---
+
+88. NOTIFICATION DEDUPLICATION
+
+Existing unique key:
+
+(user_id, event_key)
+
+must be preserved.
+
+Use event keys consistently.
+
+Example:
+
+task_assigned:<task_id>:<user_id>
+
+Do not create different event keys for the same logical event.
+
+---
+
+89. PERFORMANCE
+
+Avoid:
+
+- N+1 queries
+- loading all profiles
+- loading all tasks
+- loading all incidents
+- repeated hierarchy fetches
+- repeated role queries
+- repeated token registration
+
+Use:
+
+- indexes
+- scoped queries
+- cached authorization context
+- incremental sync
+- batch operations
+
+---
+
+90. DATABASE INDEXES
+
+Verify indexes for:
+
+profiles
+user_roles
+tasks
+task_participants
+task_visible_users
+system_incidents
+notifications
+device_tokens
+client_events
+user_sync_state
+org_zones
+org_states
+org_cities
+org_centres
+
+Especially:
+
+- user_id
+- role_code
+- centre_id
+- city_id
+- state_id
+- zone_id
+- scope_level
+- updated_at
+- notification user_id
+- notification event_key
+- device token active state
+
+---
+
+91. RLS
+
+Review every policy introduced in migration 013.
+
+No broad:
+
+USING (true)
+
+for ordinary authenticated users.
+
+No broad:
+
+WITH CHECK (true)
+
+for ordinary authenticated users.
+
+Use:
+
+auth.uid()
+
+and server-side authorization helpers.
+
+---
+
+92. SECURITY DEFINER FUNCTIONS
+
+Every "SECURITY DEFINER" RPC must:
+
+- set search_path safely
+- verify auth.uid()
+- verify active user
+- verify role
+- verify scope
+- validate target IDs
+- avoid privilege escalation
+- avoid client-supplied authorization claims
+
+Revoke public execute where necessary.
+
+Grant only:
+
+authenticated
+
+when appropriate.
+
+---
+
+93. AUDIT ALL RPCs
+
+Review:
+
+- create_task_atomic
+- assign_user_to_task
+- request_task_join
+- copy_shift
+- set_initial_onboarding_role
+- admin_update_user_access
+- escalate_system_incident
+- get_scoped_dashboard_summary
+- delta_sync_pull
+- register/deactivate device token
+- notification helpers
+
+Do not assume an RPC is secure because it is "SECURITY DEFINER".
+
+---
+
+94. BACKEND AUTHORIZATION PRINCIPLE
+
+Always derive authority from:
+
+auth.uid()
+↓
+user_roles
+↓
+profiles scope
+↓
+server-side role/scope rules
+
+Never derive authority from:
+
+request.role
+request.user_id
+request.scope
+local preferences
+
+---
+
+95. CODE QUALITY
+
+Do not create duplicated:
+
+- permission managers
+- sync managers
+- notification managers
+- repositories
+- role models
+- scope models
+
+If equivalent classes already exist:
+
+Improve them.
+
+Do not create:
+
+TaskzPermissionManager2
+TaskzSyncManagerNew
+RealtimeManagerV2
+PushManagerNew
+
+unless there is an exceptional reason.
+
+---
+
+96. BUILD CONFIGURATION
+
+Preserve:
+
+applicationId = com.taskz.app
+targetSdk = 36
+
+Do not break existing signing configuration.
+
+Do not remove:
+
+- GitHub Actions
+- existing keystore handling
+- existing versioning
+- existing build configuration
+
+If adding Firebase:
+
+Integrate it correctly with the existing Gradle setup.
+
+---
+
+97. GOOGLE SIGN-IN
+
+Do not break existing Supabase/Google authentication.
+
+After all changes verify:
+
+- normal login
+- Google login
+- session restore
+- logout
+- token refresh
+- multi-device login
+
+---
+
+98. OFFLINE AUTH
+
+Do not accidentally treat an offline session as a fully authoritative server authorization.
+
+Cached authorization may be used for limited offline UX.
+
+When network returns:
+
+Server authorization must be refreshed.
+
+If role/scope has been revoked:
+
+Apply immediately after reconciliation.
+
+---
+
+99. DATA CONSISTENCY
+
+Server is authoritative.
+
+For every entity:
+
+server version
+>
+local version
+
+must win.
+
+Do not overwrite newer server data with stale offline data.
+
+---
+
+100. REQUIRED FINAL DELIVERABLE
+
+After inspecting and fixing the existing project, return:
+
+A. COMPLETE AUDIT REPORT
+
+For every issue found:
+
+File
+Function/Class
+Problem
+Risk
+Fix
+
+B. EXACT FILES CHANGED
+
+List:
+
+modified
+created
+deleted
+
+Do not hide changes.
+
+C. COMPLETE CODE
+
+For every changed/new file, provide complete production-ready code.
+
+Do NOT provide snippets where full replacement is required.
+
+D. COMPLETE SQL
+
+Provide final migration SQL.
+
+It must be:
+
+- safe
+- idempotent where possible
+- non-destructive
+- RLS-secure
+- compatible with existing schema
+- compatible with existing RPC callers
+
+E. FCM SETUP
+
+Provide exact:
+
+- Firebase project configuration
+- Android app registration
+- Gradle dependency
+- google-services integration
+- Firebase Messaging Service
+- token registration
+- Supabase Edge Function secrets
+- FCM service account configuration
+- Edge Function deployment
+- notification trigger/dispatch mechanism
+
+NEVER expose secrets in source control.
+
+F. WORKMANAGER
+
+Provide complete:
+
+- worker
+- constraints
+- retry
+- backoff
+- unique work
+- reconnect handling
+- outbox processing
+
+G. REALTIME
+
+Provide complete:
+
+- connection
+- authentication
+- channel join acknowledgement
+- subscriptions
+- reconnect
+- role switching
+- cleanup
+- delta recovery
+
+H. OFFLINE
+
+Provide complete:
+
+- outbox
+- idempotency
+- conflict resolution
+- cache invalidation
+- sync cursor
+- retry
+
+I. PUSH
+
+Provide complete:
+
+- FCM service
+- token refresh
+- notification handling
+- deep links
+- duplicate prevention
+- logout handling
+- multi-device behavior
+
+---
+
+101. DO NOT SAY "IMPLEMENTED" WITHOUT VERIFYING THE CONNECTION
+
+For each major feature explicitly verify the full path.
+
+Example:
+
+Do not say:
+
+"Push notifications implemented."
+
+Instead verify:
+
+Task created
+↓
+notification row
+↓
+push dispatch trigger
+↓
+Edge Function
+↓
+FCM
+↓
+real device token
+↓
+Android receiver
+↓
+notification
+↓
+deep link
+
+Likewise:
+
+Do not say:
+
+"Realtime implemented."
+
+Verify:
+
+DB change
+↓
+Supabase Realtime
+↓
+channel join confirmed
+↓
+Android event
+↓
+repository/cache
+↓
+UI
+
+Likewise:
+
+Do not say:
+
+"Offline sync implemented."
+
+Verify:
+
+offline action
+↓
+Room outbox
+↓
+process killed
+↓
+network restored
+↓
+WorkManager
+↓
+server RPC
+↓
+idempotency
+↓
+server acknowledgement
+↓
+local SYNCED
+
+---
+
+102. REQUIRED ACCEPTANCE TESTS
+
+The implementation is NOT complete until these are logically covered and, where possible, automated.
+
+ROLE
+
+1. New user gets IT_MANAGER or VCO only.
+2. Self-promotion to SUPER_ADMIN fails.
+3. Multi-role selector works.
+4. Role removal updates permissions.
+5. Role change reaches device.
+
+SCOPE
+
+6. Centre task restricted correctly.
+7. City task propagates correctly.
+8. State task propagates correctly.
+9. Zone task propagates correctly.
+10. Global task works.
+11. Unrelated scope cannot view.
+
+TASK
+
+12. Automatic eligible-user resolution.
+13. Target-role filtering.
+14. Participant/actionability consistency.
+15. «250 recipients handled.»
+16. No duplicate task rows.
+17. No duplicate notifications.
+
+INCIDENT
+
+18. Centre incident.
+19. City incident.
+20. State incident.
+21. Zone incident.
+22. Unauthorized scope creation rejected.
+23. Unauthorized update rejected.
+24. Invalid escalation rejected.
+25. Resolved incident escalation rejected or explicitly controlled.
+26. Correct escalation recipients.
+
+SEARCH
+
+27. Member search is scoped.
+28. Search displays:
+    - name
+    - role
+    - employee ID
+    - email
+    - city
+    - centre
+
+REALTIME
+
+29. Foreground task update.
+30. Foreground incident update.
+31. Role change.
+32. Reconnect after network loss.
+33. Channel join failure.
+34. Token refresh.
+35. Role switch subscription cleanup.
+
+PUSH
+
+36. App open.
+37. App background.
+38. App killed.
+39. Phone locked.
+40. Multiple devices.
+41. Invalid FCM token.
+42. Duplicate event.
+43. Deep link.
+44. Notification permission denied.
+
+OFFLINE
+
+45. Offline read.
+46. Offline task action.
+47. Process killed with pending operation.
+48. Device reboot.
+49. Network returns.
+50. Automatic sync.
+51. Duplicate retry.
+52. Permission revoked while offline.
+
+BATTERY
+
+53. No aggressive polling.
+54. No permanent sync foreground service.
+55. Realtime disconnected when unnecessary.
+56. WorkManager uses network constraints.
+57. Retry uses backoff.
+
+SECURITY
+
+58. RLS prevents cross-centre access.
+59. RLS prevents cross-city access.
+60. RLS prevents cross-state access.
+61. RLS prevents cross-zone access.
+62. Client cannot self-promote.
+63. Client cannot spoof role.
+64. Client cannot spoof scope.
+65. Service role is not in APK.
+66. FCM service account is not in APK.
+
+---
+
+103. FINAL NON-NEGOTIABLE RULES
+
+1. DO NOT rebuild the project.
+2. DO NOT create duplicate architectures.
+3. DO NOT weaken existing security.
+4. DO NOT use NULL as a wildcard.
+5. DO NOT trust Android for authorization.
+6. DO NOT trust client role.
+7. DO NOT trust client scope.
+8. DO NOT fetch all data and filter locally.
+9. DO NOT poll aggressively.
+10. DO NOT use a permanent foreground sync service.
+11. DO NOT depend on WebSocket for killed-app notifications.
+12. DO use FCM for background/killed-app notification.
+13. DO use Realtime for active live updates.
+14. DO use WorkManager for reliable background sync.
+15. DO use Room/outbox for offline mutations.
+16. DO use idempotency.
+17. DO preserve existing alarm functionality.
+18. DO preserve authentication.
+19. DO preserve existing task functionality.
+20. DO preserve existing incident functionality.
+21. DO preserve existing UI.
+22. DO preserve existing GitHub Actions/build/signing.
+23. DO keep server authorization authoritative.
+24. DO keep battery consumption low.
+25. DO require no manual Sync button.
+
+---
+
+104. FINAL EXPECTED USER EXPERIENCE
+
+ONLINE + APP OPEN
+
+Task assigned.
+
+Immediately:
+
+Backend
+↓
+Notification
+↓
+Realtime
+↓
+Local cache
+↓
+UI
+
+User sees task immediately.
+
+---
+
+ONLINE + APP BACKGROUND
+
+Backend
+↓
+FCM
+↓
+Android notification
+
+User receives notification without opening Taskz.
+
+---
+
+APP KILLED
+
+Backend
+↓
+FCM
+↓
+Android
+↓
+Notification
+
+User taps.
+
+Taskz
+↓
+session
+↓
+authorization
+↓
+latest server data
+↓
+Task Details
+
+---
+
+OFFLINE
+
+Cached authorized data
++
+Local pending actions
+
+User does not need to press Sync.
+
+---
+
+NETWORK RETURNS
+
+Network detected
+↓
+WorkManager / SyncManager
+↓
+Pending operations
+↓
+Server
+↓
+Acknowledgement
+↓
+Delta pull
+↓
+Cache reconcile
+↓
+UI update
+
+---
+
+ADMIN CHANGES ROLE
+
+Admin
+↓
+Backend role/scope update
+↓
+Audit log
+↓
+Notification / realtime
+↓
+Affected device
+↓
+Authorization refresh
+↓
+Old cache invalidated
+↓
+New role/scope
+↓
+New tasks/incidents/dashboard
+
+---
+
+105. MOST IMPORTANT INSTRUCTION
+
+Do NOT just make the code compile.
+
+The objective is a REAL production-grade Taskz system where:
+
+- authorization is secure
+- scopes are correct
+- tasks propagate automatically
+- incidents propagate correctly
+- notifications are delivered
+- FCM works when app is killed
+- realtime works when app is active
+- offline actions are durable
+- reconnect sync is automatic
+- duplicate operations are prevented
+- role changes propagate
+- unauthorized users cannot access data
+- battery consumption remains reasonable
+
+After implementation, provide a final table:
+
+Feature| Existing| Fixed| Verified| Remaining
+RBAC| | | | 
+Multi-role| | | | 
+Scope| | | | 
+Task propagation| | | | 
+Incident scope| | | | 
+Member search| | | | 
+Admin management| | | | 
+RLS| | | | 
+Realtime| | | | 
+FCM| | | | 
+Push dispatch| | | | 
+Offline queue| | | | 
+WorkManager| | | | 
+Conflict handling| | | | 
+Idempotency| | | | 
+Battery| | | | 
+Multi-device| | | | 
+Deep links| | | | 
+Build| | | | 
+Tests| | | | 
+
+For every row, do not claim "Verified" unless you actually verified it.
+
+IMPLEMENT AND FIX THE EXISTING TASKZ PROJECT. DO NOT CREATE A DEMO OR A NEW APP.

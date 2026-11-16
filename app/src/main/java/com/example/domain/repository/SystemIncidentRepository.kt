@@ -21,12 +21,15 @@ import com.example.data.local.entity.SystemIncidentAuditEntity
 import com.example.data.local.entity.SystemIncidentEntity
 import com.example.data.local.entity.TaskGroupEntity
 import com.example.data.remote.SupabaseClient
+import com.example.data.remote.SupabaseHttpException
+import com.example.sync.OutboxSyncCoordinator
 import com.example.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -77,16 +80,31 @@ class SystemIncidentRepository(
             if (!networkMonitor.isCurrentlyConnected()) {
                 return@withContext Result.failure(Exception("Offline"))
             }
-            val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            var token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
                 ?: return@withContext Result.failure(Exception("Authentication required"))
-            val res = supabaseClient.fetchSystemIncidents(token)
+            var res = supabaseClient.fetchSystemIncidents(token)
+            if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                if (!refreshed.isNullOrBlank()) {
+                    token = refreshed
+                    res = supabaseClient.fetchSystemIncidents(token)
+                }
+            }
             if (res.isFailure) {
                 return@withContext Result.failure(res.exceptionOrNull() ?: Exception("Failed to fetch incidents"))
             }
             val remoteList = res.getOrDefault(emptyList())
             if (remoteList.isNotEmpty()) {
                 val pendingIds = systemIncidentDao.getPendingIncidents().map { it.id }.toSet()
-                val safeRemote = remoteList.filter { it.id !in pendingIds }
+                val safeRemote = mutableListOf<SystemIncident>()
+                for (remote in remoteList) {
+                    if (remote.id in pendingIds) continue
+                    val existing = systemIncidentDao.getIncidentById(remote.id)
+                    if (existing != null && (existing.syncStatus == "PENDING" || remote.version < existing.version)) {
+                        continue
+                    }
+                    safeRemote.add(remote)
+                }
                 if (safeRemote.isNotEmpty()) {
                     systemIncidentDao.insertIncidents(safeRemote.map { SystemIncidentEntity.fromDomain(it) })
                 }
@@ -106,6 +124,12 @@ class SystemIncidentRepository(
             val o = incidentsArr.optJSONObject(i) ?: continue
             val id = o.optString("id")
             if (id.isBlank() || id in pendingIds) continue
+            val existing = systemIncidentDao.getIncidentById(id)
+            val remoteVersion = o.optLong("version", 1L)
+            if (existing != null && (existing.syncStatus == "PENDING" || remoteVersion < existing.version)) {
+                domains.add(existing.toDomain())
+                continue
+            }
             val incidentMillis = parseIsoMillisOrNow(o.optString("incident_time"))
             val createdMillis = parseIsoMillisOrNow(o.optString("created_at"))
             val updatedMillis = parseIsoMillisOrNow(o.optString("updated_at"))
@@ -151,7 +175,7 @@ class SystemIncidentRepository(
                 status = optStr("status") ?: "OPEN",
                 escalationLevel = optStr("escalation_level") ?: "IT_MANAGER",
                 assignedTo = optStr("assigned_to"),
-                version = o.optLong("version", 1L)
+                version = remoteVersion
             )
             domains.add(domain)
             entities.add(SystemIncidentEntity.fromDomain(domain))
@@ -610,14 +634,35 @@ class SystemIncidentRepository(
                 )
             )
 
-            val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+            var token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
             if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
-                val res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
+                var res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
+                if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    if (!refreshed.isNullOrBlank()) {
+                        token = refreshed
+                        res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
+                    }
+                }
                 if (res.isSuccess) {
                     val synced = updatedLocal.copy(syncStatus = "SYNCED")
                     systemIncidentDao.insertIncident(SystemIncidentEntity.fromDomain(synced))
                     outboxDao.markEventSynced(outboxRowId, "INCIDENT_ESCALATED", System.currentTimeMillis())
                     return@withContext Result.success(synced)
+                } else {
+                    val ex = res.exceptionOrNull()
+                    val errMsg = ex?.message.orEmpty()
+                    if (isPermanentRejection(ex, errMsg)) {
+                        // Roll back local optimistic state and mark outbox permanent failure
+                        systemIncidentDao.insertIncident(SystemIncidentEntity.fromDomain(existing))
+                        outboxDao.markEventFailed(
+                            outboxRowId,
+                            errMsg.ifBlank { "Escalation rejected by server" },
+                            "FAILED_PERMANENT",
+                            System.currentTimeMillis()
+                        )
+                        return@withContext Result.failure(ex ?: IllegalStateException(errMsg.ifBlank { "Escalation rejected" }))
+                    }
                 }
             }
             SyncWorker.enqueueSync(context)
@@ -647,24 +692,54 @@ class SystemIncidentRepository(
     }
 
     suspend fun syncPendingIncidents(): Int = withContext(Dispatchers.IO) {
-        val pending = systemIncidentDao.getPendingIncidents()
         val session = userPrefs.getUserSession()
-        val token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
         val userId = session.userId ?: getActiveUserId()
+        var token = TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
+
+        val pending = OutboxSyncCoordinator.mutex.withLock {
+            systemIncidentDao.getPendingIncidents()
+        }
 
         var syncedCount = 0
-        if (!token.isNullOrBlank() && !token.startsWith("offline_") && networkMonitor.isCurrentlyConnected()) {
+        val initialToken = token
+        if (!initialToken.isNullOrBlank() && !initialToken.startsWith("offline_") && networkMonitor.isCurrentlyConnected()) {
+            var activeToken: String = initialToken
             for (item in pending) {
                 val domain = item.toDomain()
-                val res = supabaseClient.submitSystemIncident(token, domain)
+                var res = supabaseClient.submitSystemIncident(activeToken, domain)
+                if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    if (!refreshed.isNullOrBlank()) {
+                        activeToken = refreshed
+                        res = supabaseClient.submitSystemIncident(activeToken, domain)
+                    }
+                }
                 if (res.isSuccess) {
                     systemIncidentDao.updateSyncStatus(item.id, "SYNCED", null)
-                    outboxDao.getPendingEventsForUser(userId).find { it.eventId == item.submissionId || it.taskId == item.id }?.let { ev ->
-                        outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                    OutboxSyncCoordinator.mutex.withLock {
+                        outboxDao.getPendingEventsForUser(userId)
+                            .find { it.eventId == item.submissionId || it.taskId == item.id }
+                            ?.let { ev ->
+                                outboxDao.markEventSynced(ev.id, "INCIDENT_SYNCED", System.currentTimeMillis())
+                            }
                     }
                     syncedCount++
                 } else {
-                    systemIncidentDao.updateSyncStatus(item.id, "ERROR", res.exceptionOrNull()?.message)
+                    val ex = res.exceptionOrNull()
+                    val errMsg = ex?.message.orEmpty()
+                    if (isPermanentRejection(ex, errMsg)) {
+                        systemIncidentDao.updateSyncStatus(item.id, "ERROR", errMsg)
+                        OutboxSyncCoordinator.mutex.withLock {
+                            outboxDao.getPendingEventsForUser(userId)
+                                .find { it.eventId == item.submissionId || it.taskId == item.id }
+                                ?.let { ev ->
+                                    outboxDao.markEventFailed(ev.id, errMsg, "FAILED_PERMANENT", System.currentTimeMillis())
+                                }
+                        }
+                    } else {
+                        // Keep PENDING so background SyncWorker retries transient network/5xx errors
+                        systemIncidentDao.updateSyncStatus(item.id, "PENDING", errMsg)
+                    }
                 }
             }
         }
@@ -684,6 +759,28 @@ class SystemIncidentRepository(
         } catch (_: Exception) {}
 
         return@withContext syncedCount
+    }
+
+    private fun isAuthExpiredError(err: Throwable?): Boolean {
+        if (err is SupabaseHttpException && err.statusCode == 401) return true
+        val msg = err?.message.orEmpty()
+        return msg.contains("JWT", ignoreCase = true) ||
+            msg.contains("401", ignoreCase = true) ||
+            msg.contains("Unauthorized", ignoreCase = true)
+    }
+
+    private fun isPermanentRejection(err: Throwable?, msg: String): Boolean {
+        if (err is SupabaseHttpException && err.statusCode in setOf(400, 403, 404, 422)) {
+            return true
+        }
+        return msg.contains("forbidden", ignoreCase = true) ||
+            msg.contains("not authorized", ignoreCase = true) ||
+            msg.contains("unauthorized", ignoreCase = true) ||
+            msg.contains("sequential escalation", ignoreCase = true) ||
+            msg.contains("invalid escalation", ignoreCase = true) ||
+            msg.contains("already resolved", ignoreCase = true) ||
+            msg.contains("not found", ignoreCase = true) ||
+            msg.contains("invalid input syntax", ignoreCase = true)
     }
 
     // ==========================================

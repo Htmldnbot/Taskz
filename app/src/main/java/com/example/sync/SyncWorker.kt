@@ -17,6 +17,7 @@ import com.example.data.local.TaskzDatabase
 import com.example.data.remote.SupabaseClient
 import com.example.data.remote.SupabaseHttpException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -42,7 +43,7 @@ class SyncWorker(
 
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
                 syncRequest
             )
         }
@@ -102,9 +103,11 @@ class SyncWorker(
 
         var token = tokenRes.getOrThrow()
 
-        // Clean up any synthetic pre-migration legacy outbox entries and query strictly active user's queue
-        outboxDao.deleteLegacyPreMigrationEvents(activeUserId)
-        val pendingEvents = outboxDao.getPendingEventsForUser(activeUserId)
+        // Clean up any synthetic pre-migration legacy outbox entries and claim strictly active user's queue atomically
+        val pendingEvents = OutboxSyncCoordinator.mutex.withLock {
+            outboxDao.deleteLegacyPreMigrationEvents(activeUserId)
+            outboxDao.claimEventsForSync(activeUserId)
+        }
         if (pendingEvents.isEmpty()) {
             runCatching { TaskzApplication.instance.taskzSyncManager.syncNow() }
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
@@ -114,14 +117,11 @@ class SyncWorker(
             return@withContext Result.success()
         }
 
-        Log.d(TAG, "Processing ${pendingEvents.size} pending outbox events for user $activeUserId")
+        Log.d(TAG, "Processing ${pendingEvents.size} claimed outbox events for user $activeUserId")
         var hasRetryableFailure = false
         var authPaused = false
 
         for (event in pendingEvents) {
-            val now = System.currentTimeMillis()
-            outboxDao.markEventSending(event.id, now)
-
             try {
                 when (event.operationType) {
                     "TASK_CREATION" -> {
@@ -147,10 +147,9 @@ class SyncWorker(
                                 db.taskDao().updateTaskStatus(event.taskId, "open")
                             }
                         } else {
-                            val err = res.exceptionOrNull()?.message ?: "Task creation sync error"
-                            val isPermanent = err.contains("not authorized", ignoreCase = true) ||
-                                    err.contains("inactive", ignoreCase = true) ||
-                                    err.contains("cannot be blank", ignoreCase = true)
+                            val ex = res.exceptionOrNull()
+                            val err = ex?.message ?: "Task creation sync error"
+                            val isPermanent = isPermanentError(ex, err)
                             val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
                             outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
                             if (!isPermanent) hasRetryableFailure = true
@@ -280,12 +279,9 @@ class SyncWorker(
                                 db.taskDao().updateTaskStatus(event.taskId, newStatus)
                             }
                         } else {
-                            val err = res.exceptionOrNull()?.message ?: "Unknown server error"
-                            val isPermanent = err.contains("not found", ignoreCase = true) ||
-                                    err.contains("cancelled", ignoreCase = true) ||
-                                    err.contains("violates foreign key", ignoreCase = true) ||
-                                    err.contains("invalid input syntax", ignoreCase = true)
-
+                            val ex = res.exceptionOrNull()
+                            val err = ex?.message ?: "Unknown server error"
+                            val isPermanent = isPermanentError(ex, err)
                             val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
                             outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
                             if (!isPermanent) hasRetryableFailure = true
@@ -319,9 +315,9 @@ class SyncWorker(
                             outboxDao.markEventSynced(event.id, "ACK_CONFIRMED", System.currentTimeMillis())
                             db.taskResponseDao().markAcknowledgementSynced(event.eventId)
                         } else {
-                            val err = res.exceptionOrNull()?.message ?: "Unknown ack error"
-                            val isPermanent = err.contains("not found", ignoreCase = true) ||
-                                    err.contains("violates foreign key", ignoreCase = true)
+                            val ex = res.exceptionOrNull()
+                            val err = ex?.message ?: "Unknown ack error"
+                            val isPermanent = isPermanentError(ex, err)
                             outboxDao.markEventFailed(event.id, err, if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE", System.currentTimeMillis())
                             if (!isPermanent) hasRetryableFailure = true
                         }
@@ -390,7 +386,7 @@ class SyncWorker(
                         } else {
                             val ex = res.exceptionOrNull()
                             when {
-                                ex is SupabaseHttpException && ex.isAuthFailure -> {
+                                ex is SupabaseHttpException && ex.statusCode == 401 -> {
                                     outboxDao.resetSendingToPendingForUser(activeUserId)
                                     authPaused = true
                                 }
@@ -399,9 +395,10 @@ class SyncWorker(
                                 }
                                 else -> {
                                     val err = ex?.message ?: "Incident escalation sync error"
-                                    val isPermanent = err.contains("not authorized", true) ||
-                                        err.contains("forbidden", true) ||
-                                        err.contains("invalid escalation", true)
+                                    val isPermanent = isPermanentError(ex, err) ||
+                                        err.contains("invalid escalation", true) ||
+                                        err.contains("sequential escalation", true) ||
+                                        err.contains("resolved", true)
                                     outboxDao.markEventFailed(
                                         event.id,
                                         err,
@@ -466,10 +463,13 @@ class SyncWorker(
             } catch (e: SupabaseHttpException) {
                 Log.w(TAG, "HTTP ${e.statusCode} on event ${event.id}: ${e.message}")
                 when {
-                    e.isAuthFailure -> {
+                    e.statusCode == 401 -> {
                         outboxDao.resetSendingToPendingForUser(activeUserId)
                         authPaused = true
                         break
+                    }
+                    e.statusCode == 403 || isPermanentError(e, e.message) -> {
+                        outboxDao.markEventFailed(event.id, e.message, "FAILED_PERMANENT", System.currentTimeMillis())
                     }
                     e.isConflict -> {
                         outboxDao.markEventSynced(event.id, "CONFLICT_SERVER_WINS", System.currentTimeMillis())
@@ -553,7 +553,7 @@ class SyncWorker(
     }
 
     private fun isAuthExpiredError(err: Throwable?): Boolean {
-        if (err is SupabaseHttpException && err.isAuthFailure) return true
+        if (err is SupabaseHttpException && err.statusCode == 401) return true
         return isAuthExpiredError(err?.message)
     }
 
@@ -562,5 +562,23 @@ class SyncWorker(
         return msg.contains("JWT", ignoreCase = true) ||
             msg.contains("401", ignoreCase = true) ||
             msg.contains("Unauthorized", ignoreCase = true)
+    }
+
+    private fun isPermanentError(err: Throwable?, msg: String): Boolean {
+        if (err is SupabaseHttpException && err.statusCode in setOf(400, 403, 404, 422)) {
+            return true
+        }
+        return msg.contains("forbidden", ignoreCase = true) ||
+            msg.contains("not authorized", ignoreCase = true) ||
+            msg.contains("unauthorized", ignoreCase = true) ||
+            msg.contains("permission revoked", ignoreCase = true) ||
+            msg.contains("not found", ignoreCase = true) ||
+            msg.contains("cancelled", ignoreCase = true) ||
+            msg.contains("inactive", ignoreCase = true) ||
+            msg.contains("cannot be blank", ignoreCase = true) ||
+            msg.contains("violates foreign key", ignoreCase = true) ||
+            msg.contains("invalid input syntax", ignoreCase = true) ||
+            msg.contains("already resolved", ignoreCase = true) ||
+            msg.contains("sequential escalation", ignoreCase = true)
     }
 }

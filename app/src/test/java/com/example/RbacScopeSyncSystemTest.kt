@@ -21,6 +21,7 @@ import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.ProfileEntity
 import com.example.data.local.entity.SystemIncidentEntity
 import com.example.data.local.entity.TaskEntity
+import com.example.data.remote.ChannelJoinState
 import com.example.data.remote.RealtimeEventType
 import com.example.data.remote.SupabaseClient
 import com.example.data.remote.SupabaseHttpException
@@ -440,19 +441,25 @@ class RbacScopeSyncSystemTest {
         assertFalse(NotificationCategory.TASK_ASSIGNMENT.urgent)
     }
 
-    // ---- Section 52 & 77: Per-Device Identity & Token Fallback ----
+    // ---- Section 52 & 77: Per-Device Identity & Real FCM Token Enforcement ----
 
     @Test
-    fun deviceTokenManagerMaintainsStableDeviceIdAndFallbackToken() = runBlocking {
+    fun deviceTokenManagerRejectsLocalTokensAndStoresRealFcmToken() = runBlocking {
         val tokenMgr = DeviceTokenManager(context, userPrefs, SupabaseClient())
         val firstDeviceId = tokenMgr.getDeviceId()
         val secondDeviceId = tokenMgr.getDeviceId()
         assertFalse(firstDeviceId.isBlank())
         assertEquals(firstDeviceId, secondDeviceId)
-        assertEquals("local:$firstDeviceId", tokenMgr.getCurrentOrFallbackToken())
+        assertNull("Unregistered device must not fabricate a local:* push token", tokenMgr.getRegisteredPushToken())
+
+        userPrefs.savePushToken("local:$firstDeviceId")
+        assertNull("Legacy local:* tokens must be rejected", tokenMgr.getRegisteredPushToken())
 
         userPrefs.savePushToken("fcm-token-device-1")
-        assertEquals("fcm-token-device-1", tokenMgr.getCurrentOrFallbackToken())
+        assertEquals("fcm-token-device-1", tokenMgr.getRegisteredPushToken())
+
+        tokenMgr.onNewPushToken("fcm-rotated-token-2")
+        assertEquals("fcm-rotated-token-2", tokenMgr.getRegisteredPushToken())
     }
 
     // ---- Section 53: Deep Link Routing ----
@@ -483,9 +490,21 @@ class RbacScopeSyncSystemTest {
             DeepLinkTarget.TaskDetails("t-intent-7", "n-intent-7"),
             NotificationDeepLinkRouter.pendingTarget.value
         )
+
+        NotificationDeepLinkRouter.consume()
+        val fcmTrayIntent = Intent().apply {
+            putExtra("deep_link", "taskz://incident/inc-fcm-9")
+            putExtra("incident_id", "inc-fcm-9")
+            putExtra("notification_id", "n-fcm-9")
+        }
+        NotificationDeepLinkRouter.handleIntent(fcmTrayIntent)
+        assertEquals(
+            DeepLinkTarget.IncidentDetails("inc-fcm-9", "n-fcm-9"),
+            NotificationDeepLinkRouter.pendingTarget.value
+        )
     }
 
-    // ---- Section 70 & 61: Realtime Frame Parsing & Duplicate Event Protection ----
+    // ---- Section 70 & 61: Realtime Frame Parsing, Channel Join States & Duplicate Event Protection ----
 
     @Test
     fun realtimeManagerParsesChangesRoutesRoleUpdatesAndDropsDuplicateFrames() {
@@ -506,6 +525,111 @@ class RbacScopeSyncSystemTest {
         """.trimIndent()
         val roleSignal = rt.handleIncomingFrame(roleFrame)
         assertEquals(RealtimeEventType.ROLE_OR_SCOPE_CHANGED, roleSignal?.type)
+    }
+
+    @Test
+    fun realtimeManagerTracksJoinStatesAndHandlesChannelErrors() {
+        val rt = TaskzRealtimeManager()
+        assertFalse(rt.isConnected.value)
+
+        val okReply = """["1","10","realtime:tasks_IT_MANAGER","phx_reply",{"status":"ok","response":{}}]"""
+        rt.handleIncomingFrame(okReply)
+        assertTrue(rt.isConnected.value)
+        assertEquals(ChannelJoinState.JOINED, rt.channelJoinStates.value["realtime:tasks_IT_MANAGER"])
+
+        val errFrame = """["1","10","realtime:tasks_IT_MANAGER","phx_error",{}]"""
+        rt.handleIncomingFrame(errFrame)
+        assertFalse(rt.isConnected.value)
+        assertEquals(ChannelJoinState.ERROR, rt.channelJoinStates.value["realtime:tasks_IT_MANAGER"])
+        assertNotNull(rt.lastChannelError.value)
+
+        val rejectedReply = """["1","11","realtime:notifications_u1","phx_reply",{"status":"error","response":{"reason":"unauthorized"}}]"""
+        rt.handleIncomingFrame(rejectedReply)
+        assertEquals(ChannelJoinState.ERROR, rt.channelJoinStates.value["realtime:notifications_u1"])
+        assertTrue(rt.lastChannelError.value?.contains("rejected") == true)
+    }
+
+    @Test
+    fun nullScopeIdsFailClosedForScopedRolesAndMismatchedGlobalRecords() {
+        val centreTaskA = TaskItem(
+            id = "task-centre-a",
+            title = "Check Server",
+            createdBy = "other-user",
+            scopeLevel = ScopeLevel.CENTRE,
+            zoneId = "zone-1",
+            stateId = "state-1",
+            cityId = "city-1",
+            centreId = "centre-a"
+        )
+        val unmappedNullScopeTask = TaskItem(
+            id = "task-null-centre",
+            title = "Unmapped Centre Task",
+            createdBy = "other-user",
+            scopeLevel = ScopeLevel.CENTRE,
+            zoneId = null,
+            stateId = null,
+            cityId = null,
+            centreId = null
+        )
+        val mismatchedGlobalTask = TaskItem(
+            id = "task-mismatched-global",
+            title = "Mismatched Global",
+            createdBy = "other-user",
+            scopeLevel = ScopeLevel.GLOBAL,
+            zoneId = "zone-other"
+        )
+
+        val unmappedItMgr = TaskzPermissionManager(
+            buildContext(
+                userId = "it-unmapped",
+                role = TaskzRole.IT_MANAGER,
+                zoneId = null,
+                stateId = null,
+                cityId = null,
+                centreId = null
+            )
+        )
+        assertFalse(unmappedItMgr.canViewTask(centreTaskA))
+        assertFalse(unmappedItMgr.canViewTask(unmappedNullScopeTask))
+
+        val rom = TaskzPermissionManager(
+            buildContext(
+                userId = "rom-user",
+                role = TaskzRole.ROM,
+                zoneId = "zone-1",
+                stateId = "state-1",
+                cityId = null,
+                centreId = null
+            )
+        )
+        assertFalse("GLOBAL records with org IDs attached must fail closed", rom.canViewTask(mismatchedGlobalTask))
+    }
+
+    @Test
+    fun outboxClaimEventsPreventsDoubleClaimAndRecoversStaleLease() = runBlocking {
+        db.outboxDao().enqueueEvent(
+            OutboxEventEntity(
+                eventId = "lease-op-1",
+                userId = "user-lease",
+                taskId = "task-lease-1",
+                operationType = "TASK_RESPONSE",
+                payloadJson = """{"responseValue":"YES"}""",
+                syncStatus = "PENDING",
+                createdAt = 100L
+            )
+        )
+
+        val firstClaim = db.outboxDao().claimEventsForSync("user-lease", now = 1_000_000L, leaseTimeoutMs = 120_000L)
+        assertEquals(1, firstClaim.size)
+        assertEquals("SENDING", firstClaim.first().syncStatus)
+        assertEquals(1, firstClaim.first().attemptCount)
+
+        val concurrentClaim = db.outboxDao().claimEventsForSync("user-lease", now = 1_050_000L, leaseTimeoutMs = 120_000L)
+        assertTrue("Active lease must not be claimed concurrently", concurrentClaim.isEmpty())
+
+        val staleRecoveryClaim = db.outboxDao().claimEventsForSync("user-lease", now = 1_200_000L, leaseTimeoutMs = 120_000L)
+        assertEquals("Expired lease should be recovered cleanly", 1, staleRecoveryClaim.size)
+        assertEquals(2, staleRecoveryClaim.first().attemptCount)
     }
 
     // ---- Section 63 & 79: Error Handling Classification ----

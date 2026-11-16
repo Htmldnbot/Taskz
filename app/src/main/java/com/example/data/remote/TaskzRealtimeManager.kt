@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.core.model.OrgScope
 import com.example.core.network.SupabaseConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +33,12 @@ enum class RealtimeEventType {
     ROLE_OR_SCOPE_CHANGED
 }
 
+enum class ChannelJoinState {
+    JOINING,
+    JOINED,
+    ERROR
+}
+
 data class RealtimeSignal(
     val type: RealtimeEventType,
     val table: String,
@@ -42,9 +49,10 @@ data class RealtimeSignal(
 /**
  * Lifecycle-aware Supabase Realtime (Phoenix v2 WebSocket) manager.
  * - Connects ONLY while app is active in foreground and session is authenticated.
- * - Cleanly disconnects in background or on logout to preserve battery.
+ * - Confirms channel `phx_reply` joins before marking realtime ready/connected.
+ * - Scopes subscriptions by user ID and active OrgScope where unambiguous.
  * - Deduplicates repeated realtime payloads with a bounded LRU event cache.
- * - Uses jittered exponential backoff and stops retrying on HTTP 401/403 authorization rejections.
+ * - Uses jittered exponential backoff and recovers cleanly on network restoration / token refresh.
  */
 class TaskzRealtimeManager(
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
@@ -63,6 +71,12 @@ class TaskzRealtimeManager(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refCounter = AtomicInteger(1)
     private val recentEventKeys = LinkedHashSet<String>()
+    private val pendingJoinTopicsByRef = mutableMapOf<String, String>()
+    private val _channelJoinStates = MutableStateFlow<Map<String, ChannelJoinState>>(emptyMap())
+    val channelJoinStates: StateFlow<Map<String, ChannelJoinState>> = _channelJoinStates.asStateFlow()
+
+    private val _lastChannelError = MutableStateFlow<String?>(null)
+    val lastChannelError: StateFlow<String?> = _lastChannelError.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -71,11 +85,13 @@ class TaskzRealtimeManager(
     val signals: SharedFlow<RealtimeSignal> = _signals.asSharedFlow()
 
     @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var socketOpen: Boolean = false
     @Volatile private var heartbeatJob: Job? = null
     @Volatile private var reconnectJob: Job? = null
     @Volatile private var currentAccessToken: String? = null
     @Volatile private var currentUserId: String? = null
     @Volatile private var currentRoleCode: String = "IT_MANAGER"
+    @Volatile private var currentOrgScope: OrgScope? = null
     @Volatile private var isForeground: Boolean = false
     @Volatile private var reconnectAttempt: Int = 0
     @Volatile private var authRejected: Boolean = false
@@ -83,19 +99,37 @@ class TaskzRealtimeManager(
     fun setForegroundState(foreground: Boolean) {
         isForeground = foreground
         if (foreground) {
-            if (!authRejected) connectIfEligible()
+            if (!authRejected) {
+                reconnectAttempt = 0
+                connectIfEligible()
+            }
         } else {
             disconnect(clearSession = false)
         }
     }
 
-    fun updateSessionAndRole(accessToken: String?, userId: String?, activeRoleCode: String) {
+    fun recoverConnectionIfEligible() {
+        if (!isForeground || authRejected) return
+        if (webSocket == null) {
+            reconnectAttempt = 0
+            connectIfEligible()
+        }
+    }
+
+    fun updateSessionAndRole(
+        accessToken: String?,
+        userId: String?,
+        activeRoleCode: String,
+        orgScope: OrgScope? = currentOrgScope
+    ) {
         val changed = currentAccessToken != accessToken ||
             currentUserId != userId ||
-            currentRoleCode != activeRoleCode
+            currentRoleCode != activeRoleCode ||
+            currentOrgScope != orgScope
         currentAccessToken = accessToken
         currentUserId = userId
         currentRoleCode = activeRoleCode
+        currentOrgScope = orgScope
         authRejected = false
         reconnectAttempt = 0
         if (accessToken.isNullOrBlank() || userId.isNullOrBlank() || accessToken.startsWith("offline_")) {
@@ -108,8 +142,10 @@ class TaskzRealtimeManager(
         }
     }
 
-    fun refreshSubscriptionsForRoleSwitch(activeRoleCode: String) {
+    fun refreshSubscriptionsForRoleSwitch(activeRoleCode: String, orgScope: OrgScope? = currentOrgScope) {
         currentRoleCode = activeRoleCode
+        currentOrgScope = orgScope
+        reconnectAttempt = 0
         if (isForeground && !currentAccessToken.isNullOrBlank() && !currentUserId.isNullOrBlank()) {
             disconnect(clearSession = false)
             connectIfEligible()
@@ -121,14 +157,19 @@ class TaskzRealtimeManager(
         heartbeatJob = null
         reconnectJob?.cancel()
         reconnectJob = null
+        socketOpen = false
         try {
             webSocket?.close(1000, "Lifecycle/Logout disconnect")
         } catch (_: Exception) {}
         webSocket = null
+        synchronized(pendingJoinTopicsByRef) { pendingJoinTopicsByRef.clear() }
+        _channelJoinStates.value = emptyMap()
         _isConnected.value = false
         if (clearSession) {
             currentAccessToken = null
             currentUserId = null
+            currentOrgScope = null
+            _lastChannelError.value = null
             synchronized(recentEventKeys) { recentEventKeys.clear() }
         }
     }
@@ -149,9 +190,10 @@ class TaskzRealtimeManager(
         val request = Request.Builder().url(wsUrl).build()
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "Realtime connected for user=$uid role=$currentRoleCode")
+                Log.d(TAG, "Realtime socket opened for user=$uid role=$currentRoleCode; awaiting phx_reply joins")
+                socketOpen = true
                 reconnectAttempt = 0
-                _isConnected.value = true
+                _lastChannelError.value = null
                 subscribeUserChannels(webSocket, token, uid)
                 startHeartbeat(webSocket)
             }
@@ -164,10 +206,13 @@ class TaskzRealtimeManager(
                 val code = response?.code
                 Log.w(TAG, "Realtime failure (code=$code): ${t.message}")
                 this@TaskzRealtimeManager.webSocket = null
+                socketOpen = false
                 _isConnected.value = false
+                _channelJoinStates.value = emptyMap()
                 heartbeatJob?.cancel()
                 if (code == 401 || code == 403) {
                     authRejected = true
+                    _lastChannelError.value = "Realtime unauthorized (HTTP $code)"
                     return
                 }
                 scheduleReconnect()
@@ -175,7 +220,9 @@ class TaskzRealtimeManager(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 this@TaskzRealtimeManager.webSocket = null
+                socketOpen = false
                 _isConnected.value = false
+                _channelJoinStates.value = emptyMap()
                 heartbeatJob?.cancel()
                 if (isForeground && code != 1000 && !authRejected) {
                     scheduleReconnect()
@@ -184,36 +231,59 @@ class TaskzRealtimeManager(
         })
     }
 
+    private fun resolveScopedFilter(): String? {
+        val sc = currentOrgScope ?: return null
+        return when (currentRoleCode.uppercase()) {
+            "SUPER_ADMIN", "COMMAND_CENTER" -> null
+            "ZOM" -> sc.zoneId?.let { "zone_id=eq.$it" }
+            "ROM" -> sc.stateId?.let { "state_id=eq.$it" }
+            "CITY_HEAD" -> sc.cityId?.let { "city_id=eq.$it" }
+            "VCO" -> sc.cityId?.let { "city_id=eq.$it" } ?: sc.centreId?.let { "centre_id=eq.$it" }
+            "IT_MANAGER" -> sc.centreId?.let { "centre_id=eq.$it" }
+            else -> sc.centreId?.let { "centre_id=eq.$it" }
+        }
+    }
+
     private fun subscribeUserChannels(ws: WebSocket, token: String, uid: String) {
+        val scopeFilter = resolveScopedFilter()
         val specs = listOf(
             Triple("realtime:notifications_$uid", "notifications", "user_id=eq.$uid"),
             Triple("realtime:user_roles_$uid", "user_roles", "user_id=eq.$uid"),
             Triple("realtime:profiles_$uid", "profiles", "id=eq.$uid"),
-            Triple("realtime:tasks_$currentRoleCode", "tasks", null),
-            Triple("realtime:incidents_$currentRoleCode", "system_incidents", null)
+            Triple("realtime:tasks_$currentRoleCode", "tasks", scopeFilter),
+            Triple("realtime:incidents_$currentRoleCode", "system_incidents", scopeFilter)
         )
-        specs.forEach { (topic, table, filter) ->
-            val pgChange = JSONObject().apply {
-                put("event", "*")
-                put("schema", "public")
-                put("table", table)
-                if (!filter.isNullOrBlank()) put("filter", filter)
+        val initialStates = mutableMapOf<String, ChannelJoinState>()
+        synchronized(pendingJoinTopicsByRef) {
+            pendingJoinTopicsByRef.clear()
+            specs.forEach { (topic, table, filter) ->
+                val ref = refCounter.getAndIncrement().toString()
+                pendingJoinTopicsByRef[ref] = topic
+                initialStates[topic] = ChannelJoinState.JOINING
+
+                val pgChange = JSONObject().apply {
+                    put("event", "*")
+                    put("schema", "public")
+                    put("table", table)
+                    if (!filter.isNullOrBlank()) put("filter", filter)
+                }
+                val payload = JSONObject().apply {
+                    put("config", JSONObject().apply {
+                        put("postgres_changes", JSONArray().put(pgChange))
+                    })
+                    put("access_token", token)
+                }
+                val frame = JSONArray().apply {
+                    put("1")
+                    put(ref)
+                    put(topic)
+                    put("phx_join")
+                    put(payload)
+                }
+                ws.send(frame.toString())
             }
-            val payload = JSONObject().apply {
-                put("config", JSONObject().apply {
-                    put("postgres_changes", JSONArray().put(pgChange))
-                })
-                put("access_token", token)
-            }
-            val frame = JSONArray().apply {
-                put("1")
-                put(refCounter.getAndIncrement().toString())
-                put(topic)
-                put("phx_join")
-                put(payload)
-            }
-            ws.send(frame.toString())
         }
+        _channelJoinStates.value = initialStates
     }
 
     private fun startHeartbeat(ws: WebSocket) {
@@ -235,7 +305,10 @@ class TaskzRealtimeManager(
 
     private fun scheduleReconnect() {
         if (!isForeground || authRejected || currentAccessToken.isNullOrBlank()) return
-        if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) return
+        if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+            _lastChannelError.value = "Realtime paused after max retries; waiting for network/foreground recovery"
+            return
+        }
         reconnectJob?.cancel()
         val attempt = reconnectAttempt++
         val baseDelay = minOf(60_000L, 1_500L shl attempt)
@@ -250,34 +323,77 @@ class TaskzRealtimeManager(
         return try {
             val arr = JSONArray(rawFrame)
             if (arr.length() < 5) return null
+            val ref = arr.optString(1)
+            val topic = arr.optString(2)
             val event = arr.optString(3)
-            if (event != "postgres_changes") return null
             val payload = arr.optJSONObject(4) ?: return null
-            val data = payload.optJSONObject("data") ?: return null
-            val table = data.optString("table")
-            val commitTs = data.optString("commit_timestamp")
-            val record = data.optJSONObject("record") ?: data.optJSONObject("old_record")
-            val recordId = record?.optString("id")
 
-            val dedupKey = "$table|$recordId|$commitTs|${data.optString("type")}"
-            if (!markSeenIfNew(dedupKey)) {
-                return null
-            }
+            when (event) {
+                "phx_reply" -> {
+                    val joinedTopic = synchronized(pendingJoinTopicsByRef) {
+                        pendingJoinTopicsByRef.remove(ref)
+                    } ?: topic.takeIf { it.startsWith("realtime:") }
+                    if (joinedTopic != null) {
+                        val status = payload.optString("status")
+                        val updated = _channelJoinStates.value.toMutableMap()
+                        if (status.equals("ok", ignoreCase = true)) {
+                            updated[joinedTopic] = ChannelJoinState.JOINED
+                            _channelJoinStates.value = updated
+                            _isConnected.value = updated.values.any { it == ChannelJoinState.JOINED }
+                        } else {
+                            updated[joinedTopic] = ChannelJoinState.ERROR
+                            _channelJoinStates.value = updated
+                            val reason = payload.optJSONObject("response")?.optString("reason")
+                                ?: payload.optString("response")
+                            _lastChannelError.value = "Channel join rejected ($joinedTopic): $reason"
+                            Log.w(TAG, "Channel join rejected: topic=$joinedTopic reason=$reason")
+                            if (reason.contains("unauthorized", true) || reason.contains("jwt", true)) {
+                                authRejected = true
+                            }
+                            _isConnected.value = updated.values.any { it == ChannelJoinState.JOINED }
+                        }
+                    }
+                    return null
+                }
+                "phx_error", "phx_close" -> {
+                    if (topic.startsWith("realtime:")) {
+                        val updated = _channelJoinStates.value.toMutableMap()
+                        updated[topic] = ChannelJoinState.ERROR
+                        _channelJoinStates.value = updated
+                        _lastChannelError.value = "Channel $event on $topic"
+                        _isConnected.value = updated.values.any { it == ChannelJoinState.JOINED }
+                    }
+                    return null
+                }
+                "postgres_changes" -> {
+                    val data = payload.optJSONObject("data") ?: return null
+                    val table = data.optString("table")
+                    val commitTs = data.optString("commit_timestamp")
+                    val record = data.optJSONObject("record") ?: data.optJSONObject("old_record")
+                    val recordId = record?.optString("id")
 
-            val signalType = when (table) {
-                "notifications" -> RealtimeEventType.NOTIFICATION_CREATED
-                "user_roles", "profiles" -> RealtimeEventType.ROLE_OR_SCOPE_CHANGED
-                "system_incidents" -> RealtimeEventType.INCIDENT_CHANGED
-                else -> RealtimeEventType.TASK_CHANGED
+                    val dedupKey = "$table|$recordId|$commitTs|${data.optString("type")}"
+                    if (!markSeenIfNew(dedupKey)) {
+                        return null
+                    }
+
+                    val signalType = when (table) {
+                        "notifications" -> RealtimeEventType.NOTIFICATION_CREATED
+                        "user_roles", "profiles" -> RealtimeEventType.ROLE_OR_SCOPE_CHANGED
+                        "system_incidents" -> RealtimeEventType.INCIDENT_CHANGED
+                        else -> RealtimeEventType.TASK_CHANGED
+                    }
+                    val signal = RealtimeSignal(
+                        type = signalType,
+                        table = table,
+                        recordId = recordId,
+                        commitTimestamp = commitTs
+                    )
+                    _signals.tryEmit(signal)
+                    return signal
+                }
+                else -> return null
             }
-            val signal = RealtimeSignal(
-                type = signalType,
-                table = table,
-                recordId = recordId,
-                commitTimestamp = commitTs
-            )
-            _signals.tryEmit(signal)
-            signal
         } catch (_: Exception) {
             null
         }

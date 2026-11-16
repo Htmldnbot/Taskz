@@ -79,9 +79,14 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.TaskzApplication
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.TaskzRole
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -112,17 +117,22 @@ fun IncidentHistoryScreen(
     val selectedIncident by viewModel.selectedIncident.collectAsStateWithLifecycle()
     val selectedAudits by viewModel.incidentAudits.collectAsStateWithLifecycle()
     var incidentToDelete by remember { mutableStateOf<SystemIncident?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val uiScope = rememberCoroutineScope()
+    val activeContext by TaskzApplication.instance.permissionManager.contextFlow.collectAsStateWithLifecycle()
+    val isSuperAdmin = activeContext.activeRole == TaskzRole.SUPER_ADMIN
 
     val hasActiveFilter = myReportsOnly || filterShiftedOnly || filterLan != null ||
         filterCentre != null || filterCity != null || filterState != null || filterZone != null ||
         (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
         // Search & Refresh Row
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -350,6 +360,14 @@ fun IncidentHistoryScreen(
                 }
             }
         }
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp)
+        )
     }
 
     // Delete Incident Dialog
@@ -389,12 +407,24 @@ fun IncidentHistoryScreen(
             incident = selectedIncident!!,
             audits = selectedAudits,
             canEscalate = viewModel.canEscalateIncident(selectedIncident!!),
+            isSuperAdmin = isSuperAdmin,
             onEscalate = { targetLevel, reason ->
                 viewModel.escalateIncident(
                     incidentId = selectedIncident!!.id,
                     targetLevel = targetLevel,
                     reason = reason
-                )
+                ) { res ->
+                    uiScope.launch {
+                        res.fold(
+                            onSuccess = { updated ->
+                                snackbarHostState.showSnackbar("Incident escalated to ${TaskzRole.fromCode(updated.escalationLevel).displayName}")
+                            },
+                            onFailure = { err ->
+                                snackbarHostState.showSnackbar(err.message ?: "Escalation failed")
+                            }
+                        )
+                    }
+                }
             },
             onDismiss = { viewModel.dismissIncidentDetail() }
         )
@@ -606,17 +636,22 @@ fun IncidentDetailDialog(
     incident: SystemIncident,
     audits: List<SystemIncidentAudit>,
     canEscalate: Boolean = false,
+    isSuperAdmin: Boolean = false,
     onEscalate: (String, String?) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
     val scroll = rememberScrollState()
     var showEscalatePicker by remember { mutableStateOf(false) }
     val currentLevelRole = TaskzRole.fromCode(incident.escalationLevel)
-    val higherChain = remember(incident.escalationLevel) {
+    val higherChain = remember(incident.escalationLevel, isSuperAdmin) {
         val higher = TaskzRole.escalationChain.filter { it.hierarchyRank > currentLevelRole.hierarchyRank }
-        if (higher.isNotEmpty()) higher else listOf(TaskzRole.SUPER_ADMIN)
+        when {
+            higher.isEmpty() -> listOf(TaskzRole.SUPER_ADMIN)
+            isSuperAdmin -> higher
+            else -> listOf(higher.first())
+        }
     }
-    var selectedTargetRole by remember(incident.id, incident.escalationLevel) {
+    var selectedTargetRole by remember(incident.id, incident.escalationLevel, isSuperAdmin) {
         mutableStateOf(higherChain.first())
     }
     var escalationReason by remember { mutableStateOf("") }

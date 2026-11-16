@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.example.data.local.entity.OutboxEventEntity
 import kotlinx.coroutines.flow.Flow
@@ -15,6 +16,61 @@ interface OutboxDao {
 
     @Query("SELECT * FROM outbox_events WHERE userId = :userId AND syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE') ORDER BY createdAt ASC")
     suspend fun getPendingEventsForUser(userId: String): List<OutboxEventEntity>
+
+    @Query(
+        "SELECT * FROM outbox_events WHERE userId = :userId AND (" +
+            "syncStatus IN ('PENDING', 'FAILED_RETRYABLE') OR " +
+            "(syncStatus = 'SENDING' AND (lastAttemptAt IS NULL OR lastAttemptAt < :staleBefore))" +
+            ") ORDER BY createdAt ASC"
+    )
+    suspend fun getClaimableEventsForUser(userId: String, staleBefore: Long): List<OutboxEventEntity>
+
+    @Transaction
+    suspend fun claimEventsForSync(
+        userId: String,
+        now: Long = System.currentTimeMillis(),
+        leaseTimeoutMs: Long = 120_000L
+    ): List<OutboxEventEntity> {
+        val candidates = getClaimableEventsForUser(userId, now - leaseTimeoutMs)
+        for (ev in candidates) {
+            markEventSending(ev.id, now)
+        }
+        return candidates.map {
+            it.copy(
+                syncStatus = "SENDING",
+                lastAttemptAt = now,
+                attemptCount = it.attemptCount + 1
+            )
+        }
+    }
+
+    @Query(
+        "SELECT * FROM outbox_events WHERE userId = :userId AND " +
+            "operationType IN ('TASK_CREATION', 'TASK_DELETION', 'TASK_UPDATE', 'GROUP_CREATION', 'SHIFT_CREATION', 'TASK_RESPONSE', 'PROGRESS_UPDATE', 'LAN_CONFIRMATION', 'COMPLETION_REQUEST', 'TASK_ACKNOWLEDGEMENT') AND (" +
+            "syncStatus IN ('PENDING', 'FAILED_RETRYABLE') OR " +
+            "(syncStatus = 'SENDING' AND (lastAttemptAt IS NULL OR lastAttemptAt < :staleBefore))" +
+            ") ORDER BY createdAt ASC"
+    )
+    suspend fun getClaimableTaskEventsForUser(userId: String, staleBefore: Long): List<OutboxEventEntity>
+
+    @Transaction
+    suspend fun claimTaskEventsForSync(
+        userId: String,
+        now: Long = System.currentTimeMillis(),
+        leaseTimeoutMs: Long = 120_000L
+    ): List<OutboxEventEntity> {
+        val candidates = getClaimableTaskEventsForUser(userId, now - leaseTimeoutMs)
+        for (ev in candidates) {
+            markEventSending(ev.id, now)
+        }
+        return candidates.map {
+            it.copy(
+                syncStatus = "SENDING",
+                lastAttemptAt = now,
+                attemptCount = it.attemptCount + 1
+            )
+        }
+    }
 
     @Query("SELECT * FROM outbox_events WHERE syncStatus IN ('PENDING', 'SENDING', 'FAILED_RETRYABLE') ORDER BY createdAt ASC")
     suspend fun getPendingEvents(): List<OutboxEventEntity>

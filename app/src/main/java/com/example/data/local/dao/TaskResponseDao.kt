@@ -35,6 +35,12 @@ interface TaskResponseDao {
     @Query("UPDATE cached_task_responses SET syncStatus = 'SYNCED' WHERE id = :id")
     suspend fun markResponseSynced(id: String)
 
+    @Query("UPDATE cached_task_responses SET syncStatus = :status WHERE id = :id")
+    suspend fun markResponseStatus(id: String, status: String)
+
+    @Query("DELETE FROM cached_task_responses WHERE id = :id")
+    suspend fun deleteResponseById(id: String)
+
     // Acknowledgements
     @Query("SELECT * FROM cached_task_acknowledgements WHERE taskId = :taskId")
     fun getAcknowledgementsForTaskFlow(taskId: String): Flow<List<TaskAcknowledgementEntity>>
@@ -53,6 +59,9 @@ interface TaskResponseDao {
 
     @Query("UPDATE cached_task_acknowledgements SET syncStatus = 'SYNCED' WHERE id = :id")
     suspend fun markAcknowledgementSynced(id: String)
+
+    @Query("DELETE FROM cached_task_acknowledgements WHERE id = :id")
+    suspend fun deleteAcknowledgementById(id: String)
 
     @Query("DELETE FROM cached_task_responses WHERE taskId = :taskId")
     suspend fun deleteResponsesForTask(taskId: String)

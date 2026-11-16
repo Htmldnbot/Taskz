@@ -22,6 +22,7 @@ data class UserProfile(
     val centreCode: String? = null,
     val roleVersion: Long = 1L,
     val scopeVersion: Long = 1L,
+    val needsScopeReview: Boolean = false,
     val isActive: Boolean = true,
     val mustChangePassword: Boolean = false,
     val lastSeenAt: String? = null,

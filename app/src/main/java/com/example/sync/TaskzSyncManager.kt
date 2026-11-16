@@ -168,11 +168,13 @@ class TaskzSyncManager(
 
         val cached = database.authorizationDao().getAuthContext(uid)
         if (cached != null) {
-            permissionManager.updateContext(cached.toDomain())
+            val domainCtx = cached.toDomain()
+            permissionManager.updateContext(domainCtx)
             realtimeManager.updateSessionAndRole(
                 accessToken = session.accessToken,
                 userId = uid,
-                activeRoleCode = cached.activeRoleCode
+                activeRoleCode = cached.activeRoleCode,
+                orgScope = domainCtx.scope
             )
         } else {
             val cachedProfile = database.profileDao().getCachedProfile()?.toDomain()
@@ -232,6 +234,7 @@ class TaskzSyncManager(
 
         if (isOnline) {
             if (authPaused) return
+            realtimeManager.recoverConnectionIfEligible()
             runCatching { SyncWorker.enqueueSync(context) }
             runCatching { deviceTokenManager.registerActiveDeviceToken() }
             syncNow(forceFull = false)
@@ -438,7 +441,7 @@ class TaskzSyncManager(
             permissionManager.updateContext(authCtx)
             database.authorizationDao().upsertAuthContext(authCtx.toEntity())
             syncProfileSnapshot(authCtx)
-            realtimeManager.updateSessionAndRole(token, authCtx.userId, authCtx.activeRole.code)
+            realtimeManager.updateSessionAndRole(token, authCtx.userId, authCtx.activeRole.code, authCtx.scope)
         }
 
         val dashJson = payload.optJSONObject("dashboard")
@@ -456,18 +459,42 @@ class TaskzSyncManager(
             )
         }
 
+        var cursorSafeToAdvance = true
+
         val tasksArr = payload.optJSONArray("tasks")
         if (tasksArr != null && tasksArr.length() > 0) {
             taskRepository.reconcileTasksFromJson(tasksArr, scheduleAlarms = true)
-            runCatching { taskRepository.syncResponsesFromServer(token) }
+            val respSync = taskRepository.syncResponsesFromServer(token)
+            if (respSync.isFailure) {
+                cursorSafeToAdvance = false
+            }
         } else if (isFullRefresh) {
             runCatching { taskRepository.syncGroupsFromServer(token) }
             runCatching { taskRepository.syncShiftsFromServer(token) }
         }
 
+        val deletedTaskIdsArr = payload.optJSONArray("deleted_task_ids")
+        if (deletedTaskIdsArr != null && deletedTaskIdsArr.length() > 0) {
+            val ids = List(deletedTaskIdsArr.length()) { idx -> deletedTaskIdsArr.optString(idx) }
+                .filter { it.isNotBlank() }
+            if (ids.isNotEmpty()) {
+                taskRepository.removeDeletedTasksLocally(ids)
+            }
+        }
+
         val incidentsArr = payload.optJSONArray("incidents")
         if (incidentsArr != null && incidentsArr.length() > 0) {
             systemIncidentRepository.reconcileIncidentsFromJson(incidentsArr)
+        }
+
+        val deletedIncidentIdsArr = payload.optJSONArray("deleted_incident_ids")
+        if (deletedIncidentIdsArr != null && deletedIncidentIdsArr.length() > 0) {
+            val ids = List(deletedIncidentIdsArr.length()) { idx -> deletedIncidentIdsArr.optString(idx) }
+                .filter { it.isNotBlank() }
+            ids.forEach { id ->
+                database.systemIncidentDao().deleteIncident(id)
+                database.systemIncidentDao().deleteAuditsForIncident(id)
+            }
         }
 
         val notificationsArr = payload.optJSONArray("notifications")
@@ -488,7 +515,7 @@ class TaskzSyncManager(
         }
 
         val serverNow = payload.optString("server_now").takeIf { it.isNotBlank() && !it.equals("null", true) }
-        if (!serverNow.isNullOrBlank()) {
+        if (cursorSafeToAdvance && !serverNow.isNullOrBlank()) {
             userPrefs.saveLastDeltaSyncIso(serverNow)
         }
     }
@@ -568,7 +595,7 @@ class TaskzSyncManager(
         permissionManager.updateContext(newCtx)
         database.authorizationDao().upsertAuthContext(newCtx.toEntity())
         syncProfileSnapshot(newCtx)
-        realtimeManager.refreshSubscriptionsForRoleSwitch(newCtx.activeRole.code)
+        realtimeManager.refreshSubscriptionsForRoleSwitch(newCtx.activeRole.code, newCtx.scope)
 
         syncNow(forceFull = true)
         Result.success(newCtx)

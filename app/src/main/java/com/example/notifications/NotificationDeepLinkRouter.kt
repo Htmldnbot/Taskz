@@ -38,10 +38,15 @@ object NotificationDeepLinkRouter {
     fun handleIntent(intent: Intent?) {
         if (intent == null) return
         val deepLink = intent.getStringExtra(PushNotificationManager.EXTRA_DEEP_LINK)
+            ?: intent.getStringExtra("deep_link")
         val taskId = intent.getStringExtra(PushNotificationManager.EXTRA_TASK_ID)
+            ?: intent.getStringExtra("task_id")
         val incidentId = intent.getStringExtra(PushNotificationManager.EXTRA_INCIDENT_ID)
+            ?: intent.getStringExtra("incident_id")
         val category = intent.getStringExtra(PushNotificationManager.EXTRA_CATEGORY)
+            ?: intent.getStringExtra("category")
         val notificationId = intent.getStringExtra(PushNotificationManager.EXTRA_NOTIFICATION_ID)
+            ?: intent.getStringExtra("notification_id")
 
         val resolved = parse(
             deepLink = deepLink,

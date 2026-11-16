@@ -66,11 +66,13 @@ import coil.compose.AsyncImage
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -101,6 +103,7 @@ fun AdminScreen(
     val actionState by viewModel.actionState.collectAsStateWithLifecycle()
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var filterNeedsScopeReview by rememberSaveable { mutableStateOf(false) }
     var selectedRequestForReset by remember { mutableStateOf<PasswordResetRequest?>(null) }
     var userToManageAccess by remember { mutableStateOf<UserProfile?>(null) }
 
@@ -277,15 +280,49 @@ fun AdminScreen(
                 testTag = "admin_search_input"
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            val scopeReviewCount = remember(users) { users.count { it.needsScopeReview } }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = !filterNeedsScopeReview,
+                    onClick = { filterNeedsScopeReview = false },
+                    label = { Text("All (${users.size})") },
+                    modifier = Modifier.testTag("admin_filter_all_users_chip")
+                )
+                FilterChip(
+                    selected = filterNeedsScopeReview,
+                    onClick = { filterNeedsScopeReview = !filterNeedsScopeReview },
+                    label = { Text("Needs Scope Review ($scopeReviewCount)") },
+                    leadingIcon = if (scopeReviewCount > 0) {
+                        {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (filterNeedsScopeReview) MaterialTheme.colorScheme.error else TaskzWarning,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else null,
+                    modifier = Modifier.testTag("admin_filter_scope_review_chip")
+                )
+            }
 
-            val filteredUsers = remember(users, searchQuery) {
-                if (searchQuery.isBlank()) users
-                else users.filter {
-                    it.employeeId.contains(searchQuery, ignoreCase = true) ||
-                        it.fullName.contains(searchQuery, ignoreCase = true) ||
-                        (it.email?.contains(searchQuery, ignoreCase = true) == true) ||
-                        it.activeRoleCode.contains(searchQuery, ignoreCase = true)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val filteredUsers = remember(users, searchQuery, filterNeedsScopeReview) {
+                users.filter { u ->
+                    val matchesReview = !filterNeedsScopeReview || u.needsScopeReview
+                    val matchesQuery = searchQuery.isBlank() ||
+                        u.employeeId.contains(searchQuery, ignoreCase = true) ||
+                        u.fullName.contains(searchQuery, ignoreCase = true) ||
+                        (u.email?.contains(searchQuery, ignoreCase = true) == true) ||
+                        u.activeRoleCode.contains(searchQuery, ignoreCase = true)
+                    matchesReview && matchesQuery
                 }
             }
 
@@ -488,6 +525,33 @@ private fun UserAdminCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
+
+                    if (user.needsScopeReview) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.testTag("badge_scope_review_${user.employeeId}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Scope Review Needed",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Needs Scope Review — Assign Org Scope",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
                     }
                 }
             }

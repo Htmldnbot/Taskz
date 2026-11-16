@@ -1,0 +1,815 @@
+Worked for 2m 4s
+
+Maine ZIP file inspect karna shuru kar diya hai. Isme sirf UI changes nahi hain—AI Studio ne kaafi bada implementation add kiya hai: RBAC models, permission manager, local database/outbox, WorkManager, custom Realtime manager, push notification classes aur Supabase migration `013`.
+
+Lekin files/classes bana dena production-ready implementation ka proof nahi hai. Initial code scan me kuch important risk areas mil rahe hain, jinhe detail me verify karna zaroori hai:
+
+* Realtime manager tasks aur incidents ke liye broad subscriptions banata hua dikh raha hai.
+
+* Permission manager ke kuch scope comparisons me `null` ko permissive maana gaya hai—isse unauthorized visibility ka risk ho sakta hai.
+
+* Background sync me 15-minute periodic WorkManager job bhi hai; iska actual role aur duplicate scheduling verify karna hoga.
+
+* Push notification classes hain, lekin verify karna hoga ki actual FCM service, token registration aur server-side push delivery end-to-end connected hain ya nahi.
+
+* Migration `013` me bahut saara SQL hai; RLS, RPCs, triggers aur existing schema compatibility ko separately audit karna hoga.
+
+Ab main code, SQL, build configuration aur tests ko cross-check kar raha hoon.# Taskz ZIP — Complete Technical Audit
+
+Production deployment ke liye abhi ready nahi
+
+Maine uploaded `Taskz-main (2).zip` ka Android source, Supabase migrations, RBAC, task propagation, incident handling, realtime, offline sync, push notifications, WorkManager, manifest, GitHub Actions aur tests inspect kiye hain.
+
+Mera overall verdict: AI Studio ne kaafi substantial implementation ki hai. Bahut saare required components actually create kiye gaye hain. Lekin kuch critical gaps aur backend authorization bugs hain. Sabse badi baat: jis instant push notification system ki requirement thi, woh abhi actual implementation me maujood nahi hai.
+
+Neeche poora audit hai.
+
+### 1\. Overall audit scorecard
+
+Ye meri code inspection par based assessment hai, automated security certification ya successful production test nahi.
+
+| System                         | Status | Audit result                                                   |
+| ------------------------------ | ------ | -------------------------------------------------------------- |
+| Multi-role architecture        |        | user_roles, active role, role switching                        |
+| New-user role restriction      |        | IT Manager / VCO onboarding RPC                                |
+| Organizational hierarchy       |        | Tables hain, lekin sample data aur existing-user mapping issue |
+| Task scope propagation         |        | Single logical task aur recipient notifications                |
+| Incident scope                 |        | Scope support hai, authorization gaps hain                     |
+| Centralized permission manager |        | Kuch permissive checks                                         |
+| Super Admin management         |        | Role/scope management RPC aur audit                            |
+| Scoped member search           |        | Server-side search RPC                                         |
+| Dashboard counts               |        | Kuch roles ke counts global hain                               |
+| Supabase Realtime              |        | Custom WebSocket, subscription verification incomplete         |
+| Android push notification      |        | FCM receiver/service absent                                    |
+| Offline local queue            |        | Room outbox and worker                                         |
+| Automatic reconnect sync       |        | Multiple sync paths and race risk                              |
+| Idempotency                    |        | Kuch RPCs me hai, universal nahi                               |
+| Battery optimization           |        | Foreground realtime controlled, periodic sync also present     |
+| Admin audit log                |        | RPC-based logging                                              |
+| Automated tests                |        | Unit tests hain, production integration tests nahi             |
+| Build verification             |        | Gradle distribution download nahi ho saka                      |
+
+### 2\. Sabse critical problem: Push notification system incomplete hai
+
+Critical blocker
+
+Files me ye components mile:
+
+* `DeviceTokenManager.kt`
+
+* `PushNotificationManager.kt`
+
+* `NotificationDeepLinkRouter.kt`
+
+* `notifications` table
+
+* `device_tokens` table
+
+* notification-related RPCs
+
+Lekin ye essential FCM components nahi mile:
+
+* Firebase Messaging dependency
+
+* Firebase Messaging Service
+
+* `onNewToken()` ka actual Firebase callback
+
+* FCM token listener
+
+* `google-services` Gradle configuration
+
+* Firebase configuration integration
+
+* backend push sender / Edge Function
+
+* FCM server-side credential handling
+
+Maine poore project me `FirebaseMessaging`, `firebase-messaging` aur `google-services.json` bhi search kiya. Actual FCM integration nahi mili.
+
+### Iska practical matlab
+
+Abhi code ka flow roughly ye hai:
+
+Task assigned
+
+Supabase notification row created
+
+App notification fetches and displays local notification
+
+FCM delivery missing
+
+`PushNotificationManager` notification display karta hai, lekin khud remote push receive nahi karta.
+
+Ek aur problem: `DeviceTokenManager.getCurrentOrFallbackToken()` actual push token na hone par `local:deviceId` return karta hai. Is token ko server par register karna actual FCM delivery nahi banata.
+
+Required fix: Firebase Cloud Messaging ko complete integrate karna hoga. Backend notification event ke baad FCM send kare. Android service token receive/refresh kare. Killed app par bhi Android push notification receive kar sake.
+
+Jab tak ye nahi hota, app killed hone par task assignment notification ki guarantee nahi hai.
+
+### 3\. Scope hierarchy me serious issues
+
+### 3.1 Sample organizational data production ke liye dangerous hai
+
+Migration:
+
+`supabase/migrations/013_rbac_scope_realtime_push_sync.sql`
+
+Isme sample zones, states, cities aur centres insert kiye gaye hain.
+
+Examples:
+
+* NORTH, WEST, SOUTH, EAST, CENTRAL
+
+* Rajasthan, Delhi, UP, Maharashtra, Karnataka
+
+* Jaipur, New Delhi, Lucknow, Mumbai, Bengaluru
+
+* C001, C002, C003 etc.
+
+Kuch centre records hardcoded sample centre names ke saath hain.
+
+Problem ye hai ki SQL `ON CONFLICT (code) DO UPDATE` use karta hai.
+
+Agar production database me pehle se `C001` hai, migration uska naam, city, state aur zone update kar sakti hai.
+
+Production data overwrite risk
+
+Meri recommendation: sample seed data ko production migration se hatao. Actual organization hierarchy ko verified source data se populate karo.
+
+### 3.2 Existing users ki scope mapping incomplete hai
+
+Migration existing profiles me ye fields add karti hai:
+
+* `zone_id`
+
+* `state_id`
+
+* `city_id`
+
+* `centre_id`
+
+* `centre_code`
+
+Lekin existing users ke centre/city/state ko actual organizational hierarchy ke saath map karne ka proper backfill nahi mila.
+
+Existing users ke liye migration default role mapping karti hai:
+
+* Normal profile → IT_MANAGER
+
+* `app_role = admin` → SUPER_ADMIN
+
+Lekin existing users ka centre assignment automatically resolve nahi hota.
+
+Iska result:
+
+* existing IT Manager ka `centre_id` null ho sakta hai
+
+* existing VCO ka city scope null ho sakta hai
+
+* role sahi ho sakta hai, par actual location scope galat ho sakta hai
+
+Required fix: existing `profiles` ke centre codes/names ko verified `org_centres` records se map karo. Unmatched users ko silently default scope mat do; unhe admin review ke liye flag karo.
+
+### 4\. Permission manager me permissive logic
+
+File:
+
+`app/src/main/java/com/example/domain/security/TaskzPermissionManager.kt`
+
+Isme ek important function hai:
+
+`matchesScope()`
+
+Kuch conditions is tarah hain:
+
+```kotlin
+scope.centreId == null || centreId == null || scope.centreId == centreId
+```
+
+Aur:
+
+```kotlin
+scope.cityId == null || cityId == null || scope.cityId == cityId
+```
+
+Iska matlab agar user ka scope ya task ka scope ID null hai, to match `true` ho sakta hai.
+
+Example:
+
+* IT Manager Centre A ka hai.
+
+* Kisi task ka centre ID null hai.
+
+* Code task ko scope match de sakta hai.
+
+Ek aur problem:
+
+```kotlin
+if (targetScope == ScopeLevel.GLOBAL) return true
+```
+
+Isse client permission manager global scope ko broadly accessible maan sakta hai.
+
+### Aur kya problematic hai?
+
+* `canCreateTask()` sab active users ke liye true return karta hai.
+
+* `canCreateIncident()` bhi sab active users ke liye true return karta hai.
+
+* `canCompleteTask()` assigned-user check ke alawa broad scope checks karta hai.
+
+* `canEscalateIncident()` resolved incident ka status check karta hai, lekin actual backend RPC bhi ye enforce kare, ye zaroori hai.
+
+Android checks security boundary nahi hain, lekin UI ko bhi accurate permission model follow karna chahiye.
+
+Required fix: missing scope IDs ko wildcard mat maano. Missing/unknown scope ko deny-by-default rakho. Server-side permissions ke saath Android checks ko bhi align karo.
+
+### 5\. Backend incident authorization me major gaps
+
+Security blocker
+
+Migration me `system_incidents` ki policies aur escalation RPC inspect ki.
+
+### 5.1 Incident creation
+
+Current insert policy:
+
+```sql
+with check (
+    public.is_active_user()
+    and created_by = (select auth.uid())
+);
+```
+
+Ye verify karta hai ki incident authenticated active user ne create kiya.
+
+Lekin ye independently verify nahi karta ki creator ko diye gaye `scope_level`, `zone_id`, `state_id`, `city_id`, `centre_id` par incident create karne ka right hai.
+
+Isliye client arbitrary scope fields submit kar sakta hai, agar baaki checks rok nahi rahe.
+
+### 5.2 Incident update
+
+Update policy creator/assigned user ko update permission deti hai.
+
+Lekin assigned user ke update par scope fields ko immutable rakhne ya authorized scope transition validate karne ka separate guard nahi mila.
+
+Isse assigned user incident ke location/scope fields modify karne ka risk rakh sakta hai.
+
+### 5.3 Escalation hierarchy bypass
+
+RPC:
+
+`escalate_system_incident(...)`
+
+Ye target role validate karta hai:
+
+* IT_MANAGER
+
+* VCO
+
+* CITY_HEAD
+
+* ROM
+
+* ZOM
+
+* SUPER_ADMIN
+
+Lekin caller ka current role aur requested escalation level ka relationship properly enforce nahi karta.
+
+Example:
+
+IT Manager → directly SUPER_ADMIN escalation request kar sakta hai.
+
+Agar intended chain sequential hai, to ye bypass hai.
+
+### 5.4 Resolved incident escalation
+
+RPC me resolved incident ke liye status ko `RESOLVED` hi rakha jaata hai, lekin escalation notification flow phir bhi continue ho sakta hai.
+
+Resolved incident ko escalate karne se pehle backend par explicit rejection honi chahiye.
+
+### 5.5 Missing location IDs
+
+Escalation recipient query me kuch conditions hain:
+
+```sql
+v_inc.zone_id is null or p.zone_id = v_inc.zone_id
+```
+
+Agar old incident ka `zone_id` null hai, to saare active ZOM recipients notify ho sakte hain.
+
+Isi tarah ROM/VCO/City Head recipient selection me bhi null scope broad notification ka risk create karta hai.
+
+Required fix: incidents ke existing records backfill karo, escalation sequence server-side enforce karo, resolved incidents ko reject karo aur every recipient ke liye exact scope matching mandatory rakho.
+
+### 6\. Task propagation: achha design, lekin incomplete
+
+Partial implementation
+
+Positive point: AI Studio ne single logical task row approach implement ki hai. Har centre/LAN ke liye duplicate task records create nahi kiye.
+
+RPC:
+
+`create_task_atomic(p_task jsonb)`
+
+Isme automatic recipient resolution hai.
+
+| Scope  | Intended propagation                | Code status                        |
+| ------ | ----------------------------------- | ---------------------------------- |
+| Centre | Relevant centre users               | Implemented                        |
+| City   | City ke centres/users               | Implemented                        |
+| State  | State ke cities/centres/users       | Implemented                        |
+| Zone   | Zone ke states/cities/centres/users | Implemented                        |
+| Global | Authorized users                    | Implemented with targeting caveats |
+
+### Problem 1: 250-recipient limit
+
+Task notification loop me:
+
+```sql
+limit 250
+```
+
+Hai.
+
+Agar ek global/zone task 250 se zyada users ko apply hota hai, to notification loop sirf 250 users tak chalega.
+
+Task visibility aur notification delivery alag cheezein hain. Baaki users task query me dekh paayein, phir bhi unhe assignment notification nahi mil sakti.
+
+### Problem 2: User ko notification milna aur actionable participant banna
+
+Automatic propagation loop notifications create karta hai. Lekin har eligible user ke liye `task_participants` row nahi banata.
+
+Agar task completion/acknowledgement logic active participant record par dependent hai, to user ko task dikhne ke baad bhi complete karne me problem ho sakti hai.
+
+Isko actual task completion RPC ke saath verify karna hoga.
+
+### Problem 3: Explicit assigned user validation
+
+Explicit `assigned_user_ids` ko active profile check kiya jaata hai, lekin user ki requested task scope me membership/eligibility ko bhi enforce karna chahiye.
+
+Required fix: notification recipients ko batch/paginated process karo; participant/visibility/actionability model clearly define karo; task assignment, acknowledgement aur completion end-to-end verify karo.
+
+### 7\. Dashboard counts me actual bug
+
+Incorrect data risk
+
+Migration ke `get_scoped_dashboard_summary()` me ye code hai:
+
+```sql
+if v_role in ('SUPER_ADMIN', 'COMMAND_CENTER', 'ZOM', 'ROM', 'CITY_HEAD') then
+    select count(*) into v_active_users
+    from public.profiles
+    where is_active = true;
+
+    select count(*) into v_total_centres
+    from public.org_centres
+    where is_active = true;
+end if;
+```
+
+Iska matlab:
+
+* ZOM ko all users ka count mil sakta hai.
+
+* ROM ko all users ka count mil sakta hai.
+
+* City Head ko bhi all users ka count mil sakta hai.
+
+* Centres ka count bhi global hai.
+
+Ye tumhari requirement ke against hai.
+
+Correct:
+
+* City Head → city ke users/centres
+
+* ROM → state/region ke users/centres
+
+* ZOM → zone ke users/centres
+
+* Super Admin → global counts
+
+Ye fix mandatory hai.
+
+### 8\. Delta sync me performance bug
+
+High priority
+
+RPC:
+
+`delta_sync_pull(...)`
+
+Isme task fetch kuch aisa hai:
+
+```sql
+select coalesce(
+    jsonb_agg(to_jsonb(t) order by t.updated_at desc),
+    '[]'::jsonb
+)
+into v_tasks
+from public.tasks t
+where public.can_view_task(t.id)
+limit 200;
+```
+
+Problem: aggregate query pe `LIMIT 200` lagane se underlying 200 task rows select nahi hote.
+
+Pehle aggregate ek JSON result row banata hai. `LIMIT 200` us single result row par apply hota hai.
+
+Matlab 200 tasks ka cap effectively nahi laga.
+
+Isi tarah incidents aur notifications ke fetch me bhi issue hai.
+
+### Correct SQL pattern
+
+Pehle subquery me rows limit karo, phir aggregate:
+
+```sql
+select coalesce(
+    jsonb_agg(to_jsonb(x) order by x.updated_at desc),
+    '[]'::jsonb
+)
+into v_tasks
+from (
+    select t.*
+    from public.tasks t
+    where public.can_view_task(t.id)
+      and (
+          v_effective_since is null
+          or t.updated_at >= v_effective_since
+      )
+    order by t.updated_at desc
+    limit 200
+) x;
+```
+
+Incidents aur notifications ke liye bhi same pattern chahiye.
+
+Ye fix nahi hua to large database me delta sync payload bahut bada ho sakta hai.
+
+### 9\. Supabase Realtime: implementation hai, guarantee nahi
+
+File:
+
+`TaskzRealtimeManager.kt`
+
+Positive points:
+
+* Foreground-only WebSocket connection
+
+* Background me disconnect
+
+* Reconnect backoff
+
+* Duplicate event cache
+
+* Role switch par reconnect
+
+* Heartbeat
+
+Ye battery ke liye achha direction hai.
+
+### Lekin 4 issues hain
+
+1\. Broad subscriptions
+
+Tasks aur incidents ke subscriptions me filter null hai:
+
+```kotlin
+Triple("realtime:tasks_$currentRoleCode", "tasks", null)
+Triple("realtime:incidents_$currentRoleCode", "system_incidents", null)
+```
+
+Isse device broad table subscriptions request karta hai. RLS server-side access ko restrict kar sakti hai, lekin unnecessary subscription traffic aur server workload ka risk hai.
+
+2\. Join acknowledgement verify nahi hota
+
+Code `phx_join` send karta hai, lekin `phx_reply` status ko properly inspect karke channel join success confirm nahi karta.
+
+WebSocket open hona aur database subscription successfully join hona alag hai.
+
+Abhi `isConnected=true` socket open par set hota hai. Isse UI ya sync coordinator ko false impression mil sakta hai ki realtime fully operational hai.
+
+3\. Subscription errors detect nahi hote
+
+Channel join reject ho jaaye to system ko clear failure state aur retry/recovery chahiye.
+
+4\. Reconnect attempts limit
+
+Maximum reconnect attempts 6 hain. Uske baad connection tab tak restore nahi hoga jab tak koi later lifecycle/session event retry trigger na kare.
+
+Network stable hone par explicit recovery path chahiye.
+
+Recommendation: official supported Supabase Realtime client/protocol integration ya custom WebSocket ka complete protocol-level test. Har channel ka join acknowledgement, token refresh, reconnect, role change aur subscription failure test karo.
+
+### 10\. Offline sync: architecture achha hai, concurrency verify karni hogi
+
+Files:
+
+* `TaskzSyncManager.kt`
+
+* `SyncWorker.kt`
+
+* `OutboxDao.kt`
+
+* `OutboxEventEntity.kt`
+
+* `SyncMetadataDao.kt`
+
+Positive points:
+
+* Persistent Room outbox
+
+* Pending operation IDs
+
+* Retry status
+
+* Network constraints
+
+* Exponential backoff
+
+* Server acknowledgement state
+
+* Delta pull
+
+* Role/scope cache invalidation
+
+Ye implementation ka strong part hai.
+
+### Lekin sync ke do parallel paths hain
+
+* `TaskzSyncManager.syncNow()`
+
+* `SyncWorker.doWork()`
+
+Dono task/incident pending operations process kar sakte hain.
+
+`TaskzSyncManager` ke paas process-level `syncMutex` hai, lekin Worker ka alag execution path hai. Dono ke beech ek shared database-level atomic claim/lease mechanism clearly verify karna zaroori hai.
+
+Duplicate request ke liye backend idempotency bhi har mutation par honi chahiye.
+
+### WorkManager me ek aur observation
+
+Periodic sync 15 minutes par schedule hai:
+
+```kotlin
+PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+```
+
+Network reconnect par immediate work bhi enqueue hota hai.
+
+Periodic fallback reasonable hai, lekin periodic aur immediate jobs ki concurrency, duplicate processing aur unnecessary wakeups test hone chahiye.
+
+`ExistingWorkPolicy.REPLACE` immediate work ko replace kar sakta hai. Running worker cancel hone par pending outbox durable rehni chahiye—ye sahi tarah verify karo.
+
+Required fix: one shared durable outbox claim mechanism, atomic state transitions, worker concurrency test, aur sync cursor tabhi advance ho jab actual server reconciliation successful ho.
+
+### 11\. Device token and logout handling
+
+`DeviceTokenManager` me multi-device design ka direction achha hai.
+
+* device ID
+
+* device-specific token
+
+* device-specific deactivation
+
+* same account ke multiple phones ka support
+
+Lekin actual FCM token nahi milne par local fallback token register ho raha hai. Isse backend ke `device_tokens` records me invalid push tokens aa sakte hain.
+
+Logout path me `TaskzSyncManager.onLogout()` realtime disconnect aur local cache clear karta hai. Lekin is method ke andar `deviceTokenManager.deactivateThisDeviceOnly()` ka call nahi dikha.
+
+Ye verify karna hai ki actual logout repository flow me ye deactivation kahin aur hoti hai ya nahi.
+
+Required fix: FCM token ke bina push registration mat karo. Logout par current device token deactivate karo, doosre logged-in devices ko touch mat karo.
+
+### 12\. Security audit: achhi cheezein aur pending gaps
+
+### Jo achha hai
+
+* `auth.uid()` use ho raha hai.
+
+* Super Admin ke liye backend RPC.
+
+* User role assignment server-side.
+
+* Profile RBAC guard trigger.
+
+* `user_roles` RLS.
+
+* Admin audit log.
+
+* Member search server-side.
+
+* Notification read RPC user-specific.
+
+* Service-role key Android code me nahi mili.
+
+### Jo fix karna hai
+
+| Issue                                             | Risk                                 |
+| ------------------------------------------------- | ------------------------------------ |
+| Incident insert scope authorization incomplete    | Unauthorized scope incident creation |
+| Incident update scope field protection incomplete | Scope manipulation                   |
+| Escalation caller-level validation missing        | Hierarchy bypass                     |
+| Resolved incident escalation                      | Incorrect alerts/audit               |
+| Null scope IDs                                    | Broad visibility/notification        |
+| Sample org data                                   | Real centre records overwrite        |
+| Existing profile scope backfill absent            | Users get wrong/no scope             |
+| Dashboard counts global                           | Incorrect organizational reporting   |
+| delta_sync_pull row limit ineffective             | Large payload/performance            |
+| Broad realtime subscriptions                      | Unnecessary data/event traffic       |
+
+Ek aur point: `org_zones`, `org_states`, `org_cities`, `org_centres` ka read policy active users ko entire hierarchy read karne deta hai. Agar centre directory ko global read-only metadata banana intentional hai to acceptable ho sakta hai; otherwise scope restrictions consider karni chahiye.
+
+### 13\. UI and user management
+
+AI Studio ne UI-side work bhi kiya hai.
+
+Files me:
+
+* `AdminScreen.kt`
+
+* `AdminViewModel.kt`
+
+* `WorkRolesScreen.kt`
+
+* `WorkRolesViewModel.kt`
+
+* `HomeScreen.kt`
+
+* `HomeViewModel.kt`
+
+* `TasksScreen.kt`
+
+* `TasksViewModel.kt`
+
+* `SystemIncidentViewModel.kt`
+
+RBAC models:
+
+* `RbacModels.kt`
+
+* `WorkRole.kt`
+
+* `UserProfile.kt`
+
+Positive:
+
+* role selector/model support
+
+* Super Admin management RPC
+
+* scoped member search
+
+* admin audit history
+
+* role-specific dashboard data structures
+
+Lekin main actual Supabase-connected UI testing nahi kar paya. Source me UI screen ka hona ye prove nahi karta ki user search, role edit, centre mapping aur scope updates production database par correct work karte hain.
+
+Particularly test karo:
+
+* IT Manager + VCO same account
+
+* active role switching
+
+* role removed while user offline
+
+* scope changed while user offline
+
+* VCO city data
+
+* City Head city-only visibility
+
+* ROM state-only visibility
+
+* ZOM zone-only visibility
+
+* Super Admin global management
+
+### 14\. Test coverage audit
+
+Project me ye test files mile:
+
+* `RbacScopeSyncSystemTest.kt`
+
+* `ProfileMobileSyncAndAlarmTest.kt`
+
+* `TaskTimeLockAndSyncTest.kt`
+
+* `ExampleUnitTest.kt`
+
+RBAC tests me onboarding role, scope, permissions, offline cache clearing, deduplication, device ID aur realtime frame parsing jaise tests hain.
+
+Ye achhi baat hai.
+
+Lekin ye mostly local/unit-level tests hain. Inse ye prove nahi hota ki:
+
+* Supabase RLS actual database par secure hai.
+
+* FCM killed app par notification bhejta hai.
+
+* 500 recipients ko task notifications milti hain.
+
+* realtime join server accept karta hai.
+
+* WorkManager aur direct sync race nahi karte.
+
+* incident escalation server-side hierarchy enforce karti hai.
+
+* migration actual existing production database par apply hoti hai.
+
+### Build verification
+
+Maine Gradle unit tests run karne ki koshish ki, lekin Gradle wrapper ko `gradle-9.3.1` download karna tha aur environment me network/DNS available nahi tha.
+
+Isliye main ye claim nahi karunga ki APK build ya tests pass hue.
+
+Build status unverified
+
+### 15\. Files jo sabse pehle fix honi chahiye
+
+| Priority | File                                  | Required work                                                  |
+| -------- | ------------------------------------- | -------------------------------------------------------------- |
+| P0       | 013_rbac_scope_realtime_push_sync.sql | Scope security, sample data, incident RPC, counts, delta limit |
+| P0       | PushNotificationManager.kt            | Actual remote push receiving integration                       |
+| P0       | DeviceTokenManager.kt                 | Real FCM token only                                            |
+| P0       | AndroidManifest.xml                   | FCM service registration                                       |
+| P0       | app/build.gradle.kts                  | Firebase Messaging dependencies/config                         |
+| P0       | TaskzPermissionManager.kt             | Null-scope fail-closed logic                                   |
+| P1       | TaskzRealtimeManager.kt               | Join acknowledgement, channel errors, reconnect                |
+| P1       | TaskzSyncManager.kt                   | Single sync coordination and cursor safety                     |
+| P1       | SyncWorker.kt                         | Atomic outbox claiming and worker concurrency                  |
+| P1       | SystemIncidentRepository.kt           | Backend scope and update authorization                         |
+| P1       | SystemIncidentViewModel.kt            | Correct escalation flow                                        |
+| P1       | AdminViewModel.kt                     | Existing user scope mapping and role refresh                   |
+| P1       | TaskRepository.kt                     | Task participant/actionability checks                          |
+
+### 16\. Meri recommended fix order
+
+Sab kuch ek saath patch karna risky hoga. Is order me fix karna chahiye:
+
+* P0 — Database security and migration safety
+
+    Sample centre data remove karo, existing users ka scope backfill karo, incident create/update/escalation security fix karo.
+
+* P0 — Scope and dashboard correctness
+
+    Null scope wildcard remove karo, role-specific dashboard counts correct karo, delta sync limit fix karo.
+
+* P0 — Actual FCM push integration
+
+    Firebase Messaging, token refresh, backend sender, Android service, notification deep links aur multi-device delivery implement karo.
+
+* P1 — Realtime reliability
+
+    Channel join acknowledgement, subscription failure detection, reconnect aur role-based subscription tests.
+
+* P1 — Offline sync reliability
+
+    Atomic outbox processing, duplicate prevention, sync cursor correctness, WorkManager concurrency.
+
+* P1 — End-to-end tests
+
+    Actual Supabase test project, multiple accounts, multiple roles, multiple devices, offline/reconnect aur killed-app push tests.
+
+### 17\. Final verdict — Kya abhi APK install karke production me use karna chahiye?
+
+Meri recommendation: abhi production deployment mat karo.
+
+UI aur architecture ka kaafi kaam hua hai. Lekin ye 5 issues pehle solve hone chahiye:
+
+* FCM missing hai—killed app par instant push ka promised behavior abhi implement nahi hua.
+
+* Incident authorization aur escalation hierarchy me backend gaps hain.
+
+* Production hierarchy seed data existing centre records ko overwrite kar sakta hai.
+
+* Scope mapping incomplete hai aur null-scope checks unsafe hain.
+
+* Dashboard counts aur delta sync me SQL bugs hain.
+
+Ek important precaution: Migration `013` ko production Supabase par blindly run mat karna. Pehle actual database ka backup lo aur sample org seed data ko remove/replace karo.
+
+### 18\. Ab next step kya hona chahiye?
+
+Meri salah hai ki AI Studio ko ab ek aur complete system rewrite prompt na do. Usse isi ZIP ke actual code par targeted audit-fix karwana chahiye. Warna woh phir se naye classes bana sakta hai aur existing implementation aur complicated ho jayegi.
+
+Main iske liye ek file-by-file correction prompt bana sakta hoon jisme AI Studio ko specifically ye bataya jayega:
+
+* Kaunse SQL functions replace karne hain.
+
+* Kaunse Kotlin files fix karne hain.
+
+* FCM end-to-end kaise integrate karna hai.
+
+* Existing working task/alarm/auth features ko kaise preserve karna hai.
+
+* Kaunse tests pass hone ke baad hi implementation complete maana jayega.
+
+Is ZIP ke basis par meri priority clear hai: pehle backend security aur real FCM fix, phir offline/realtime reliability.

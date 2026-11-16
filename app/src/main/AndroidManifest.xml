@@ -68,6 +68,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- FCM Push Notifications -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="taskz_task_update" />
+
+        <service
+            android:name=".notifications.TaskzFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- System Incident Register: FileProvider for sharing Excel/CSV reports -->
         <provider
             android:name="androidx.core.content.FileProvider"

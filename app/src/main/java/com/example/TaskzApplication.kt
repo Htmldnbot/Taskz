@@ -79,6 +79,10 @@ class TaskzApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startedActivityCount = 0
 
+    @Volatile
+    var isAppInForeground: Boolean = false
+        private set
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -171,6 +175,7 @@ class TaskzApplication : Application() {
             override fun onActivityStarted(activity: Activity) {
                 val wasBackground = startedActivityCount == 0
                 startedActivityCount += 1
+                isAppInForeground = true
                 if (wasBackground) {
                     taskzSyncManager.onAppForegrounded()
                 }
@@ -180,6 +185,7 @@ class TaskzApplication : Application() {
             override fun onActivityStopped(activity: Activity) {
                 startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
                 if (startedActivityCount == 0) {
+                    isAppInForeground = false
                     taskzSyncManager.onAppBackgrounded()
                 }
             }
@@ -198,6 +204,7 @@ class TaskzApplication : Application() {
             }
             syncRepository.initializeSyncState()
             taskzSyncManager.start(applicationScope)
+            runCatching { deviceTokenManager.fetchAndRegisterFcmTokenIfAvailable() }
         }
 
         // Schedule low-frequency WorkManager periodic fallback sync

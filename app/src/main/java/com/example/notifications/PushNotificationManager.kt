@@ -93,6 +93,58 @@ class PushNotificationManager(
         true
     }
 
+    suspend fun dispatchRemotePushIfUnique(
+        eventKey: String?,
+        userId: String,
+        title: String,
+        body: String,
+        category: NotificationCategory,
+        deepLink: String? = null,
+        taskId: String? = null,
+        incidentId: String? = null,
+        notificationId: String? = null,
+        displayTrayNotification: Boolean = true
+    ): Boolean = withContext(Dispatchers.IO) {
+        val dedupKey = eventKey?.takeIf { it.isNotBlank() }
+            ?: notificationId?.takeIf { it.isNotBlank() }?.let { "notif:$it" }
+            ?: return@withContext false
+
+        mutex.withLock {
+            if (recentMemoryKeys.contains(dedupKey)) return@withContext false
+            val alreadyShown = runCatching {
+                authorizationDao.hasDispatchedNotification(dedupKey)
+            }.getOrDefault(false)
+            if (alreadyShown) {
+                rememberInMemory(dedupKey)
+                return@withContext false
+            }
+
+            rememberInMemory(dedupKey)
+            runCatching {
+                authorizationDao.recordDispatchedNotification(
+                    DispatchedNotificationKeyEntity(
+                        eventKey = dedupKey,
+                        userId = userId
+                    )
+                )
+            }
+        }
+
+        if (displayTrayNotification) {
+            showSystemNotification(
+                dedupKey = dedupKey,
+                title = title,
+                body = body,
+                category = category,
+                deepLink = deepLink,
+                taskId = taskId,
+                incidentId = incidentId,
+                notificationId = notificationId
+            )
+        }
+        true
+    }
+
     fun showSystemNotification(
         dedupKey: String,
         title: String,

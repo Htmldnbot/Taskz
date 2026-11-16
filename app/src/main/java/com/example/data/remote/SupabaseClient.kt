@@ -2608,6 +2608,7 @@ class SupabaseClient(
             centreCode = json.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
             roleVersion = json.optLong("role_version", 1L),
             scopeVersion = json.optLong("scope_version", 1L),
+            needsScopeReview = json.optBoolean("needs_scope_review", false),
             isActive = json.optBoolean("is_active", true),
             mustChangePassword = json.optBoolean("must_change_password", false),
             lastSeenAt = json.optString("last_seen_at").takeIf { it.isNotBlank() && !it.equals("null", true) },
