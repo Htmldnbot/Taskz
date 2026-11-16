@@ -8,8 +8,10 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.example.TaskzApplication
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.SyncStatus
@@ -30,6 +32,8 @@ class SyncWorker(
     companion object {
         private const val TAG = "TaskzSyncWorker"
         const val WORK_NAME = "taskz_offline_sync_work"
+        const val EXPEDITED_WORK_NAME = "taskz_expedited_sync_work"
+        const val KEY_FORCE_FULL = "force_full"
 
         fun enqueueSync(context: Context) {
             val constraints = Constraints.Builder()
@@ -44,6 +48,25 @@ class SyncWorker(
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
+                syncRequest
+            )
+        }
+
+        fun enqueueExpeditedSync(context: Context, forceFull: Boolean = false) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setConstraints(constraints)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(workDataOf(KEY_FORCE_FULL to forceFull))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                EXPEDITED_WORK_NAME,
+                if (forceFull) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 syncRequest
             )
         }
@@ -108,8 +131,9 @@ class SyncWorker(
             outboxDao.deleteLegacyPreMigrationEvents(activeUserId)
             outboxDao.claimEventsForSync(activeUserId)
         }
+        val forceFull = inputData.getBoolean(KEY_FORCE_FULL, false)
         if (pendingEvents.isEmpty()) {
-            runCatching { TaskzApplication.instance.taskzSyncManager.syncNow() }
+            runCatching { TaskzApplication.instance.taskzSyncManager.syncNow(forceFull = forceFull) }
             val remaining = outboxDao.getPendingEventsForUser(activeUserId).size
             if (remaining == 0) {
                 db.syncMetadataDao().updateSyncStatus(SyncStatus.SYNCED.name, "Up to date")
@@ -497,7 +521,7 @@ class SyncWorker(
             return@withContext Result.failure()
         }
 
-        runCatching { TaskzApplication.instance.taskzSyncManager.syncNow() }
+        runCatching { TaskzApplication.instance.taskzSyncManager.syncNow(forceFull = forceFull) }
 
         val remainingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         val remainingPending = remainingEvents.size

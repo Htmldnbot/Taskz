@@ -191,7 +191,13 @@ fun MainShell(
     val context = LocalContext.current
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { }
+    ) { granted ->
+        if (granted) {
+            coroutineScope.launch {
+                runCatching { app.deviceTokenManager.fetchAndRegisterFcmTokenIfAvailable() }
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -203,6 +209,7 @@ fun MainShell(
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        runCatching { app.deviceTokenManager.fetchAndRegisterFcmTokenIfAvailable() }
         syncManager.syncNow(forceFull = false)
     }
 

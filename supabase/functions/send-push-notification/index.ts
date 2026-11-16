@@ -200,10 +200,9 @@ async function dispatchSinglePayload(
             body: JSON.stringify({
               message: {
                 token: row.token,
-                notification: {
-                  title: payload.title,
-                  body: payload.body ?? "",
-                },
+                // Data-only payload ensures Android ALWAYS wakes TaskzFirebaseMessagingService.onMessageReceived()
+                // even when the app is closed/killed, so it can render the categorized notification channel,
+                // deduplicate by event_key, run background delta sync, and schedule exact alarms immediately.
                 data: {
                   event_key: payload.event_key ?? "",
                   category,
@@ -217,12 +216,10 @@ async function dispatchSinglePayload(
                   body: payload.body ?? "",
                 },
                 android: {
-                  priority: isUrgent ? "high" : "normal",
+                  priority: "high",
+                  ttl: "86400s",
                   collapse_key: payload.event_key,
-                  notification: {
-                    channel_id: channelId,
-                    tag: payload.event_key,
-                  },
+                  direct_boot_ok: false,
                 },
               },
             }),
@@ -298,7 +295,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Supabase service credentials missing" }), { status: 500 });
     }
 
-    const payload: PushPayload = await req.json();
+    const rawBody = await req.json();
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     if (!fcmSaRaw) {
@@ -314,6 +311,55 @@ Deno.serve(async (req: Request) => {
 
     const sa: ServiceAccount = JSON.parse(fcmSaRaw);
     const fcmToken = await getFcmAccessToken(sa);
+
+    // Support Supabase Dashboard Database Webhooks ({ type: "INSERT", table: ..., record: ... })
+    if (rawBody?.type === "INSERT" && rawBody?.record && typeof rawBody.record === "object") {
+      const rec = rawBody.record as Record<string, unknown>;
+      let webhookPayload: PushPayload | null = null;
+      let queueId: string | null = null;
+
+      if (rawBody.table === "push_dispatch_queue" && rec.payload && typeof rec.payload === "object") {
+        webhookPayload = rec.payload as PushPayload;
+        queueId = typeof rec.id === "string" ? rec.id : null;
+      } else if (rawBody.table === "notifications" && typeof rec.user_id === "string") {
+        const notifId = typeof rec.id === "string" ? rec.id : undefined;
+        const cat = typeof rec.category === "string" && rec.category ? (rec.category as PushPayload["category"]) : "task_update";
+        webhookPayload = {
+          notification_id: notifId,
+          user_ids: [rec.user_id],
+          category: cat,
+          title: typeof rec.title === "string" ? rec.title : "Taskz Notification",
+          body: typeof rec.body === "string" ? rec.body : "",
+          event_key: typeof rec.event_key === "string" && rec.event_key ? rec.event_key : `notif:${notifId ?? Date.now()}`,
+          deep_link: typeof rec.deep_link === "string" ? rec.deep_link : "",
+          task_id: typeof rec.task_id === "string" ? rec.task_id : "",
+          incident_id: typeof rec.incident_id === "string" ? rec.incident_id : "",
+          scope_level: typeof rec.scope_level === "string" ? rec.scope_level : "",
+          importance: cat === "incident_escalation" || cat === "system_alert" || cat === "task_reminder" ? "HIGH" : "NORMAL",
+        };
+      }
+
+      if (!webhookPayload?.user_ids?.length || !webhookPayload.title || !webhookPayload.event_key) {
+        return new Response(JSON.stringify({ error: "Invalid Database Webhook payload" }), { status: 400 });
+      }
+
+      const result = await dispatchSinglePayload(supabase, sa, fcmToken, webhookPayload);
+      if (queueId) {
+        const nextStatus = result.delivered > 0 || result.transientFailures === 0 ? "SENT" : "FAILED_RETRYABLE";
+        await supabase.rpc("complete_push_dispatch", {
+          p_queue_id: queueId,
+          p_status: nextStatus,
+          p_error: result.transientFailures > 0 ? `${result.transientFailures} transient FCM errors` : null,
+          p_retry_delay_seconds: 60,
+        });
+      }
+      return new Response(JSON.stringify({ mode: "database_webhook", ...result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const payload: PushPayload = rawBody as PushPayload;
 
     if (payload.mode === "drain_queue") {
       const batchSize = Math.min(Math.max(Number(payload.batch_size) || 25, 1), 100);

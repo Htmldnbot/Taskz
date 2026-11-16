@@ -6,42 +6,44 @@ import com.example.core.model.NotificationCategory
 import com.example.sync.SyncWorker
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Handles real FCM push token rotation and incoming push notifications.
  * Deduplicates notifications by event_key across FCM, Realtime, and Delta Sync,
- * and triggers scoped delta synchronization immediately when a push arrives.
+ * renders tray alerts reliably when closed, and triggers expedited background sync + alarm scheduling.
  */
 class TaskzFirebaseMessagingService : FirebaseMessagingService() {
 
     companion object {
         private const val TAG = "TaskzFCMService"
+        private const val FCM_SYNC_WINDOW_MS = 8_000L
     }
-
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         val clean = token.trim()
         if (clean.isBlank()) return
         Log.i(TAG, "Received refreshed FCM token (length=${clean.length})")
-        serviceScope.launch {
-            runCatching {
-                val app = applicationContext as? TaskzApplication ?: TaskzApplication.instance
-                app.deviceTokenManager.onNewPushToken(clean)
-            }.onFailure {
-                Log.w(TAG, "Deferred FCM token registration: ${it.message}")
+        runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(5_000L) {
+                runCatching {
+                    val app = applicationContext as? TaskzApplication ?: TaskzApplication.instance
+                    app.deviceTokenManager.onNewPushToken(clean)
+                }.onFailure {
+                    Log.w(TAG, "Deferred FCM token registration: ${it.message}")
+                }
             }
         }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
-        val app = (applicationContext as? TaskzApplication) ?: runCatching { TaskzApplication.instance }.getOrNull() ?: return
+        val app = (applicationContext as? TaskzApplication)
+            ?: runCatching { TaskzApplication.instance }.getOrNull()
+            ?: return
         val data = message.data
         val eventKey = data["event_key"]?.trim()?.takeIf { it.isNotBlank() }
             ?: message.messageId?.let { "fcm:$it" }
@@ -60,20 +62,20 @@ class TaskzFirebaseMessagingService : FirebaseMessagingService() {
             ?: data["body"]?.takeIf { it.isNotBlank() }
             ?: "Open Taskz for details"
 
-        // If FCM already carried a notification block while the app was backgrounded,
-        // the OS has already rendered the system tray notification; only record event_key
-        // to suppress duplicate alerts when delta sync subsequently pulls the same record.
+        // Display tray notification unless OS already rendered a notification block while backgrounded
         val shouldRenderLocalTray = message.notification == null || app.isAppInForeground
         val isRoleOrAdminUpdate = category == NotificationCategory.ADMIN_ALERT ||
             typeRaw.equals("role_changed", ignoreCase = true)
 
-        serviceScope.launch {
+        // Hold FCM's execution wake window long enough to display the notification and run/schedule background sync
+        runBlocking(Dispatchers.IO) {
             val session = app.userPreferences.getUserSession()
             val activeUserId = session.userId.orEmpty()
             if (!session.isAuthenticated || activeUserId.isBlank()) {
                 Log.d(TAG, "Ignoring incoming push while signed out")
-                return@launch
+                return@runBlocking
             }
+
             runCatching {
                 app.pushNotificationManager.dispatchRemotePushIfUnique(
                     eventKey = eventKey,
@@ -91,15 +93,17 @@ class TaskzFirebaseMessagingService : FirebaseMessagingService() {
                 Log.w(TAG, "Push dispatch/dedup warning: ${it.message}")
             }
 
+            // Always schedule expedited WorkManager sync so closed-app task/alarm sync survives process freeze
+            runCatching {
+                SyncWorker.enqueueExpeditedSync(applicationContext, forceFull = isRoleOrAdminUpdate)
+            }
+
             if (app.networkMonitor.isCurrentlyConnected()) {
-                val syncResult = runCatching {
-                    app.taskzSyncManager.syncNow(forceFull = isRoleOrAdminUpdate)
-                }.getOrNull()
-                if (syncResult == null || syncResult.isFailure) {
-                    runCatching { SyncWorker.enqueueSync(applicationContext) }
+                withTimeoutOrNull(FCM_SYNC_WINDOW_MS) {
+                    runCatching {
+                        app.taskzSyncManager.syncNow(forceFull = isRoleOrAdminUpdate)
+                    }
                 }
-            } else {
-                runCatching { SyncWorker.enqueueSync(applicationContext) }
             }
         }
     }
