@@ -478,6 +478,7 @@ declare
 begin
     if current_setting('taskz.bypass_task_guard', true) = '1'
        or coalesce(auth.role(), '') = 'service_role'
+       or (session_user in ('postgres', 'supabase_admin', 'supabase_auth_admin') and nullif(current_setting('request.jwt.claims', true), '') is null)
        or public.is_super_admin() then
         return new;
     end if;
@@ -1057,9 +1058,17 @@ begin
                   si.zone_id,
                   si.state_id,
                   si.city_id,
-                  case when si.centre_id ~ '^[0-9a-fA-F-]{36}$' then si.centre_id::uuid
-                       else (select oc.id from public.org_centres oc where oc.external_code = si.centre_id or upper(oc.code) = upper(si.centre_code) limit 1)
-                  end,
+                  coalesce(
+                      (select oc.id from public.org_centres oc where oc.id::text = si.centre_id::text limit 1),
+                      (select oc.id from public.org_centres oc
+                       where nullif(trim(si.centre_code), '') is not null
+                         and (
+                             upper(oc.code) = upper(trim(si.centre_code))
+                             or upper(coalesce(oc.external_code, '')) = upper(trim(si.centre_code))
+                             or oc.external_code = si.centre_id::text
+                         )
+                       limit 1)
+                  ),
                   v_caller
               )
           );

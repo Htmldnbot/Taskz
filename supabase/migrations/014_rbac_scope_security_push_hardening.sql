@@ -19,6 +19,61 @@ begin;
 alter table public.profiles
     add column if not exists needs_scope_review boolean not null default false;
 
+alter table public.system_incident_audit
+    add column if not exists changed_by_name text;
+
+alter table public.client_events
+    add column if not exists client_operation_id text,
+    add column if not exists target_id uuid;
+
+create unique index if not exists idx_client_events_client_operation_uniq
+    on public.client_events(client_operation_id);
+
+-- Ensure profile guard permits migration/SQL-editor context before profile scope backfill
+create or replace function public.protect_profile_rbac_columns()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+begin
+    if current_setting('taskz.bypass_rbac_guard', true) = '1'
+       or current_setting('taskz.bypass_profile_guard', true) = '1' then
+        return new;
+    end if;
+
+    if coalesce(auth.role(), '') = 'service_role'
+       or (session_user in ('postgres', 'supabase_admin', 'supabase_auth_admin') and nullif(current_setting('request.jwt.claims', true), '') is null)
+       or public.is_super_admin() then
+        return new;
+    end if;
+
+    if new.app_role is distinct from old.app_role
+       or new.primary_role_code is distinct from old.primary_role_code
+       or new.zone_id is distinct from old.zone_id
+       or new.state_id is distinct from old.state_id
+       or new.city_id is distinct from old.city_id
+       or new.centre_id is distinct from old.centre_id
+       or new.is_active is distinct from old.is_active
+       or new.employee_id is distinct from old.employee_id then
+        raise exception 'Forbidden: only Super Admin can modify role, scope, employee_id, or active status';
+    end if;
+
+    if new.active_role_code is distinct from old.active_role_code then
+        if not exists (
+            select 1 from public.user_roles ur
+            where ur.user_id = old.id and ur.role_code = upper(new.active_role_code)
+        ) then
+            raise exception 'Forbidden: role % is not assigned to user', new.active_role_code;
+        end if;
+    end if;
+
+    return new;
+end;
+$$;
+
+select set_config('taskz.bypass_rbac_guard', '1', true);
+
 -- Conservatively populate missing hierarchy IDs ONLY when profiles.centre_code
 -- unambiguously matches an active org_centres code/external_code.
 update public.profiles p
@@ -1018,9 +1073,17 @@ with check (
         zone_id,
         state_id,
         city_id,
-        case when centre_id ~ '^[0-9a-fA-F-]{36}$' then centre_id::uuid
-             else (select oc.id from public.org_centres oc where oc.external_code = centre_id or upper(oc.code) = upper(centre_code) limit 1)
-        end,
+        coalesce(
+            (select oc.id from public.org_centres oc where oc.id::text = system_incidents.centre_id::text limit 1),
+            (select oc.id from public.org_centres oc
+             where nullif(trim(system_incidents.centre_code), '') is not null
+               and (
+                   upper(oc.code) = upper(trim(system_incidents.centre_code))
+                   or upper(coalesce(oc.external_code, '')) = upper(trim(system_incidents.centre_code))
+                   or oc.external_code = system_incidents.centre_id::text
+               )
+             limit 1)
+        ),
         (select auth.uid())
     )
 );
@@ -1032,7 +1095,10 @@ security definer
 set search_path = public, auth, pg_temp
 as $$
 begin
-    if current_setting('taskz.bypass_incident_guard', true) = '1' or public.is_super_admin() then
+    if current_setting('taskz.bypass_incident_guard', true) = '1'
+       or coalesce(auth.role(), '') = 'service_role'
+       or (session_user in ('postgres', 'supabase_admin', 'supabase_auth_admin') and nullif(current_setting('request.jwt.claims', true), '') is null)
+       or public.is_super_admin() then
         return new;
     end if;
 
@@ -1166,14 +1232,17 @@ begin
     v_eff_zone_id := v_inc.zone_id;
     v_eff_state_id := v_inc.state_id;
     v_eff_city_id := v_inc.city_id;
-    if v_inc.centre_id ~ '^[0-9a-fA-F-]{36}$' then
-        v_eff_centre_id := v_inc.centre_id::uuid;
-    else
-        select oc.id into v_eff_centre_id
-        from public.org_centres oc
-        where oc.external_code = v_inc.centre_id or upper(oc.code) = upper(v_inc.centre_code)
-        limit 1;
-    end if;
+    v_eff_centre_id := coalesce(
+        (select oc.id from public.org_centres oc where oc.id::text = v_inc.centre_id::text limit 1),
+        (select oc.id from public.org_centres oc
+         where nullif(trim(v_inc.centre_code), '') is not null
+           and (
+               upper(oc.code) = upper(trim(v_inc.centre_code))
+               or upper(coalesce(oc.external_code, '')) = upper(trim(v_inc.centre_code))
+               or oc.external_code = v_inc.centre_id::text
+           )
+         limit 1)
+    );
     if v_eff_centre_id is not null and (v_eff_zone_id is null or v_eff_state_id is null or v_eff_city_id is null) then
         select
             coalesce(v_eff_zone_id, oc.zone_id),
@@ -1267,8 +1336,21 @@ begin
     end loop;
 
     if p_client_operation_id is not null and trim(p_client_operation_id) <> '' then
-        insert into public.client_events(user_id, client_operation_id, event_type, target_id, payload)
-        values (v_caller, p_client_operation_id, 'INCIDENT_ESCALATED', p_incident_id, jsonb_build_object('target_level', v_target))
+        insert into public.client_events(transaction_id, user_id, client_operation_id, event_type, entity_type, entity_id, target_id, payload, status)
+        values (
+            coalesce(
+                case when p_client_operation_id ~ '^[0-9a-fA-F-]{36}$' then p_client_operation_id::uuid else null end,
+                gen_random_uuid()
+            ),
+            v_caller,
+            p_client_operation_id,
+            'INCIDENT_ESCALATED',
+            'system_incident',
+            p_incident_id,
+            p_incident_id,
+            jsonb_build_object('target_level', v_target),
+            'processed'
+        )
         on conflict (client_operation_id) do nothing;
     end if;
 
@@ -1594,7 +1676,7 @@ begin
         else (v_centre_id is null)
     end;
 
-    perform set_config('taskz.bypass_profile_guard', '1', true);
+    perform set_config('taskz.bypass_rbac_guard', '1', true);
 
     delete from public.user_roles
     where user_id = p_target_user_id

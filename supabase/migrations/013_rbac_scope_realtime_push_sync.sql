@@ -4,6 +4,8 @@
 -- Additive & idempotent migration — preserves all existing tables and RPCs.
 -- ============================================================================
 
+begin;
+
 -- 1. ORGANIZATIONAL HIERARCHY TABLES (ZONE -> STATE -> CITY -> CENTRE)
 create table if not exists public.org_zones (
     id uuid primary key default gen_random_uuid(),
@@ -64,33 +66,110 @@ alter table public.work_roles
     add column if not exists default_scope_level text not null default 'CENTRE',
     add column if not exists is_self_assignable boolean not null default false;
 
+do $$
+declare
+    v_existing_id uuid;
+    v_role record;
+begin
+    -- Map single canonical IT_MANAGER row without duplicate canonical_code conflicts
+    select id into v_existing_id
+    from public.work_roles
+    where id = '11111111-1111-4111-8111-111111111102'
+       or canonical_code = 'IT_MANAGER'
+       or upper(coalesce(code, '')) in ('ITM', 'IT_MANAGER')
+    order by (id = '11111111-1111-4111-8111-111111111102') desc, sort_order asc
+    limit 1;
+
+    if v_existing_id is not null then
+        update public.work_roles
+        set canonical_code = null
+        where canonical_code = 'IT_MANAGER' and id <> v_existing_id;
+
+        update public.work_roles
+        set canonical_code = 'IT_MANAGER', hierarchy_level = 10, default_scope_level = 'CENTRE', is_self_assignable = true
+        where id = v_existing_id;
+    else
+        insert into public.work_roles (id, name, code, canonical_code, description, is_active, sort_order, hierarchy_level, default_scope_level, is_self_assignable)
+        values ('11111111-1111-4111-8111-111111111102', 'IT Manager', 'ITM', 'IT_MANAGER', 'Technical support and workstation maintenance', true, 2, 10, 'CENTRE', true)
+        on conflict (lower(name)) do update
+        set canonical_code = excluded.canonical_code,
+            hierarchy_level = excluded.hierarchy_level,
+            default_scope_level = excluded.default_scope_level,
+            is_self_assignable = excluded.is_self_assignable,
+            is_active = true;
+    end if;
+
+    -- Map single canonical VCO row without duplicate canonical_code conflicts
+    select id into v_existing_id
+    from public.work_roles
+    where id = '11111111-1111-4111-8111-111111111106'
+       or canonical_code = 'VCO'
+       or upper(coalesce(code, '')) = 'VCO'
+    order by (id = '11111111-1111-4111-8111-111111111106') desc, sort_order asc
+    limit 1;
+
+    if v_existing_id is not null then
+        update public.work_roles
+        set canonical_code = null
+        where canonical_code = 'VCO' and id <> v_existing_id;
+
+        update public.work_roles
+        set canonical_code = 'VCO', hierarchy_level = 20, default_scope_level = 'CITY', is_self_assignable = true
+        where id = v_existing_id;
+    else
+        insert into public.work_roles (id, name, code, canonical_code, description, is_active, sort_order, hierarchy_level, default_scope_level, is_self_assignable)
+        values ('11111111-1111-4111-8111-111111111106', 'VCO / Venue Head', 'VCO', 'VCO', 'Venue Commanding Officer / Venue Head', true, 6, 20, 'CITY', true)
+        on conflict (lower(name)) do update
+        set canonical_code = excluded.canonical_code,
+            hierarchy_level = excluded.hierarchy_level,
+            default_scope_level = excluded.default_scope_level,
+            is_self_assignable = excluded.is_self_assignable,
+            is_active = true;
+    end if;
+
+    -- Upsert higher organizational roles conflict-safely across id, lower(name), and code
+    for v_role in
+        select * from (
+            values
+                ('11111111-1111-4111-8111-111111111108'::uuid, 'City Head / HOM', 'CITY_HEAD', 'CITY_HEAD', 'City-wide operations supervision and review', 8, 30, 'CITY', false),
+                ('11111111-1111-4111-8111-111111111109'::uuid, 'ROM (Regional Manager)', 'ROM', 'ROM', 'State / Regional Operations Manager', 9, 40, 'STATE', false),
+                ('11111111-1111-4111-8111-111111111110'::uuid, 'ZOM (Zonal Manager)', 'ZOM', 'ZOM', 'Zonal Operations Manager', 10, 50, 'ZONE', false),
+                ('11111111-1111-4111-8111-111111111111'::uuid, 'Command Center / SPOC', 'COMMAND_CENTER', 'COMMAND_CENTER', 'Central monitoring & operational coordination', 11, 60, 'GLOBAL', false),
+                ('11111111-1111-4111-8111-111111111112'::uuid, 'Super Admin', 'SUPER_ADMIN', 'SUPER_ADMIN', 'Global administrative & RBAC governance', 12, 100, 'GLOBAL', false)
+        ) as t(id, name, code, canonical_code, description, sort_order, hierarchy_level, default_scope_level, is_self_assignable)
+    loop
+        select id into v_existing_id
+        from public.work_roles
+        where id = v_role.id
+           or lower(name) = lower(v_role.name)
+           or canonical_code = v_role.canonical_code
+           or upper(coalesce(code, '')) = v_role.code
+        order by (id = v_role.id) desc, sort_order asc
+        limit 1;
+
+        if v_existing_id is not null then
+            update public.work_roles
+            set canonical_code = null
+            where canonical_code = v_role.canonical_code and id <> v_existing_id;
+
+            update public.work_roles
+            set canonical_code = v_role.canonical_code,
+                code = v_role.code,
+                hierarchy_level = v_role.hierarchy_level,
+                default_scope_level = v_role.default_scope_level,
+                is_self_assignable = v_role.is_self_assignable,
+                is_active = true
+            where id = v_existing_id;
+        else
+            insert into public.work_roles (id, name, code, canonical_code, description, is_active, sort_order, hierarchy_level, default_scope_level, is_self_assignable)
+            values (v_role.id, v_role.name, v_role.code, v_role.canonical_code, v_role.description, true, v_role.sort_order, v_role.hierarchy_level, v_role.default_scope_level, v_role.is_self_assignable);
+        end if;
+    end loop;
+end $$;
+
 create unique index if not exists idx_work_roles_canonical_code
     on public.work_roles(canonical_code)
     where canonical_code is not null;
-
--- Map existing canonical IDs & seed higher organizational roles without breaking existing IDs
-update public.work_roles
-set canonical_code = 'IT_MANAGER', hierarchy_level = 10, default_scope_level = 'CENTRE', is_self_assignable = true
-where id = '11111111-1111-4111-8111-111111111102' or upper(coalesce(code, '')) in ('ITM', 'IT_MANAGER');
-
-update public.work_roles
-set canonical_code = 'VCO', hierarchy_level = 20, default_scope_level = 'CITY', is_self_assignable = true
-where id = '11111111-1111-4111-8111-111111111106' or upper(coalesce(code, '')) = 'VCO';
-
-insert into public.work_roles (id, name, code, canonical_code, description, is_active, sort_order, hierarchy_level, default_scope_level, is_self_assignable)
-values
-    ('11111111-1111-4111-8111-111111111108', 'City Head / HOM', 'CITY_HEAD', 'CITY_HEAD', 'City-wide operations supervision and review', true, 8, 30, 'CITY', false),
-    ('11111111-1111-4111-8111-111111111109', 'ROM (Regional Manager)', 'ROM', 'ROM', 'State / Regional Operations Manager', true, 9, 40, 'STATE', false),
-    ('11111111-1111-4111-8111-111111111110', 'ZOM (Zonal Manager)', 'ZOM', 'ZOM', 'Zonal Operations Manager', true, 10, 50, 'ZONE', false),
-    ('11111111-1111-4111-8111-111111111111', 'Command Center / SPOC', 'COMMAND_CENTER', 'COMMAND_CENTER', 'Central monitoring & operational coordination', true, 11, 60, 'GLOBAL', false),
-    ('11111111-1111-4111-8111-111111111112', 'Super Admin', 'SUPER_ADMIN', 'SUPER_ADMIN', 'Global administrative & RBAC governance', true, 12, 100, 'GLOBAL', false)
-on conflict (lower(name)) do update
-set canonical_code = excluded.canonical_code,
-    code = excluded.code,
-    hierarchy_level = excluded.hierarchy_level,
-    default_scope_level = excluded.default_scope_level,
-    is_self_assignable = excluded.is_self_assignable,
-    is_active = true;
 
 create table if not exists public.user_roles (
     id uuid primary key default gen_random_uuid(),
@@ -130,16 +209,21 @@ create index if not exists idx_profiles_state on public.profiles(state_id);
 create index if not exists idx_profiles_zone on public.profiles(zone_id);
 create index if not exists idx_profiles_active_role on public.profiles(active_role_code);
 
--- Backfill user_roles for existing profiles safely
+-- Backfill user_roles for existing profiles safely using resolved work_roles.id
 insert into public.user_roles (user_id, role_id, role_code, is_primary)
 select
     p.id,
-    case when p.app_role = 'admin' then '11111111-1111-4111-8111-111111111112'::uuid else '11111111-1111-4111-8111-111111111102'::uuid end,
+    case
+        when p.app_role = 'admin' then (select id from public.work_roles where canonical_code = 'SUPER_ADMIN' limit 1)
+        else (select id from public.work_roles where canonical_code = 'IT_MANAGER' limit 1)
+    end,
     case when p.app_role = 'admin' then 'SUPER_ADMIN' else 'IT_MANAGER' end,
     true
 from public.profiles p
 where not exists (select 1 from public.user_roles ur where ur.user_id = p.id)
 on conflict (user_id, role_id) do nothing;
+
+select set_config('taskz.bypass_rbac_guard', '1', true);
 
 update public.profiles p
 set active_role_code = coalesce(
@@ -150,7 +234,7 @@ set active_role_code = coalesce(
         p.primary_role_code,
         case when p.app_role = 'admin' then 'SUPER_ADMIN' else 'IT_MANAGER' end
     ),
-    email = coalesce(p.email, u.email)
+    email = coalesce(p.email, u.email::text)
 from auth.users u
 where u.id = p.id
   and (p.active_role_code is null or p.primary_role_code is null or p.email is null);
@@ -245,11 +329,14 @@ security definer
 set search_path = public, auth, pg_temp
 as $$
 begin
-    if current_setting('Taskz.bypass_rbac_guard', true) = '1' then
+    if current_setting('taskz.bypass_rbac_guard', true) = '1'
+       or current_setting('taskz.bypass_profile_guard', true) = '1' then
         return new;
     end if;
 
-    if auth.role() = 'service_role' or public.is_super_admin() then
+    if coalesce(auth.role(), '') = 'service_role'
+       or (session_user in ('postgres', 'supabase_admin', 'supabase_auth_admin') and nullif(current_setting('request.jwt.claims', true), '') is null)
+       or public.is_super_admin() then
         return new;
     end if;
 
@@ -502,6 +589,9 @@ $$;
 
 -- 6. EXTEND system_incidents WITH SCOPE, STATUS & ESCALATION CHAIN
 alter table public.system_incidents
+    drop constraint if exists system_incidents_centre_id_fkey;
+
+alter table public.system_incidents
     add column if not exists scope_level text not null default 'CENTRE',
     add column if not exists zone_id uuid references public.org_zones(id) on delete set null,
     add column if not exists state_id uuid references public.org_states(id) on delete set null,
@@ -515,6 +605,9 @@ alter table public.system_incidents
     add column if not exists resolved_by uuid references public.profiles(id) on delete set null,
     add column if not exists deleted_at timestamptz null,
     add column if not exists version bigint not null default 1;
+
+alter table public.system_incident_audit
+    add column if not exists changed_by_name text;
 
 create index if not exists idx_incidents_scope on public.system_incidents(scope_level);
 create index if not exists idx_incidents_zone on public.system_incidents(zone_id);
@@ -545,9 +638,17 @@ as $$
                   si.zone_id,
                   si.state_id,
                   si.city_id,
-                  case when si.centre_id ~ '^[0-9a-fA-F-]{36}$' then si.centre_id::uuid
-                       else (select oc.id from public.org_centres oc where oc.external_code = si.centre_id or oc.code = si.centre_code limit 1)
-                  end,
+                  coalesce(
+                      (select oc.id from public.org_centres oc where oc.id::text = si.centre_id::text limit 1),
+                      (select oc.id from public.org_centres oc
+                       where nullif(trim(si.centre_code), '') is not null
+                         and (
+                             upper(oc.code) = upper(trim(si.centre_code))
+                             or upper(coalesce(oc.external_code, '')) = upper(trim(si.centre_code))
+                             or oc.external_code = si.centre_id::text
+                         )
+                       limit 1)
+                  ),
                   (select auth.uid())
               )
           )
@@ -627,6 +728,21 @@ alter table public.user_sync_state
     add column if not exists sync_version bigint not null default 1,
     add column if not exists last_delta_sync_at timestamptz null,
     add column if not exists active_role_code text;
+
+alter table public.client_events
+    add column if not exists client_operation_id text,
+    add column if not exists target_id uuid;
+
+create unique index if not exists idx_client_events_client_operation_uniq
+    on public.client_events(client_operation_id);
+
+create unique index if not exists group_member_active_unique
+    on public.group_members(group_id, user_id)
+    where status = 'active';
+
+create unique index if not exists task_participant_active_unique
+    on public.task_participants(task_id, user_id)
+    where status = 'active';
 
 -- 9. NOTIFICATION HELPER WITH IDEMPOTENCY KEY
 create or replace function public.create_scoped_notification(
@@ -1330,9 +1446,22 @@ begin
         v_notified := v_notified + 1;
     end loop;
 
-    if p_client_operation_id is not null then
-        insert into public.client_events(user_id, client_operation_id, event_type, target_id, payload)
-        values (v_caller, p_client_operation_id, 'INCIDENT_ESCALATED', p_incident_id, jsonb_build_object('target_level', v_target))
+    if p_client_operation_id is not null and trim(p_client_operation_id) <> '' then
+        insert into public.client_events(transaction_id, user_id, client_operation_id, event_type, entity_type, entity_id, target_id, payload, status)
+        values (
+            coalesce(
+                case when p_client_operation_id ~ '^[0-9a-fA-F-]{36}$' then p_client_operation_id::uuid else null end,
+                gen_random_uuid()
+            ),
+            v_caller,
+            p_client_operation_id,
+            'INCIDENT_ESCALATED',
+            'system_incident',
+            p_incident_id,
+            p_incident_id,
+            jsonb_build_object('target_level', v_target),
+            'processed'
+        )
         on conflict (client_operation_id) do nothing;
     end if;
 
@@ -1936,3 +2065,7 @@ begin
         begin alter publication supabase_realtime add table public.profiles; exception when duplicate_object then null; end;
     end if;
 end $$;
+
+commit;
+
+notify pgrst, 'reload schema';
