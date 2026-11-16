@@ -162,9 +162,12 @@ class SyncWorker(
                         if (res.isSuccess) {
                             outboxDao.markEventSynced(event.id, "DELETED", System.currentTimeMillis())
                         } else {
-                            val err = res.exceptionOrNull()?.message ?: "Task deletion sync error"
-                            outboxDao.markEventFailed(event.id, err, "FAILED_RETRYABLE", System.currentTimeMillis())
-                            hasRetryableFailure = true
+                            val ex = res.exceptionOrNull()
+                            val err = ex?.message ?: "Task deletion sync error"
+                            val isPermanent = isPermanentError(ex, err)
+                            val status = if (isPermanent) "FAILED_PERMANENT" else "FAILED_RETRYABLE"
+                            outboxDao.markEventFailed(event.id, err, status, System.currentTimeMillis())
+                            if (!isPermanent) hasRetryableFailure = true
                         }
                     }
 
@@ -437,7 +440,7 @@ class SyncWorker(
                                 }
                                 else -> {
                                     val err = ex?.message ?: "Task update sync error"
-                                    val isPermanent = err.contains("forbidden", true) || err.contains("not authorized", true)
+                                    val isPermanent = isPermanentError(ex, err)
                                     outboxDao.markEventFailed(
                                         event.id,
                                         err,

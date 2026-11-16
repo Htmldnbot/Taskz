@@ -1907,6 +1907,13 @@ class SupabaseClient(
             if (taskPayload.has("lan_target_list")) put("lan_target_list", taskPayload.optJSONArray("lan_target_list"))
             put("completion_policy", taskPayload.optString("completion_policy", "SINGLE_ASSIGNEE"))
             if (taskPayload.has("response_form_schema")) put("response_form_schema", taskPayload.opt("response_form_schema"))
+            val scopeLevel = taskPayload.optString("scope_level", "CENTRE").ifBlank { "CENTRE" }
+            put("scope_level", scopeLevel)
+            if (SupabaseConfig.isValidUuid(taskPayload.optString("zone_id"))) put("zone_id", taskPayload.optString("zone_id"))
+            if (SupabaseConfig.isValidUuid(taskPayload.optString("state_id"))) put("state_id", taskPayload.optString("state_id"))
+            if (SupabaseConfig.isValidUuid(taskPayload.optString("city_id"))) put("city_id", taskPayload.optString("city_id"))
+            if (SupabaseConfig.isValidUuid(taskPayload.optString("centre_id"))) put("centre_id", taskPayload.optString("centre_id"))
+            if (taskPayload.has("target_role_codes")) put("target_role_codes", taskPayload.optJSONArray("target_role_codes"))
             if (includeClientOpId && taskPayload.has("client_operation_id")) {
                 put("client_operation_id", taskPayload.optString("client_operation_id"))
             }

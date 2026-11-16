@@ -116,6 +116,10 @@ class TaskzRealtimeManager(
         }
     }
 
+    fun onNetworkUnavailable() {
+        disconnect(clearSession = false)
+    }
+
     fun updateSessionAndRole(
         accessToken: String?,
         userId: String?,

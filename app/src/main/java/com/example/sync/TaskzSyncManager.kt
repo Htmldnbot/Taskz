@@ -239,6 +239,7 @@ class TaskzSyncManager(
             runCatching { deviceTokenManager.registerActiveDeviceToken() }
             syncNow(forceFull = false)
         } else {
+            realtimeManager.onNetworkUnavailable()
             val offlineMsg = if (pendingCount > 0) {
                 "Offline — $pendingCount pending action(s) queued safely"
             } else {

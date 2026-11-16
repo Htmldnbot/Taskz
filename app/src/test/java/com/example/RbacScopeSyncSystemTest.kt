@@ -660,6 +660,72 @@ class RbacScopeSyncSystemTest {
         assertFalse(badReq.isAuthFailure)
     }
 
+    @Test
+    fun restrictedTaskWithEmptyTargetRolesHidesFromNonParticipantsAndEnforcesReadOnlyOversight() {
+        val restrictedCentreTask = TaskItem(
+            id = "task-restricted-1",
+            title = "Private Audit Check",
+            createdBy = "creator-it-1",
+            visibility = "restricted",
+            scopeLevel = ScopeLevel.CENTRE,
+            zoneId = "zone-1",
+            stateId = "state-1",
+            cityId = "city-1",
+            centreId = "centre-1",
+            targetRoleCodes = emptyList(),
+            currentUserParticipantStatus = null
+        )
+
+        val peerItMgr = TaskzPermissionManager(
+            buildContext(userId = "peer-it-2", role = TaskzRole.IT_MANAGER)
+        )
+        assertFalse("Restricted task must stay hidden from non-participating peers", peerItMgr.canViewTask(restrictedCentreTask))
+        assertFalse(peerItMgr.canEditTask(restrictedCentreTask))
+        assertFalse(peerItMgr.canCompleteTask(restrictedCentreTask))
+        assertFalse(peerItMgr.canAcknowledgeTask(restrictedCentreTask))
+
+        val activeParticipantTask = restrictedCentreTask.copy(
+            currentUserParticipantStatus = "active"
+        )
+        assertTrue(activeParticipantTask.isAssignedToMe)
+        assertTrue(peerItMgr.canViewTask(activeParticipantTask))
+        assertTrue(peerItMgr.canCompleteTask(activeParticipantTask))
+        assertFalse("Assignee should complete/acknowledge but not edit/reassign creator scope", peerItMgr.canAssignTask(activeParticipantTask))
+        assertFalse(peerItMgr.canReassignTask(activeParticipantTask))
+
+        val romOversight = TaskzPermissionManager(
+            buildContext(
+                userId = "rom-1",
+                role = TaskzRole.ROM,
+                zoneId = "zone-1",
+                stateId = "state-1",
+                cityId = null,
+                centreId = null
+            )
+        )
+        val everyoneCentreTask = restrictedCentreTask.copy(visibility = "everyone")
+        assertTrue("Oversight role in parent state should view everyone centre task", romOversight.canViewTask(everyoneCentreTask))
+        assertFalse("Oversight role must remain read-only on non-targeted lower-scope task", romOversight.canEditTask(everyoneCentreTask))
+        assertFalse(romOversight.canCompleteTask(everyoneCentreTask))
+        assertFalse(romOversight.canAcknowledgeTask(everyoneCentreTask))
+    }
+
+    @Test
+    fun realtimeManagerOnNetworkUnavailableResetsConnectedStateCleanly() {
+        val rt = TaskzRealtimeManager()
+        rt.updateSessionAndRole(
+            accessToken = "jwt-token-valid",
+            userId = "user-rt-1",
+            activeRoleCode = "IT_MANAGER"
+        )
+        rt.handleIncomingFrame("""["1","20","realtime:tasks_IT_MANAGER","phx_reply",{"status":"ok","response":{}}]""")
+        assertTrue(rt.isConnected.value)
+
+        rt.onNetworkUnavailable()
+        assertFalse("Network loss must immediately clear isConnected state", rt.isConnected.value)
+        assertTrue("Stale channel join states must be cleared on disconnect", rt.channelJoinStates.value.isEmpty())
+    }
+
     private fun buildContext(
         userId: String,
         role: TaskzRole,
