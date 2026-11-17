@@ -57,14 +57,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${PUSH_WEBHOOK_SECRET:-}" ]; then
-            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" PUSH_WEBHOOK_SECRET="$PUSH_WEBHOOK_SECRET"
+            supabase secrets set --remote="$SUPABASE_PROJECT_REF" --yes PUSH_WEBHOOK_SECRET="$PUSH_WEBHOOK_SECRET"
             echo "Synced PUSH_WEBHOOK_SECRET."
           else
             echo "::warning::PUSH_WEBHOOK_SECRET not set in GitHub Secrets; configure it in Supabase Dashboard if not already set."
           fi
 
           if [ -n "${FCM_SERVICE_ACCOUNT_JSON:-}" ]; then
-            supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" FCM_SERVICE_ACCOUNT_JSON="$FCM_SERVICE_ACCOUNT_JSON"
+            supabase secrets set --remote="$SUPABASE_PROJECT_REF" --yes FCM_SERVICE_ACCOUNT_JSON="$FCM_SERVICE_ACCOUNT_JSON"
             echo "Synced FCM_SERVICE_ACCOUNT_JSON."
           else
             echo "::warning::FCM_SERVICE_ACCOUNT_JSON not set in GitHub Secrets; configure it in Supabase Dashboard for FCM push delivery."
@@ -79,6 +79,6 @@ jobs:
           set -euo pipefail
           for fn in employee-login admin-reset-password send-push-notification; do
             echo "Deploying Edge Function: $fn"
-            supabase functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+            supabase functions deploy "$fn" --remote="$SUPABASE_PROJECT_REF" --no-verify-jwt --yes
           done
           echo "All Edge Functions deployed successfully."
