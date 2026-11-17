@@ -70,12 +70,52 @@ jobs:
 
           echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
 
-      # 4. Gradle permission
+      # 4. Restore Firebase & Supabase config if provided via GitHub Secrets
+      - name: Configure Firebase & Supabase environment for CI
+        id: app_secrets
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          CREATED_GS=false
+          if [ ! -f "app/google-services.json" ] && [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+            TRIMMED="$(printf '%s' "$GOOGLE_SERVICES_JSON" | sed 's/^[[:space:]]*//')"
+            if [[ "$TRIMMED" == \{* ]]; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '[:space:]' | base64 --decode > app/google-services.json
+            fi
+            CREATED_GS=true
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON secret."
+          elif [ -f "app/google-services.json" ]; then
+            echo "Using committed app/google-services.json."
+          else
+            echo "::warning::app/google-services.json is missing and GOOGLE_SERVICES_JSON secret is not set. FCM push tokens will be disabled in this APK."
+          fi
+
+          CREATED_ENV=false
+          if [ ! -f ".env" ] && { [ -n "${SUPABASE_URL:-}" ] || [ -n "${SUPABASE_ANON_KEY:-}" ]; }; then
+            {
+              [ -n "${SUPABASE_URL:-}" ] && printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+              [ -n "${SUPABASE_ANON_KEY:-}" ] && printf 'SUPABASE_ANON_KEY=%s\n' "$SUPABASE_ANON_KEY"
+            } > .env
+            CREATED_ENV=true
+            echo "Configured .env from GitHub Secrets."
+          fi
+
+          echo "created_gs=$CREATED_GS" >> "$GITHUB_OUTPUT"
+          echo "created_env=$CREATED_ENV" >> "$GITHUB_OUTPUT"
+
+      # 5. Gradle permission
       - name: Grant execute permission
         run: chmod +x ./gradlew
 
-      # 5. Build APK
-      - name: Build signed Debug APK
+      # 6. Run unit tests & build signed APK
+      - name: Test and build signed Debug APK
         shell: bash
         env:
           TASKZ_KEYSTORE_PATH: ${{ steps.keystore.outputs.keystore_path }}
@@ -85,9 +125,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Starting Taskz APK build..."
+          echo "Starting Taskz unit tests and APK build..."
 
-          ./gradlew clean assembleDebug --stacktrace
+          ./gradlew clean testDebugUnitTest assembleDebug --stacktrace
 
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
@@ -251,9 +291,18 @@ jobs:
 
           echo "Permanent signing key confirmed."
 
-      # 8. Cleanup
-      - name: Clean up temporary keystore
+      # 9. Cleanup
+      - name: Clean up temporary keystore and CI secrets
         if: always()
         shell: bash
+        env:
+          CREATED_GS: ${{ steps.app_secrets.outputs.created_gs }}
+          CREATED_ENV: ${{ steps.app_secrets.outputs.created_env }}
         run: |
           rm -f "$RUNNER_TEMP/taskz-signing.jks"
+          if [ "${CREATED_GS:-false}" = "true" ]; then
+            rm -f app/google-services.json
+          fi
+          if [ "${CREATED_ENV:-false}" = "true" ]; then
+            rm -f .env
+          fi

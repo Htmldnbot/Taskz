@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,6 +53,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,9 +68,13 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.TaskzApplication
+import com.example.sync.SyncWorker
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
 import com.example.ui.theme.TaskzWarning
+import com.google.firebase.FirebaseApp
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,11 +84,15 @@ fun AlarmReliabilitySettingsScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
 
     var notificationsEnabled by remember { mutableStateOf(false) }
     var exactAlarmGranted by remember { mutableStateOf(false) }
     var fullScreenIntentGranted by remember { mutableStateOf(false) }
     var batteryOptimizationIgnored by remember { mutableStateOf(false) }
+    var firebaseConfigured by remember { mutableStateOf(false) }
+    var hasFcmToken by remember { mutableStateOf(false) }
+    var pushSyncStatusMessage by remember { mutableStateOf<String?>(null) }
 
     fun refreshStates() {
         // 1. Notification Permission
@@ -107,6 +117,12 @@ fun AlarmReliabilitySettingsScreen(
         // 4. Battery Optimization Status
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         batteryOptimizationIgnored = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+
+        // 5. FCM Push & Background Sync Readiness
+        firebaseConfigured = runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
+        hasFcmToken = runCatching {
+            TaskzApplication.instance.deviceTokenManager.getRegisteredPushToken() != null
+        }.getOrDefault(false)
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -248,6 +264,42 @@ fun AlarmReliabilitySettingsScreen(
                 onAction = {
                     val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                     context.startActivity(intent)
+                }
+            )
+
+            // 5. Push Notifications (FCM) & Closed-App Background Sync
+            PermissionStatusCard(
+                title = "Push & Background Sync",
+                description = when {
+                    !firebaseConfigured -> "Firebase google-services.json is missing from this build. Add google-services.json or set GOOGLE_SERVICES_JSON in GitHub Secrets for real-time FCM push wakeups."
+                    !hasFcmToken -> "Firebase is active, but device push token is not registered yet. Tap below to register FCM token and trigger background sync."
+                    else -> "FCM push token is registered for instant closed-app task/alarm sync, with 15-minute WorkManager fallback active."
+                } + (pushSyncStatusMessage?.let { "\nStatus: $it" } ?: ""),
+                isGranted = firebaseConfigured && hasFcmToken,
+                grantedText = "FCM + Sync Ready",
+                notGrantedText = if (firebaseConfigured) "Token Pending" else "FCM Not Configured",
+                icon = Icons.Default.Sync,
+                actionLabel = "Refresh Push Token & Sync Now",
+                onAction = {
+                    coroutineScope.launch {
+                        pushSyncStatusMessage = "Registering push token & syncing..."
+                        val app = runCatching { TaskzApplication.instance }.getOrNull()
+                        if (app == null) {
+                            pushSyncStatusMessage = "Application context unavailable"
+                            return@launch
+                        }
+                        runCatching { SyncWorker.schedulePeriodicSync(context) }
+                        val tokenRes = app.deviceTokenManager.fetchAndRegisterFcmTokenIfAvailable()
+                        val syncRes = app.taskzSyncManager.syncNow(forceFull = false)
+                        refreshStates()
+                        pushSyncStatusMessage = when {
+                            !firebaseConfigured -> "Build missing google-services.json; sync ${if (syncRes.isSuccess) "succeeded" else "deferred"}"
+                            tokenRes.isSuccess && hasFcmToken && syncRes.isSuccess -> "FCM token registered & tasks synced"
+                            tokenRes.isFailure -> "Token registration error: ${tokenRes.exceptionOrNull()?.message}"
+                            syncRes.isFailure -> "Token ready; sync warning: ${syncRes.exceptionOrNull()?.message}"
+                            else -> "FCM token pending from Google Play Services; retry shortly"
+                        }
+                    }
                 }
             )
 
