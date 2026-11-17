@@ -1180,6 +1180,11 @@ class TaskRepository(
                 if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedStateId)) put("state_id", resolvedStateId)
                 if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedCityId)) put("city_id", resolvedCityId)
                 if (com.example.core.network.SupabaseConfig.isValidUuid(resolvedCentreId)) put("centre_id", resolvedCentreId)
+                val resolvedCentreCode = userScope?.centreCode?.takeIf { it.isNotBlank() }
+                    ?: group?.code?.takeIf { it.isNotBlank() && !it.equals("GEN-OPS", ignoreCase = true) }
+                if (scopeLevel == com.example.core.model.ScopeLevel.CENTRE && !resolvedCentreCode.isNullOrBlank()) {
+                    put("centre_code", resolvedCentreCode)
+                }
                 put("target_role_codes", JSONArray(normalizedTargetRoles))
                 put("assigned_user_ids", JSONArray(resolvedEmployeeUuids.distinct()))
                 val reqsArr = JSONArray()

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -81,12 +82,17 @@ fun TasksScreen(
     val tasks by viewModel.filteredTasks.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val selectedSubFilter by viewModel.selectedSubFilter.collectAsStateWithLifecycle()
+    val selectedCityFilter by viewModel.selectedCityFilter.collectAsStateWithLifecycle()
+    val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var taskToDelete by remember { mutableStateOf<TaskItem?>(null) }
 
     LaunchedEffect(Unit) {
+        if (orgHierarchy.cities.isEmpty()) {
+            viewModel.refreshOrgHierarchy()
+        }
         viewModel.refreshTasks()
         viewModel.actionEvent.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -160,6 +166,44 @@ fun TasksScreen(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            // City-wise Filter Chips
+            if (orgHierarchy.cities.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedCityFilter == null,
+                            onClick = { viewModel.setCityFilter(null) },
+                            label = {
+                                Text(
+                                    text = "All Cities",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.testTag("city_filter_all")
+                        )
+                    }
+                    items(orgHierarchy.cities, key = { it.id }) { city ->
+                        FilterChip(
+                            selected = selectedCityFilter == city.id,
+                            onClick = {
+                                viewModel.setCityFilter(if (selectedCityFilter == city.id) null else city.id)
+                            },
+                            label = {
+                                Text(
+                                    text = city.name,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.testTag("city_filter_${city.code.lowercase()}")
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+            }
 
             // Search Bar & Refresh Action
             Row(
@@ -247,6 +291,14 @@ fun TasksScreen(
                             onClick = { onTaskClick(task) },
                             onLongClick = if (viewModel.canDeleteTask(task)) {
                                 { taskToDelete = task }
+                            } else null,
+                            onJoinClick = if (
+                                selectedTab == TaskTabFilter.AVAILABLE &&
+                                task.allowSelfJoin &&
+                                !task.isAssignedToMe &&
+                                !task.isPendingApproval
+                            ) {
+                                { viewModel.joinTask(task.id, "", null) }
                             } else null
                         )
                     }
@@ -301,6 +353,7 @@ fun TaskCard(
     task: TaskItem,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    onJoinClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val priorityColor = when (task.priority.lowercase()) {
@@ -544,6 +597,19 @@ fun TaskCard(
                             )
                         }
                     }
+                }
+            }
+
+            if (onJoinClick != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = onJoinClick,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("btn_quick_join_${task.id}")
+                ) {
+                    Text("Join Task", fontWeight = FontWeight.Bold)
                 }
             }
         }

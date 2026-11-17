@@ -58,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,6 +79,7 @@ import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -89,10 +91,14 @@ fun ProfileScreen(
     val context = LocalContext.current
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
     val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
+    val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val isLoggingOut by viewModel.isLoggingOut.collectAsStateWithLifecycle()
     val isSwitchingRole by viewModel.isSwitchingRole.collectAsStateWithLifecycle()
+    val isSavingLocation by viewModel.isSavingLocation.collectAsStateWithLifecycle()
+    val locationSaveError by viewModel.locationSaveError.collectAsStateWithLifecycle()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
+    var showLocationDialog by remember { mutableStateOf(false) }
 
     var fullName by rememberSaveable(profile) { mutableStateOf(profile?.fullName.orEmpty()) }
     var mobile by rememberSaveable(profile) { mutableStateOf(profile?.mobile.orEmpty()) }
@@ -341,7 +347,8 @@ fun ProfileScreen(
                     authContext.scope.zoneName?.let { "Zone: $it" },
                     authContext.scope.stateName?.let { "State: $it" },
                     authContext.scope.cityName?.let { "City: $it" },
-                    authContext.scope.centreCode?.let { "Centre: $it" }
+                    authContext.scope.centreCode?.let { "Centre: $it" },
+                    authContext.scope.assignedLan?.takeIf { it.isNotBlank() }?.let { "LAN: $it" }
                 )
                 if (scopeParts.isNotEmpty()) {
                     Text(
@@ -363,6 +370,12 @@ fun ProfileScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                TextButton(
+                    onClick = { showLocationDialog = true },
+                    modifier = Modifier.testTag("profile_update_location_btn")
+                ) {
+                    Text("Update State / City / Centre / LAN")
                 }
             }
         }
@@ -551,6 +564,49 @@ fun ProfileScreen(
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showLocationDialog) {
+        val incidentRepo = remember { com.example.TaskzApplication.instance.systemIncidentRepository }
+        val scopeCoroutines = rememberCoroutineScope()
+        com.example.ui.home.DailyDutyCheckinDialog(
+            orgHierarchy = orgHierarchy,
+            currentScope = authContext.scope,
+            currentActiveRole = authContext.activeRole,
+            currentCheckin = null,
+            isSaving = isSavingLocation,
+            errorMessage = locationSaveError,
+            onDismiss = {
+                viewModel.clearLocationError()
+                showLocationDialog = false
+            },
+            onConfirm = { stateId, cityId, centreId, centreCode, centreName, role, lan ->
+                viewModel.updateOperationalLocation(
+                    roleCode = role,
+                    stateId = stateId,
+                    cityId = cityId,
+                    centreId = centreId,
+                    centreCode = centreCode,
+                    lanNumber = lan
+                ) {
+                    val user = profile
+                    if (user != null) {
+                        scopeCoroutines.launch {
+                            incidentRepo.saveDailyDutyCheckin(
+                                userId = user.id,
+                                userName = user.fullName,
+                                employeeId = user.employeeId,
+                                centreCode = centreCode,
+                                centreName = centreName,
+                                role = role,
+                                lan = lan
+                            )
+                        }
+                    }
+                    showLocationDialog = false
                 }
             }
         )

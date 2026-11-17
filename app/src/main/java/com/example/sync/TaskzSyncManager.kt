@@ -602,6 +602,43 @@ class TaskzSyncManager(
         Result.success(newCtx)
     }
 
+    suspend fun updateOperationalLocation(
+        roleCode: String? = null,
+        stateId: String? = null,
+        cityId: String? = null,
+        centreId: String? = null,
+        centreCode: String? = null,
+        lanNumber: String? = null
+    ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        val tokenRes = authRepository.getValidAccessToken()
+        if (tokenRes.isFailure) return@withContext Result.failure(tokenRes.exceptionOrNull()!!)
+        val token = tokenRes.getOrThrow()
+
+        val res = supabaseClient.setMyOperationalLocation(
+            accessToken = token,
+            roleCode = roleCode,
+            stateId = stateId,
+            cityId = cityId,
+            centreId = centreId,
+            centreCode = centreCode,
+            lanNumber = lanNumber
+        )
+        if (res.isFailure) return@withContext res
+        val newCtx = res.getOrThrow()
+
+        database.clearRoleScopeCacheForSwitch()
+        taskRepository.clearInMemoryCaches()
+        userPrefs.clearSyncCursor()
+
+        permissionManager.updateContext(newCtx)
+        database.authorizationDao().upsertAuthContext(newCtx.toEntity())
+        syncProfileSnapshot(newCtx)
+        realtimeManager.refreshSubscriptionsForRoleSwitch(newCtx.activeRole.code, newCtx.scope)
+
+        syncNow(forceFull = true)
+        Result.success(newCtx)
+    }
+
     suspend fun markNotificationRead(notificationId: String) = withContext(Dispatchers.IO) {
         database.notificationDao().markAsRead(notificationId)
         val currentDash = _scopedDashboardSummary.value

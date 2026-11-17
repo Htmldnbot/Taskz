@@ -156,42 +156,57 @@ class RbacScopeSyncSystemTest {
     }
 
     @Test
-    fun centreIsolationBlocksUnrelatedCentreAndGivesCityHeadReadOnlyOversight() {
+    fun cityScopeGrantsSameCityVisibilityAndBlocksCrossCityAccess() {
         val centreATask = TaskItem(
             id = "task-c-a",
             title = "Check LAN 1 at Centre A",
             createdBy = "user-it-a",
             scopeLevel = ScopeLevel.CENTRE,
             zoneId = "zone-north",
-            stateId = "state-dl",
-            cityId = "city-del",
+            stateId = "state-rj",
+            cityId = "city-jpr",
             centreId = "centre-a",
             targetRoleCodes = listOf("IT_MANAGER")
         )
 
-        // IT Manager at Centre B must NOT view Centre A task
-        val itCentreB = TaskzPermissionManager(
+        // IT Manager at Centre B inside SAME city city-jpr CAN view Centre A public task,
+        // while still unable to edit/delete creator's task unless creator/admin
+        val itSameCityOtherCentre = TaskzPermissionManager(
             buildContext(
                 userId = "user-it-b",
                 role = TaskzRole.IT_MANAGER,
                 zoneId = "zone-north",
-                stateId = "state-dl",
-                cityId = "city-del",
+                stateId = "state-rj",
+                cityId = "city-jpr",
                 centreId = "centre-b"
             )
         )
-        assertFalse(itCentreB.canViewTask(centreATask))
-        assertFalse(itCentreB.canEditTask(centreATask))
+        assertTrue(itSameCityOtherCentre.canViewTask(centreATask))
+        assertFalse(itSameCityOtherCentre.canEditTask(centreATask))
 
-        // City Head in city-del CAN view Centre A's IT_MANAGER task for oversight,
+        // IT Manager in DIFFERENT city city-jdh MUST NOT view Jaipur task
+        val itOtherCity = TaskzPermissionManager(
+            buildContext(
+                userId = "user-it-jdh",
+                role = TaskzRole.IT_MANAGER,
+                zoneId = "zone-north",
+                stateId = "state-rj",
+                cityId = "city-jdh",
+                centreId = "centre-jdh-1"
+            )
+        )
+        assertFalse(itOtherCity.canViewTask(centreATask))
+        assertFalse(itOtherCity.canEditTask(centreATask))
+
+        // City Head in city-jpr CAN view Centre A's IT_MANAGER task for oversight,
         // but CANNOT edit, delete, or complete it when not targeted/created by them.
         val cityHeadSameCity = TaskzPermissionManager(
             buildContext(
-                userId = "user-ch-del",
+                userId = "user-ch-jpr",
                 role = TaskzRole.CITY_HEAD,
                 zoneId = "zone-north",
-                stateId = "state-dl",
-                cityId = "city-del",
+                stateId = "state-rj",
+                cityId = "city-jpr",
                 centreId = null
             )
         )
@@ -200,14 +215,14 @@ class RbacScopeSyncSystemTest {
         assertFalse(cityHeadSameCity.canDeleteTask(centreATask))
         assertFalse(cityHeadSameCity.canCompleteTask(centreATask))
 
-        // City Head in unrelated city MUST NOT see Centre A's task
+        // City Head in unrelated city MUST NOT see Jaipur task
         val cityHeadOtherCity = TaskzPermissionManager(
             buildContext(
-                userId = "user-ch-mum",
+                userId = "user-ch-udaipur",
                 role = TaskzRole.CITY_HEAD,
-                zoneId = "zone-west",
-                stateId = "state-mh",
-                cityId = "city-mum",
+                zoneId = "zone-north",
+                stateId = "state-rj",
+                cityId = "city-udr",
                 centreId = null
             )
         )
@@ -220,6 +235,57 @@ class RbacScopeSyncSystemTest {
         assertTrue(superAdmin.canViewTask(centreATask))
         assertTrue(superAdmin.canEditTask(centreATask))
         assertTrue(superAdmin.canDeleteTask(centreATask))
+    }
+
+    @Test
+    fun sameCityItManagerAndVcoCanViewPeerIncidentsWhileOtherCityIsBlocked() {
+        val jaipurIncident = SystemIncident(
+            id = "inc-jpr-1",
+            createdBy = "user-it-jpr-1",
+            scopeLevel = "CENTRE",
+            zoneId = "zone-north",
+            stateId = "state-rj",
+            cityId = "city-jpr",
+            centreId = "centre-jpr-141",
+            status = "OPEN",
+            escalationLevel = "IT_MANAGER"
+        )
+
+        val itColleagueSameCity = TaskzPermissionManager(
+            buildContext(
+                userId = "user-it-jpr-2",
+                role = TaskzRole.IT_MANAGER,
+                zoneId = "zone-north",
+                stateId = "state-rj",
+                cityId = "city-jpr",
+                centreId = "centre-jpr-142"
+            )
+        )
+        assertTrue("Same-city IT Manager colleague must see incident", itColleagueSameCity.canViewIncident(jaipurIncident))
+
+        val vcoSameCity = TaskzPermissionManager(
+            buildContext(
+                userId = "user-vco-jpr-2",
+                role = TaskzRole.VCO,
+                zoneId = "zone-north",
+                stateId = "state-rj",
+                cityId = "city-jpr",
+                centreId = "centre-jpr-143"
+            )
+        )
+        assertTrue("Same-city VCO must see incident", vcoSameCity.canViewIncident(jaipurIncident))
+
+        val itDifferentCity = TaskzPermissionManager(
+            buildContext(
+                userId = "user-it-kota",
+                role = TaskzRole.IT_MANAGER,
+                zoneId = "zone-north",
+                stateId = "state-rj",
+                cityId = "city-kota",
+                centreId = "centre-kota-01"
+            )
+        )
+        assertFalse("Other-city IT Manager must not see Jaipur incident", itDifferentCity.canViewIncident(jaipurIncident))
     }
 
     // ---- Section 68: Incident Scope & Escalation Chain ----

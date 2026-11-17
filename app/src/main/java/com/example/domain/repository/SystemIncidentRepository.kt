@@ -481,6 +481,8 @@ class SystemIncidentRepository(
             val userName = session.employeeId ?: ""
 
             val ctx = runCatching { TaskzApplication.instance.permissionManager.getCurrentContext() }.getOrNull()
+            val validCentreUuid = incident.centreId?.takeIf { com.example.core.network.SupabaseConfig.isValidUuid(it) }
+                ?: ctx?.scope?.centreId
             val finalIncident = incident.copy(
                 createdBy = userId,
                 creatorName = userName,
@@ -488,7 +490,7 @@ class SystemIncidentRepository(
                 zoneId = incident.zoneId ?: ctx?.scope?.zoneId,
                 stateId = incident.stateId ?: ctx?.scope?.stateId,
                 cityId = incident.cityId ?: ctx?.scope?.cityId,
-                centreId = incident.centreId ?: ctx?.scope?.centreId
+                centreId = validCentreUuid
             )
 
             // 1. Save locally in Room first (Durable Offline-First)

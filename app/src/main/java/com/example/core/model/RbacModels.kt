@@ -69,7 +69,8 @@ data class OrgScope(
     val cityId: String? = null,
     val cityName: String? = null,
     val centreId: String? = null,
-    val centreCode: String? = null
+    val centreCode: String? = null,
+    val assignedLan: String? = null
 ) {
     fun summaryLabel(): String {
         return when (effectiveScopeLevel) {
@@ -77,7 +78,7 @@ data class OrgScope(
             ScopeLevel.ZONE -> zoneName ?: "Assigned Zone"
             ScopeLevel.STATE -> stateName ?: "Assigned State / Region"
             ScopeLevel.CITY -> listOfNotNull(cityName, centreCode).joinToString(" • ").ifBlank { "Assigned City" }
-            ScopeLevel.CENTRE -> listOfNotNull(centreCode, cityName).joinToString(" • ").ifBlank { "Assigned Centre" }
+            ScopeLevel.CENTRE -> listOfNotNull(centreCode, cityName, assignedLan?.takeIf { it.isNotBlank() }).joinToString(" • ").ifBlank { "Assigned Centre" }
         }
     }
 }

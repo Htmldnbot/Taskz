@@ -376,6 +376,69 @@ fun TaskDetailScreen(
                 }
             }
 
+            if (!currentTask.isAssignedToMe &&
+                !currentTask.isPendingApproval &&
+                currentTask.allowSelfJoin &&
+                currentTask.status !in setOf("completed", "cancelled")
+            ) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Open for Team Participation",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = if (currentTask.joinRequiresApproval) {
+                                    "Request to join this task (creator approval required)."
+                                } else {
+                                    "Join this task directly to collaborate & log updates."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Button(
+                            onClick = {
+                                selectedRoleIdToJoin = requirements.firstOrNull()?.roleId ?: ""
+                                joinMessage = ""
+                                showJoinDialog = true
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("btn_join_task")
+                        ) {
+                            Text(if (currentTask.joinRequiresApproval) "Request Join" else "Join Task")
+                        }
+                    }
+                }
+            } else if (currentTask.isPendingApproval) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = TaskzWarning.copy(alpha = 0.16f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Your join request is awaiting approval.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = TaskzWarning,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             // ============================================================
@@ -1150,6 +1213,82 @@ fun TaskDetailScreen(
         )
     }
 
+    // Self-Join Confirmation Dialog
+    if (showJoinDialog) {
+        AlertDialog(
+            onDismissRequest = { showJoinDialog = false },
+            title = {
+                Text(
+                    text = if (currentTask.joinRequiresApproval) "Request to Join Task" else "Join Task",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (requirements.isNotEmpty()) {
+                        Text(
+                            text = "Select Role Capacity:",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        requirements.forEach { req ->
+                            val isSelected = selectedRoleIdToJoin == req.roleId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedRoleIdToJoin = req.roleId }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedRoleIdToJoin = req.roleId }
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${req.roleName ?: "Team Role"} (${req.filledCount}/${req.requiredCount})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "Confirm joining '${currentTask.title}'.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    OutlinedTextField(
+                        value = joinMessage,
+                        onValueChange = { joinMessage = it },
+                        label = { Text("Note (Optional)") },
+                        placeholder = { Text("e.g., Available from Jaipur Sector 4") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.joinTask(
+                            taskId = currentTask.id,
+                            roleId = selectedRoleIdToJoin,
+                            message = joinMessage.trim().takeIf { it.isNotBlank() }
+                        )
+                        showJoinDialog = false
+                    },
+                    modifier = Modifier.testTag("confirm_join_task_button")
+                ) {
+                    Text(if (currentTask.joinRequiresApproval) "Send Request" else "Join Now")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showJoinDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     // Add Participant Dialog
     if (showAssignDialog) {
         var searchQuery by remember { mutableStateOf("") }
@@ -1161,7 +1300,7 @@ fun TaskDetailScreen(
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Search directory by Name, Email, or Employee ID (max 7 digits):",
+                        text = "Search colleagues by Name, Email, or Employee ID:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1170,7 +1309,7 @@ fun TaskDetailScreen(
                         value = searchQuery,
                         onValueChange = {
                             searchQuery = it
-                            viewModel.searchEmployees(it)
+                            viewModel.searchScopedMembers(it)
                         },
                         placeholder = { Text("e.g. Rahul, rahul@gmail.com, 0123456") },
                         leadingIcon = {
@@ -1183,7 +1322,7 @@ fun TaskDetailScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     if (directoryEmployees.isEmpty()) {
                         Text(
-                            text = "No employees found. Type a query to search.",
+                            text = "No colleagues found in this city/scope.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

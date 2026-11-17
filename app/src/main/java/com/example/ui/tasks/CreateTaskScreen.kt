@@ -262,7 +262,7 @@ fun CreateTaskScreen(
                     isGlobalRole -> true
                     authContext.activeRole == TaskzRole.ZOM -> authContext.scope.zoneId != null && c.zoneId == authContext.scope.zoneId
                     authContext.activeRole == TaskzRole.ROM -> authContext.scope.stateId != null && c.stateId == authContext.scope.stateId
-                    authContext.activeRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO) ->
+                    authContext.activeRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER) ->
                         (authContext.scope.cityId != null && c.cityId == authContext.scope.cityId) ||
                             (authContext.scope.centreId != null && c.id == authContext.scope.centreId)
                     else -> authContext.scope.centreId != null && c.id == authContext.scope.centreId
@@ -270,7 +270,7 @@ fun CreateTaskScreen(
         }
     }
 
-    LaunchedEffect(orgHierarchy, authContext.scope) {
+    LaunchedEffect(orgHierarchy, authContext.scope, availableZones, availableStates, availableCities, availableCentres) {
         if (selectedZone == null && authContext.scope.zoneId != null) {
             selectedZone = orgHierarchy.zones.firstOrNull { it.id == authContext.scope.zoneId }
         }
@@ -286,7 +286,7 @@ fun CreateTaskScreen(
         if (selectedZone == null && availableZones.size == 1) selectedZone = availableZones.first()
         if (selectedState == null && availableStates.size == 1) selectedState = availableStates.first()
         if (selectedCity == null && availableCities.size == 1) selectedCity = availableCities.first()
-        if (selectedCentre == null && availableCentres.size == 1) selectedCentre = availableCentres.first()
+        if (selectedCentre == null && availableCentres.isNotEmpty()) selectedCentre = availableCentres.first()
     }
 
     // 3. Task Priority
@@ -325,9 +325,21 @@ fun CreateTaskScreen(
         }
     }
 
+    // Auto-load scoped directory colleagues across the caller's authorized city/scope
+    LaunchedEffect(selectedScope, selectedCity?.id, selectedCentre?.id, selectedTargetRoles.toList()) {
+        tasksViewModel.searchScopedMembers(
+            query = memberSearchQuery,
+            roleCode = selectedTargetRoles.singleOrNull(),
+            centreId = null
+        )
+    }
+
     // Auto-assign personnel checked in today at the chosen Centre / LAN
-    LaunchedEffect(selectedGroup, selectedScope, lanText) {
-        val centreCode = selectedGroup?.code?.ifBlank { "141" } ?: "141"
+    LaunchedEffect(selectedGroup, selectedCentre, selectedScope, lanText) {
+        val centreCode = selectedCentre?.code
+            ?: selectedGroup?.code?.takeIf { it.isNotBlank() }
+            ?: authContext.scope.centreCode
+            ?: "141"
         try {
             val checkins = com.example.TaskzApplication.instance.systemIncidentRepository.getTodayCheckinsForCentre(centreCode)
             if (checkins.isNotEmpty()) {
@@ -380,31 +392,48 @@ fun CreateTaskScreen(
         }
 
         val resolvedScopeLevel = selectedScope.mappedScope
-        val resolvedZoneId = when (resolvedScopeLevel) {
-            ScopeLevel.GLOBAL -> null
-            ScopeLevel.ZONE -> selectedZone?.id ?: authContext.scope.zoneId
-            ScopeLevel.STATE -> selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId
-            ScopeLevel.CITY -> selectedCity?.zoneId ?: selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId
-            ScopeLevel.CENTRE -> selectedCentre?.zoneId ?: selectedCity?.zoneId ?: authContext.scope.zoneId
+        val fallbackCentre = selectedCentre
+            ?: orgHierarchy.centres.firstOrNull { it.id == authContext.scope.centreId }
+            ?: availableCentres.firstOrNull()
+        val resolvedCentreId = if (resolvedScopeLevel == ScopeLevel.CENTRE) {
+            fallbackCentre?.id ?: authContext.scope.centreId
+        } else null
+        val resolvedCityId = when (resolvedScopeLevel) {
+            ScopeLevel.GLOBAL, ScopeLevel.ZONE, ScopeLevel.STATE -> null
+            ScopeLevel.CITY -> selectedCity?.id ?: authContext.scope.cityId ?: availableCities.firstOrNull()?.id
+            ScopeLevel.CENTRE -> fallbackCentre?.cityId ?: selectedCity?.id ?: authContext.scope.cityId ?: availableCities.firstOrNull()?.id
         }
         val resolvedStateId = when (resolvedScopeLevel) {
             ScopeLevel.GLOBAL, ScopeLevel.ZONE -> null
-            ScopeLevel.STATE -> selectedState?.id ?: authContext.scope.stateId
-            ScopeLevel.CITY -> selectedCity?.stateId ?: selectedState?.id ?: authContext.scope.stateId
-            ScopeLevel.CENTRE -> selectedCentre?.stateId ?: selectedCity?.stateId ?: authContext.scope.stateId
+            ScopeLevel.STATE -> selectedState?.id ?: authContext.scope.stateId ?: availableStates.firstOrNull()?.id
+            ScopeLevel.CITY -> selectedCity?.stateId ?: selectedState?.id ?: authContext.scope.stateId ?: availableStates.firstOrNull()?.id
+            ScopeLevel.CENTRE -> fallbackCentre?.stateId ?: selectedCity?.stateId ?: authContext.scope.stateId ?: availableStates.firstOrNull()?.id
         }
-        val resolvedCityId = when (resolvedScopeLevel) {
-            ScopeLevel.GLOBAL, ScopeLevel.ZONE, ScopeLevel.STATE -> null
-            ScopeLevel.CITY -> selectedCity?.id ?: authContext.scope.cityId
-            ScopeLevel.CENTRE -> selectedCentre?.cityId ?: selectedCity?.id ?: authContext.scope.cityId
+        val resolvedZoneId = when (resolvedScopeLevel) {
+            ScopeLevel.GLOBAL -> null
+            ScopeLevel.ZONE -> selectedZone?.id ?: authContext.scope.zoneId ?: availableZones.firstOrNull()?.id
+            ScopeLevel.STATE -> selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId ?: availableZones.firstOrNull()?.id
+            ScopeLevel.CITY -> selectedCity?.zoneId ?: selectedState?.zoneId ?: selectedZone?.id ?: authContext.scope.zoneId ?: availableZones.firstOrNull()?.id
+            ScopeLevel.CENTRE -> fallbackCentre?.zoneId ?: selectedCity?.zoneId ?: authContext.scope.zoneId ?: availableZones.firstOrNull()?.id
         }
-        val resolvedCentreId = if (resolvedScopeLevel == ScopeLevel.CENTRE) {
-            selectedCentre?.id ?: authContext.scope.centreId
-        } else null
+
+        val scopeValidationError = when (resolvedScopeLevel) {
+            ScopeLevel.CENTRE -> if (resolvedCentreId.isNullOrBlank()) "Please select your State, City & Examination Centre from Home or Profile first." else null
+            ScopeLevel.CITY -> if (resolvedCityId.isNullOrBlank()) "Please select a target City first." else null
+            ScopeLevel.STATE -> if (resolvedStateId.isNullOrBlank()) "Please select a target State first." else null
+            ScopeLevel.ZONE -> if (resolvedZoneId.isNullOrBlank()) "Please select a target Zone first." else null
+            ScopeLevel.GLOBAL -> null
+        }
+        if (scopeValidationError != null) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(scopeValidationError)
+            }
+            return
+        }
 
         val resolvedLocation = when (selectedScope) {
-            TaskScopeLevel.LAN -> "LAN: ${lanText.ifBlank { "All LANs" }} • ${selectedCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Centre"}"
-            TaskScopeLevel.TEST_CENTRE -> selectedCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Centre 141 • Jaipur"
+            TaskScopeLevel.LAN -> "LAN: ${lanText.ifBlank { "All LANs" }} • ${fallbackCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Centre"}"
+            TaskScopeLevel.TEST_CENTRE -> fallbackCentre?.let { "${it.code} · ${it.name}" } ?: selectedGroup?.title ?: "Examination Centre"
             TaskScopeLevel.CITY -> "City: ${selectedCity?.name ?: cityName.ifBlank { "Jaipur" }}, ${selectedState?.name ?: stateName}"
             TaskScopeLevel.STATE -> "State: ${selectedState?.name ?: stateName.ifBlank { "Rajasthan" }}"
             TaskScopeLevel.ZONE -> "Zone: ${selectedZone?.name ?: authContext.scope.zoneName ?: "Assigned Zone"}"
@@ -425,7 +454,7 @@ fun CreateTaskScreen(
 
         val newTask = TaskItem(
             groupId = selectedGroup?.id ?: "centre_141",
-            groupTitle = selectedGroup?.title ?: selectedCentre?.name ?: "General Operations",
+            groupTitle = selectedGroup?.title ?: fallbackCentre?.name ?: "General Operations",
             shiftId = preselectedShiftId,
             title = title.trim(),
             description = description.trim().takeIf { it.isNotBlank() },
@@ -433,7 +462,7 @@ fun CreateTaskScreen(
             startsAt = scheduledIso,
             dueAt = scheduledIso,
             priority = selectedPriority.priorityString,
-            visibility = if (selectedScope == TaskScopeLevel.NATIONAL) "everyone" else resolvedScopeLevel.code.lowercase(),
+            visibility = "everyone",
             allowSelfJoin = allowSelfJoin,
             joinRequiresApproval = false,
             requiresCompletionConfirmation = false,
@@ -1374,7 +1403,7 @@ fun CreateTaskScreen(
                             tasksViewModel.searchScopedMembers(
                                 query = it,
                                 roleCode = selectedTargetRoles.singleOrNull(),
-                                centreId = selectedCentre?.id ?: authContext.scope.centreId
+                                centreId = null
                             )
                         },
                         label = { Text("Search Scoped Directory") },
@@ -1413,8 +1442,8 @@ fun CreateTaskScreen(
                         }
                     }
 
-                    // Search Results List showing full scoped member identity
-                    if (memberSearchQuery.isNotBlank() && (scopedSearchResults.isNotEmpty() || searchResults.isNotEmpty())) {
+                    // Search Results List showing full scoped member identity even before typing
+                    if (scopedSearchResults.isNotEmpty() || searchResults.isNotEmpty()) {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             shape = RoundedCornerShape(10.dp),
@@ -1422,7 +1451,7 @@ fun CreateTaskScreen(
                         ) {
                             Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 if (scopedSearchResults.isNotEmpty()) {
-                                    scopedSearchResults.take(5).forEach { member ->
+                                    scopedSearchResults.take(10).forEach { member ->
                                         val asProfile = UserProfile(
                                             id = member.id,
                                             employeeId = member.employeeId,
@@ -1534,6 +1563,12 @@ fun CreateTaskScreen(
                                 }
                             }
                         }
+                    } else {
+                        Text(
+                            text = "No colleagues found in this city/scope yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

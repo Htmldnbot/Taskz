@@ -2659,6 +2659,10 @@ class SupabaseClient(
             val payload = JSONObject().apply {
                 put("id", incident.id)
                 put("submission_id", incident.submissionId)
+                put("scope_level", incident.scopeLevel.ifBlank { "CENTRE" })
+                if (SupabaseConfig.isValidUuid(incident.zoneId)) put("zone_id", incident.zoneId)
+                if (SupabaseConfig.isValidUuid(incident.stateId)) put("state_id", incident.stateId)
+                if (SupabaseConfig.isValidUuid(incident.cityId)) put("city_id", incident.cityId)
                 if (SupabaseConfig.isValidUuid(incident.centreId)) put("centre_id", incident.centreId)
                 if (SupabaseConfig.isValidUuid(incident.examSessionId)) put("exam_session_id", incident.examSessionId)
                 put("state_name", incident.stateName)
@@ -2766,8 +2770,8 @@ class SupabaseClient(
         return SystemIncident(
             id = json.optString("id"),
             submissionId = json.optString("submission_id"),
-            centreId = json.optString("centre_id").takeIf { it.isNotBlank() },
-            examSessionId = json.optString("exam_session_id").takeIf { it.isNotBlank() },
+            centreId = json.optString("centre_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            examSessionId = json.optString("exam_session_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
             stateName = json.optString("state_name"),
             districtName = json.optString("district_name"),
             centreCode = json.optString("centre_code"),
@@ -2786,7 +2790,15 @@ class SupabaseClient(
             reason = json.optString("reason"),
             itManagerName = json.optString("it_manager_name"),
             createdBy = json.optString("created_by"),
-            syncStatus = "SYNCED"
+            syncStatus = "SYNCED",
+            scopeLevel = json.optString("scope_level").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: "CENTRE",
+            zoneId = json.optString("zone_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            stateId = json.optString("state_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            cityId = json.optString("city_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            status = json.optString("status").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: "OPEN",
+            escalationLevel = json.optString("escalation_level").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: "IT_MANAGER",
+            assignedTo = json.optString("assigned_to").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            version = json.optLong("version", 1L)
         )
     }
 
@@ -3205,6 +3217,32 @@ class SupabaseClient(
         }
     }
 
+    suspend fun setMyOperationalLocation(
+        accessToken: String,
+        roleCode: String? = null,
+        stateId: String? = null,
+        cityId: String? = null,
+        centreId: String? = null,
+        centreCode: String? = null,
+        lanNumber: String? = null
+    ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                if (!roleCode.isNullOrBlank()) put("p_role_code", roleCode) else put("p_role_code", JSONObject.NULL)
+                if (SupabaseConfig.isValidUuid(stateId)) put("p_state_id", stateId) else put("p_state_id", JSONObject.NULL)
+                if (SupabaseConfig.isValidUuid(cityId)) put("p_city_id", cityId) else put("p_city_id", JSONObject.NULL)
+                if (SupabaseConfig.isValidUuid(centreId)) put("p_centre_id", centreId) else put("p_centre_id", JSONObject.NULL)
+                if (!centreCode.isNullOrBlank()) put("p_centre_code", centreCode) else put("p_centre_code", JSONObject.NULL)
+                if (!lanNumber.isNullOrBlank()) put("p_lan_number", lanNumber) else put("p_lan_number", JSONObject.NULL)
+            }
+            executeRpc(accessToken, "set_my_operational_location", body).map { raw ->
+                parseAuthorizationContext(JSONObject(raw))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun fetchOrgHierarchy(accessToken: String): Result<OrgHierarchyData> = withContext(Dispatchers.IO) {
         try {
             executeRpc(accessToken, "get_org_hierarchy", JSONObject()).map { raw ->
@@ -3464,7 +3502,8 @@ class SupabaseClient(
             cityId = scObj.optString("city_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
             cityName = scObj.optString("city_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
             centreId = scObj.optString("centre_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
-            centreCode = scObj.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) }
+            centreCode = scObj.optString("centre_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            assignedLan = scObj.optString("assigned_lan").takeIf { it.isNotBlank() && !it.equals("null", true) }
         )
         return AuthorizationContext(
             userId = obj.optString("user_id"),

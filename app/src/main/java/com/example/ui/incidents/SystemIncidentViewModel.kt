@@ -72,7 +72,8 @@ data class QuickEntryFormState(
 
 class SystemIncidentViewModel(
     private val repository: SystemIncidentRepository,
-    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager
+    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager,
+    private val syncManager: com.example.sync.TaskzSyncManager = TaskzApplication.instance.taskzSyncManager
 ) : ViewModel() {
 
     val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
@@ -305,10 +306,35 @@ class SystemIncidentViewModel(
 
     fun loadCentresAndInitialize() {
         viewModelScope.launch {
-            val centres = repository.getAvailableCentres()
-            _availableCentres.value = centres
+            val hierarchy = syncManager.orgHierarchy.value
+            val cityById = hierarchy.cities.associateBy { it.id }
+            val stateById = hierarchy.states.associateBy { it.id }
+            val orgCentresAsGroups = hierarchy.centres.map { oc ->
+                val cityName = cityById[oc.cityId]?.name ?: oc.districtName ?: "Jaipur"
+                val stateName = stateById[oc.stateId]?.name ?: "Rajasthan"
+                TaskGroup(
+                    id = oc.id,
+                    title = "${oc.code} · ${oc.name}",
+                    code = oc.code,
+                    description = "$cityName, $stateName"
+                )
+            }
+            val localCentres = repository.getAvailableCentres()
+            val existingCodes = orgCentresAsGroups.mapNotNull { it.code?.uppercase(Locale.ROOT) }.toSet()
+            val combinedCentres = orgCentresAsGroups + localCentres.filter {
+                (it.code?.uppercase(Locale.ROOT) ?: "") !in existingCodes
+            }
+            _availableCentres.value = combinedCentres
 
-            val defaultCentre = repository.resolveDefaultCentre()
+            val scope = permissionManager.getUserScope()
+            val scopeCentre = combinedCentres.firstOrNull {
+                (!scope.centreId.isNullOrBlank() && it.id == scope.centreId) ||
+                    (!scope.centreCode.isNullOrBlank() && it.code.equals(scope.centreCode, ignoreCase = true))
+            }
+            val defaultCentre = scopeCentre ?: repository.resolveDefaultCentre()?.let { localDef ->
+                combinedCentres.firstOrNull { it.code.equals(localDef.code, ignoreCase = true) } ?: localDef
+            } ?: combinedCentres.firstOrNull()
+
             val userId = repository.getActiveUserId()
 
             val now = Calendar.getInstance()
@@ -322,10 +348,12 @@ class SystemIncidentViewModel(
                 applyCentre(defaultCentre, userId, currentDateStr, currentTimeStr)
             } else {
                 _formState.value = _formState.value.copy(
+                    stateName = scope.stateName ?: "Rajasthan",
+                    districtName = scope.cityName ?: "Jaipur",
                     examDate = currentDateStr,
                     examName = "Staff Selection Commission Examination",
                     shiftName = "Shift 1",
-                    lanName = "LAN 1",
+                    lanName = scope.assignedLan ?: "LAN 1",
                     incidentTime = currentTimeStr,
                     incidentTimestampMillis = System.currentTimeMillis()
                 )
@@ -347,8 +375,7 @@ class SystemIncidentViewModel(
     fun createAndSelectCentre(code: String, name: String, district: String, state: String) {
         viewModelScope.launch {
             val newCentre = repository.createCentre(code, name, district, state)
-            val centres = repository.getAvailableCentres()
-            _availableCentres.value = centres
+            loadCentresAndInitialize()
             onCentreSelected(newCentre)
         }
     }
@@ -356,8 +383,7 @@ class SystemIncidentViewModel(
     fun updateCentre(centreId: String, code: String, name: String, district: String, state: String) {
         viewModelScope.launch {
             val updated = repository.updateCentre(centreId, code, name, district, state)
-            val centres = repository.getAvailableCentres()
-            _availableCentres.value = centres
+            loadCentresAndInitialize()
             onCentreSelected(updated)
         }
     }
@@ -369,13 +395,14 @@ class SystemIncidentViewModel(
         currentTimeStr: String
     ) {
         val (exam, shift) = repository.resolveDefaultExamAndShift(centre.id)
-        val defaultLan = repository.resolveDefaultLan(userId, centre.id)
+        val scope = permissionManager.getUserScope()
+        val defaultLan = scope.assignedLan?.takeIf { it.isNotBlank() } ?: repository.resolveDefaultLan(userId, centre.id)
         val defaultItManager = repository.resolveDefaultItManager(userId, centre.id)
 
         val locParts = centre.description?.split(",")?.map { it.trim() } ?: emptyList()
-        val district = if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: "Jaipur"
-        val state = if (locParts.isNotEmpty()) locParts.last() else "Rajasthan"
-        val code = centre.code ?: centre.title.substringBefore("·").trim().filter { it.isDigit() }.ifBlank { "141" }
+        val district = if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: scope.cityName ?: "Jaipur"
+        val state = if (locParts.isNotEmpty()) locParts.last() else scope.stateName ?: "Rajasthan"
+        val code = centre.code ?: centre.title.substringBefore("·").trim().ifBlank { "141" }
         val name = if (centre.title.contains("·")) centre.title.substringAfter("·").trim() else centre.title
 
         _formState.value = _formState.value.copy(
@@ -525,15 +552,34 @@ class SystemIncidentViewModel(
             return
         }
 
-        val centreId = state.selectedCentre?.id ?: "default_centre"
+        val hierarchy = syncManager.orgHierarchy.value
+        val scope = permissionManager.getUserScope()
+        val matchedCentre = hierarchy.centres.firstOrNull {
+            it.id == state.selectedCentre?.id ||
+                it.code.equals(state.centreCode, ignoreCase = true) ||
+                it.externalCode.equals(state.centreCode, ignoreCase = true)
+        }
+        val matchedCity = matchedCentre?.let { mc -> hierarchy.cities.firstOrNull { it.id == mc.cityId } }
+            ?: hierarchy.cities.firstOrNull { it.name.equals(state.districtName, ignoreCase = true) }
+        val resolvedCentreId = matchedCentre?.id
+            ?: state.selectedCentre?.id?.takeIf { com.example.core.network.SupabaseConfig.isValidUuid(it) }
+            ?: scope.centreId
+        val resolvedCityId = matchedCentre?.cityId ?: matchedCity?.id ?: scope.cityId
+        val resolvedStateId = matchedCentre?.stateId ?: matchedCity?.stateId ?: scope.stateId
+        val resolvedZoneId = matchedCentre?.zoneId ?: matchedCity?.zoneId ?: scope.zoneId
+
         val incident = SystemIncident(
             id = UUID.randomUUID().toString(),
             submissionId = "SUB-${System.currentTimeMillis()}-${(100..999).random()}",
-            stateName = state.stateName.ifBlank { "Rajasthan" },
-            districtName = state.districtName.ifBlank { "Jaipur" },
-            centreCode = state.centreCode.ifBlank { "141" },
-            centreName = state.centreName.ifBlank { "Yagyavalkya Institute of Technology" },
-            centreId = centreId,
+            stateName = state.stateName.ifBlank { scope.stateName ?: "Rajasthan" },
+            districtName = state.districtName.ifBlank { scope.cityName ?: "Jaipur" },
+            centreCode = state.centreCode.ifBlank { matchedCentre?.code ?: scope.centreCode ?: "141" },
+            centreName = state.centreName.ifBlank { matchedCentre?.name ?: "Yagyavalkya Institute of Technology" },
+            centreId = resolvedCentreId,
+            zoneId = resolvedZoneId,
+            stateId = resolvedStateId,
+            cityId = resolvedCityId,
+            scopeLevel = "CENTRE",
             examDate = state.examDate.ifBlank {
                 SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
             },

@@ -82,7 +82,9 @@ class TaskzPermissionManager(
                     ScopeLevel.ZONE -> scope.zoneId != null && zoneId != null && scope.zoneId == zoneId
                     ScopeLevel.STATE -> scope.stateId != null && stateId != null && scope.stateId == stateId
                     ScopeLevel.CITY -> scope.cityId != null && cityId != null && scope.cityId == cityId
-                    ScopeLevel.CENTRE -> scope.centreId != null && centreId != null && scope.centreId == centreId
+                    ScopeLevel.CENTRE ->
+                        (scope.centreId != null && centreId != null && scope.centreId == centreId) ||
+                            (scope.cityId != null && cityId != null && scope.cityId == cityId)
                     ScopeLevel.GLOBAL -> false
                 }
             }
@@ -103,11 +105,6 @@ class TaskzPermissionManager(
         }
         if (task.visibility.equals("restricted", ignoreCase = true)) {
             return task.currentUserParticipantStatus == "active"
-        }
-        val activeCode = activeRole.code
-        if (task.targetRoleCodes.isNotEmpty() && !task.targetRoleCodes.any { it.equals(activeCode, ignoreCase = true) }) {
-            // Supervisors above the task scope can still VIEW for oversight
-            return activeRole.hierarchyRank >= TaskzRole.CITY_HEAD.hierarchyRank
         }
         return true
     }

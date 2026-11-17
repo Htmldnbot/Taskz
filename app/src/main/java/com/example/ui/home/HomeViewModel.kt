@@ -46,6 +46,8 @@ class HomeViewModel(
 
     val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
 
+    val orgHierarchyFlow: StateFlow<com.example.core.model.OrgHierarchyData> = taskzSyncManager.orgHierarchy
+
     val scopedSummaryFlow: StateFlow<ScopedDashboardSummary> = taskzSyncManager.scopedDashboardSummary
 
     val syncManagerSyncing: StateFlow<Boolean> = taskzSyncManager.isSyncing
@@ -69,10 +71,62 @@ class HomeViewModel(
     private val _isAccountInactive = MutableStateFlow(false)
     val isAccountInactive: StateFlow<Boolean> = _isAccountInactive.asStateFlow()
 
+    private val _isSavingLocation = MutableStateFlow(false)
+    val isSavingLocation: StateFlow<Boolean> = _isSavingLocation.asStateFlow()
+
+    private val _locationSaveError = MutableStateFlow<String?>(null)
+    val locationSaveError: StateFlow<String?> = _locationSaveError.asStateFlow()
+
     init {
         // Automatic silent sync & authorization validation on entering home
         triggerAutomaticRefresh()
         loadDashboardStats()
+    }
+
+    fun ensureOrgHierarchyLoaded() {
+        viewModelScope.launch {
+            if (taskzSyncManager.orgHierarchy.value.cities.isEmpty()) {
+                taskzSyncManager.refreshOrgHierarchy()
+            }
+        }
+    }
+
+    fun updateOperationalLocation(
+        roleCode: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        centreCode: String?,
+        lanNumber: String?,
+        onSuccess: (AuthorizationContext) -> Unit
+    ) {
+        if (_isSavingLocation.value) return
+        viewModelScope.launch {
+            _isSavingLocation.value = true
+            _locationSaveError.value = null
+            val res = taskzSyncManager.updateOperationalLocation(
+                roleCode = roleCode,
+                stateId = stateId,
+                cityId = cityId,
+                centreId = centreId,
+                centreCode = centreCode,
+                lanNumber = lanNumber
+            )
+            _isSavingLocation.value = false
+            res.fold(
+                onSuccess = { ctx ->
+                    loadDashboardStats()
+                    onSuccess(ctx)
+                },
+                onFailure = { err ->
+                    _locationSaveError.value = err.message ?: "Failed to save duty station on server"
+                }
+            )
+        }
+    }
+
+    fun clearLocationError() {
+        _locationSaveError.value = null
     }
 
     fun loadDashboardStats() {

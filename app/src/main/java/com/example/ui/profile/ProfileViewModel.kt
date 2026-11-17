@@ -48,6 +48,8 @@ class ProfileViewModel(
 
     val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
 
+    val orgHierarchyFlow: StateFlow<com.example.core.model.OrgHierarchyData> = taskzSyncManager.orgHierarchy
+
     private val _updateState = MutableStateFlow<ProfileUpdateState>(ProfileUpdateState.Idle)
     val updateState: StateFlow<ProfileUpdateState> = _updateState.asStateFlow()
 
@@ -56,6 +58,12 @@ class ProfileViewModel(
 
     private val _isSwitchingRole = MutableStateFlow(false)
     val isSwitchingRole: StateFlow<Boolean> = _isSwitchingRole.asStateFlow()
+
+    private val _isSavingLocation = MutableStateFlow(false)
+    val isSavingLocation: StateFlow<Boolean> = _isSavingLocation.asStateFlow()
+
+    private val _locationSaveError = MutableStateFlow<String?>(null)
+    val locationSaveError: StateFlow<String?> = _locationSaveError.asStateFlow()
 
     private val _deviceId = MutableStateFlow<String?>(null)
     val deviceId: StateFlow<String?> = _deviceId.asStateFlow()
@@ -84,6 +92,41 @@ class ProfileViewModel(
                 _updateState.value = ProfileUpdateState.Error(err.message ?: "Failed to switch active role")
             }
         }
+    }
+
+    fun updateOperationalLocation(
+        roleCode: String?,
+        stateId: String?,
+        cityId: String?,
+        centreId: String?,
+        centreCode: String?,
+        lanNumber: String?,
+        onSuccess: (AuthorizationContext) -> Unit
+    ) {
+        if (_isSavingLocation.value) return
+        viewModelScope.launch {
+            _isSavingLocation.value = true
+            _locationSaveError.value = null
+            val res = taskzSyncManager.updateOperationalLocation(
+                roleCode = roleCode,
+                stateId = stateId,
+                cityId = cityId,
+                centreId = centreId,
+                centreCode = centreCode,
+                lanNumber = lanNumber
+            )
+            _isSavingLocation.value = false
+            res.fold(
+                onSuccess = { ctx -> onSuccess(ctx) },
+                onFailure = { err ->
+                    _locationSaveError.value = err.message ?: "Failed to update location scope"
+                }
+            )
+        }
+    }
+
+    fun clearLocationError() {
+        _locationSaveError.value = null
     }
 
     fun updateProfile(

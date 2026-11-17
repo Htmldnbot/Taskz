@@ -76,6 +76,9 @@ class TasksViewModel(
     private val _selectedSubFilter = MutableStateFlow(TaskSubFilter.ALL)
     val selectedSubFilter: StateFlow<TaskSubFilter> = _selectedSubFilter.asStateFlow()
 
+    private val _selectedCityFilter = MutableStateFlow<String?>(null)
+    val selectedCityFilter: StateFlow<String?> = _selectedCityFilter.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -130,38 +133,72 @@ class TasksViewModel(
         }
     }
 
-    // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, query, and tasks flow
-    val filteredTasks: StateFlow<List<TaskItem>> = combine(
-        allTasksFlow,
+    private data class TaskFilterCriteria(
+        val tab: TaskTabFilter,
+        val subFilter: TaskSubFilter,
+        val cityId: String?,
+        val query: String
+    )
+
+    private val filterCriteriaFlow = combine(
         _selectedTab,
         _selectedSubFilter,
-        _searchQuery,
-        permissionManager.contextFlow
-    ) { tasks, tab, subFilter, query, _ ->
+        _selectedCityFilter,
+        _searchQuery
+    ) { tab, subFilter, cityId, query ->
+        TaskFilterCriteria(tab, subFilter, cityId, query)
+    }
+
+    // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, city filter, query, and tasks flow
+    val filteredTasks: StateFlow<List<TaskItem>> = combine(
+        allTasksFlow,
+        filterCriteriaFlow,
+        permissionManager.contextFlow,
+        orgHierarchyFlow
+    ) { tasks, criteria, _, orgHierarchy ->
         val currentUserId = taskRepository.getActiveUserId()
         val scopedTasks = tasks.filter { permissionManager.canViewTask(it) }
-        val baseFiltered = when (tab) {
+        val baseFiltered = when (criteria.tab) {
             TaskTabFilter.MY_TASKS -> scopedTasks.filter {
                 it.isAssignedToMe || it.currentUserParticipantStatus == "active" || (currentUserId != null && it.createdBy == currentUserId) || it.targetRoleCodes.contains(permissionManager.getActiveRole().code)
             }
             TaskTabFilter.AVAILABLE -> scopedTasks.filter {
-                it.status == "open" && it.allowSelfJoin && !it.isAssignedToMe && it.createdBy != currentUserId
+                it.status in setOf("open", "in_progress", "draft") &&
+                    it.allowSelfJoin &&
+                    !it.isAssignedToMe &&
+                    !it.isPendingApproval
             }
             TaskTabFilter.CREATED_BY_ME -> scopedTasks.filter { it.createdBy == currentUserId }
         }
 
-        val subFiltered = when (subFilter) {
+        val subFiltered = when (criteria.subFilter) {
             TaskSubFilter.ALL -> baseFiltered
             TaskSubFilter.TODAY -> baseFiltered.filter { it.status != "completed" && it.status != "cancelled" }
             TaskSubFilter.UPCOMING -> baseFiltered.filter { it.status == "open" || it.status == "draft" }
             TaskSubFilter.COMPLETED -> baseFiltered.filter { it.status == "completed" }
         }
 
-        if (query.isBlank()) {
+        val cityFiltered = if (criteria.cityId.isNullOrBlank()) {
             subFiltered
         } else {
-            val q = query.trim().lowercase()
-            subFiltered.filter {
+            val targetCityId = criteria.cityId
+            val selectedCityName = orgHierarchy.cities.firstOrNull { it.id == targetCityId }?.name?.lowercase()
+            val centreIdsInCity = orgHierarchy.centres
+                .filter { it.cityId == targetCityId }
+                .map { it.id }
+                .toSet()
+            subFiltered.filter { task ->
+                task.cityId == targetCityId ||
+                    (task.centreId != null && task.centreId in centreIdsInCity) ||
+                    (!selectedCityName.isNullOrBlank() && task.location?.lowercase()?.contains(selectedCityName) == true)
+            }
+        }
+
+        if (criteria.query.isBlank()) {
+            cityFiltered
+        } else {
+            val q = criteria.query.trim().lowercase()
+            cityFiltered.filter {
                 it.title.lowercase().contains(q) ||
                 (it.description?.lowercase()?.contains(q) == true) ||
                 (it.groupTitle?.lowercase()?.contains(q) == true) ||
@@ -191,6 +228,10 @@ class TasksViewModel(
 
     fun setSubFilter(filter: TaskSubFilter) {
         _selectedSubFilter.value = filter
+    }
+
+    fun setCityFilter(cityId: String?) {
+        _selectedCityFilter.value = cityId
     }
 
     fun setSearchQuery(query: String) {
@@ -249,6 +290,7 @@ class TasksViewModel(
             res.fold(
                 onSuccess = { msg ->
                     _actionEvent.emit(msg)
+                    taskRepository.syncTasks()
                     loadTaskDetails(taskId)
                 },
                 onFailure = { error ->
