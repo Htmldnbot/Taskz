@@ -102,8 +102,21 @@ begin
         if v_city_rec.code = 'JAI' then
             v_jaipur_id := v_city_id;
         else
-            -- Seed default active exam centre for every non-Jaipur city if not already present
-            if not exists (
+            -- Seed default active exam centre for every non-Jaipur city idempotently
+            if exists (
+                select 1 from public.org_centres oc
+                where upper(oc.code) = upper(v_city_rec.code || '-01')
+                   or upper(coalesce(oc.external_code, '')) = upper(v_city_rec.code || '-01')
+            ) then
+                update public.org_centres
+                set city_id = v_city_id,
+                    state_id = v_state_id,
+                    zone_id = v_zone_id,
+                    district_name = v_city_rec.name,
+                    is_active = true
+                where upper(code) = upper(v_city_rec.code || '-01')
+                   or upper(coalesce(external_code, '')) = upper(v_city_rec.code || '-01');
+            elsif not exists (
                 select 1 from public.org_centres oc
                 where oc.city_id = v_city_id and oc.is_active = true
             ) then
@@ -117,13 +130,7 @@ begin
                     v_city_rec.default_centre_name,
                     v_city_rec.name,
                     true
-                )
-                on conflict (code) do update
-                set city_id = excluded.city_id,
-                    state_id = excluded.state_id,
-                    zone_id = excluded.zone_id,
-                    district_name = excluded.district_name,
-                    is_active = true;
+                );
             end if;
         end if;
     end loop;
@@ -142,10 +149,11 @@ begin
         loop
             if not exists (
                 select 1 from public.org_centres oc
-                where upper(oc.code) = upper(jc.code) or oc.external_code = jc.code
+                where upper(oc.code) = upper(v_centre_rec.code)
+                   or upper(coalesce(oc.external_code, '')) = upper(v_centre_rec.code)
             ) then
                 insert into public.org_centres (external_code, city_id, state_id, zone_id, code, name, district_name, address, is_active)
-                values (jc.code, v_jaipur_id, v_state_id, v_zone_id, jc.code, jc.name, 'Jaipur', jc.address, true);
+                values (v_centre_rec.code, v_jaipur_id, v_state_id, v_zone_id, v_centre_rec.code, v_centre_rec.name, 'Jaipur', v_centre_rec.address, true);
             else
                 update public.org_centres
                 set city_id = v_jaipur_id,
@@ -153,7 +161,8 @@ begin
                     zone_id = v_zone_id,
                     district_name = 'Jaipur',
                     is_active = true
-                where upper(code) = upper(jc.code) or external_code = jc.code;
+                where upper(code) = upper(v_centre_rec.code)
+                   or upper(coalesce(external_code, '')) = upper(v_centre_rec.code);
             end if;
         end loop;
     end if;
