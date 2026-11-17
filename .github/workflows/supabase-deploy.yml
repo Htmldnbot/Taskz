@@ -33,10 +33,23 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
+      - name: Install pinned Supabase CLI
+        shell: bash
+        env:
+          SUPABASE_CLI_VERSION: "3.1.0"
+        run: |
+          set -euo pipefail
+          TMP_DIR="$(mktemp -d)"
+          ARCHIVE="$TMP_DIR/supabase.tar.gz"
+          URL_VERSIONED="https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz"
+          URL_UNVERSIONED="https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_amd64.tar.gz"
+          if ! curl -fsSL "$URL_VERSIONED" -o "$ARCHIVE"; then
+            curl -fsSL "$URL_UNVERSIONED" -o "$ARCHIVE"
+          fi
+          tar -xzf "$ARCHIVE" -C "$TMP_DIR"
+          sudo install -m 0755 "$TMP_DIR/supabase" /usr/local/bin/supabase
+          rm -rf "$TMP_DIR"
+          supabase --version
 
       - name: Link Supabase project
         shell: bash
