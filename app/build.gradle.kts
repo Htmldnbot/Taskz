@@ -95,9 +95,12 @@ android {
   testOptions {
     unitTests {
       isIncludeAndroidResources = true
+      val hasLocalRobolectricRepo = file("/home/appuser/.m2/repository").isDirectory
       all {
-        it.systemProperty("robolectric.dependency.repo.url", "file:///home/appuser/.m2/repository")
-        it.systemProperty("robolectric.dependency.repo.id", "local")
+        if (hasLocalRobolectricRepo) {
+          it.systemProperty("robolectric.dependency.repo.url", "file:///home/appuser/.m2/repository")
+          it.systemProperty("robolectric.dependency.repo.id", "local")
+        }
       }
     }
   }

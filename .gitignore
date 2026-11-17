@@ -21,3 +21,6 @@ debug.keystore
 *.p12
 *.pfx
 *.pepk
+*firebase-adminsdk*.json
+public/assets/
+
