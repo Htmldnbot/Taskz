@@ -32,8 +32,32 @@ data class IncidentFilterState(
     val city: String? = null,
     val state: String? = null,
     val zone: String? = null,
+    val shift: String? = null,
     val dateRange: String? = "all",
     val reason: String? = null
+)
+
+data class RepeatLockedSystemSummary(
+    val systemNumber: String,
+    val centreCode: String,
+    val centreName: String,
+    val lanName: String,
+    val districtName: String,
+    val stateName: String,
+    val lockCount: Int,
+    val shiftedCount: Int,
+    val macAddresses: List<String>,
+    val ipAddresses: List<String>,
+    val topReasons: List<Pair<String, Int>>,
+    val lastExamDate: String
+)
+
+data class ScopedTopReasonsSummary(
+    val scopeLabel: String,
+    val totalIncidents: Int,
+    val shiftedCount: Int,
+    val repeatSystemsCount: Int,
+    val topReasons: List<Pair<String, Int>>
 )
 
 fun <T, M> StateFlow<T>.mapState(
@@ -103,6 +127,7 @@ class SystemIncidentViewModel(
     val filterCity: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.city }
     val filterSelectedState: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.state }
     val filterZone: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.zone }
+    val filterShift: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.shift }
     val filterDateRange: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.dateRange }
     val filterReason: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.reason }
 
@@ -142,25 +167,149 @@ class SystemIncidentViewModel(
                 else -> "North Zone"
             }
         }
+
+        private fun matchesCentreLabel(item: SystemIncident, filterCentre: String?): Boolean {
+            if (filterCentre.isNullOrBlank()) return true
+            val combined = "${item.centreCode} · ${item.centreName}"
+            return combined.equals(filterCentre, ignoreCase = true) ||
+                item.centreName.equals(filterCentre, ignoreCase = true) ||
+                item.centreCode.equals(filterCentre, ignoreCase = true)
+        }
+
+        fun computeRepeatLockedSystems(incidents: List<SystemIncident>): List<RepeatLockedSystemSummary> {
+            data class GroupKey(
+                val centreCode: String,
+                val centreName: String,
+                val lanName: String,
+                val systemNumber: String
+            )
+            return incidents
+                .filter { it.lockedSystemNumber.isNotBlank() }
+                .groupBy {
+                    GroupKey(
+                        centreCode = it.centreCode.trim().uppercase(Locale.ROOT),
+                        centreName = it.centreName.trim(),
+                        lanName = it.lanName.trim(),
+                        systemNumber = it.lockedSystemNumber.trim().uppercase(Locale.ROOT)
+                    )
+                }
+                .values
+                .filter { it.size >= 2 }
+                .map { group ->
+                    val first = group.first()
+                    val reasons = group
+                        .groupBy { it.reason.trim().ifBlank { "System Lock" } }
+                        .mapValues { it.value.size }
+                        .toList()
+                        .sortedByDescending { it.second }
+                    RepeatLockedSystemSummary(
+                        systemNumber = first.lockedSystemNumber.trim().uppercase(Locale.ROOT),
+                        centreCode = first.centreCode.trim(),
+                        centreName = first.centreName.trim(),
+                        lanName = first.lanName.trim(),
+                        districtName = group.firstOrNull { it.districtName.isNotBlank() }?.districtName?.trim().orEmpty(),
+                        stateName = group.firstOrNull { it.stateName.isNotBlank() }?.stateName?.trim().orEmpty(),
+                        lockCount = group.size,
+                        shiftedCount = group.count { it.candidateShifted },
+                        macAddresses = group.map { it.macAddress.trim() }.filter { it.isNotBlank() }.distinct().sorted(),
+                        ipAddresses = group.map { it.ipAddress.trim() }.filter { it.isNotBlank() }.distinct().sorted(),
+                        topReasons = reasons,
+                        lastExamDate = group.maxOfOrNull { it.examDate } ?: ""
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<RepeatLockedSystemSummary> { it.lockCount }
+                        .thenByDescending { it.shiftedCount }
+                        .thenBy { it.centreCode }
+                        .thenBy { it.lanName }
+                        .thenBy { it.systemNumber }
+                )
+        }
+
+        fun computeTopReasonsByScope(
+            incidents: List<SystemIncident>,
+            scopeType: String
+        ): List<ScopedTopReasonsSummary> {
+            return incidents
+                .groupBy { item ->
+                    when (scopeType.uppercase(Locale.ROOT)) {
+                        "CENTRE" -> "${item.centreCode.trim()} · ${item.centreName.trim()}".trim(' ', '·')
+                        "DISTRICT", "CITY" -> item.districtName.trim()
+                        "STATE" -> item.stateName.trim()
+                        else -> "${item.centreCode.trim()} · ${item.centreName.trim()}"
+                    }
+                }
+                .filterKeys { it.isNotBlank() }
+                .map { (scopeLabel, list) ->
+                    val reasons = list
+                        .groupBy { it.reason.trim().ifBlank { "System Lock" } }
+                        .mapValues { it.value.size }
+                        .toList()
+                        .sortedByDescending { it.second }
+                    ScopedTopReasonsSummary(
+                        scopeLabel = scopeLabel,
+                        totalIncidents = list.size,
+                        shiftedCount = list.count { it.candidateShifted },
+                        repeatSystemsCount = computeRepeatLockedSystems(list).size,
+                        topReasons = reasons
+                    )
+                }
+                .sortedByDescending { it.totalIncidents }
+        }
     }
 
-    val availableLans: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
-        list.map { it.lanName }.distinct().sortedWith(compareBy({ 
-            it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE 
-        }, { it }))
+    private val visibleIncidents: StateFlow<List<SystemIncident>> = combine(
+        allIncidents,
+        permissionManager.contextFlow
+    ) { list, _ ->
+        list.filter { permissionManager.canViewIncident(it) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Ordered cascading dropdown options: 1. State -> 2. City -> 3. Test Centre -> 4. LAN -> Shift
+    val availableStates: StateFlow<List<String>> = visibleIncidents.mapState(viewModelScope) { list ->
+        list.map { it.stateName.trim() }.filter { it.isNotBlank() }.distinct().sorted()
     }
 
-    val availableCentreNames: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
-        list.map { "${it.centreCode} · ${it.centreName}" }.distinct().sorted()
-    }
+    val availableCities: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
+        list.filter { item ->
+            filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)
+        }.map { it.districtName.trim() }.filter { it.isNotBlank() }.distinct().sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val availableCities: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
-        list.map { it.districtName.ifBlank { "Jaipur" } }.distinct().sorted()
-    }
+    val availableCentreNames: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
+        list.filter { item ->
+            (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
+                (filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true))
+        }.map { "${it.centreCode.trim()} · ${it.centreName.trim()}".trim(' ', '·') }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val availableStates: StateFlow<List<String>> = allIncidents.mapState(viewModelScope) { list ->
-        list.map { it.stateName.ifBlank { "Rajasthan" } }.distinct().sorted()
-    }
+    val availableLans: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
+        list.filter { item ->
+            (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
+                (filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)) &&
+                matchesCentreLabel(item, filter.centre)
+        }.map { it.lanName.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedWith(
+                compareBy(
+                    { it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE },
+                    { it }
+                )
+            )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableShifts: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
+        list.filter { item ->
+            (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
+                (filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)) &&
+                matchesCentreLabel(item, filter.centre) &&
+                (filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true))
+        }.map { it.shiftName.trim() }.filter { it.isNotBlank() }.distinct().sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val availableZones: List<String> = listOf("North Zone", "West Zone", "South Zone", "East Zone", "Central Zone")
 
@@ -169,9 +318,12 @@ class SystemIncidentViewModel(
         _filterState,
         permissionManager.contextFlow
     ) { incidents, filter, _ ->
-        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val todayStr = sdf.format(Date())
         val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-        val yesterdayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+        val yesterdayStr = sdf.format(cal.time)
+        val weekCal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -7) }
+        val sevenDaysAgoStr = sdf.format(weekCal.time)
 
         val activeUid = currentUserId.value
         val activeUName = currentUserName.value
@@ -188,6 +340,7 @@ class SystemIncidentViewModel(
                 item.centreCode.contains(q, ignoreCase = true) ||
                 item.districtName.contains(q, ignoreCase = true) ||
                 item.stateName.contains(q, ignoreCase = true) ||
+                item.shiftName.contains(q, ignoreCase = true) ||
                 item.itManagerName.contains(q, ignoreCase = true) ||
                 (item.creatorName?.contains(q, ignoreCase = true) == true)
 
@@ -201,40 +354,46 @@ class SystemIncidentViewModel(
             // Shifted Only
             val matchesShifted = !filter.shiftedOnly || item.candidateShifted
 
-            // LAN
-            val matchesLan = filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true)
-
-            // Centre
-            val matchesCentre = filter.centre.isNullOrBlank() ||
-                "${item.centreCode} · ${item.centreName}".equals(filter.centre, ignoreCase = true) ||
-                item.centreName.contains(filter.centre, ignoreCase = true) ||
-                item.centreCode.equals(filter.centre, ignoreCase = true)
-
-            // City
-            val matchesCity = filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)
-
-            // State
+            // Ordered cascade: State -> City -> Test Centre -> LAN -> Shift -> Date
             val matchesState = filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)
+            val matchesCity = filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)
+            val matchesCentre = matchesCentreLabel(item, filter.centre) ||
+                (!filter.centre.isNullOrBlank() && item.centreName.contains(filter.centre, ignoreCase = true))
+            val matchesLan = filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true)
+            val matchesShift = filter.shift.isNullOrBlank() || item.shiftName.equals(filter.shift, ignoreCase = true)
 
             // Zone
             val itemZone = getZoneForState(item.stateName)
             val matchesZone = filter.zone.isNullOrBlank() || itemZone.equals(filter.zone, ignoreCase = true)
 
             // Date Range
-            val matchesDate = when (filter.dateRange) {
+            val matchesDate = when (filter.dateRange?.trim()?.lowercase(Locale.ROOT)) {
                 "today" -> item.examDate == todayStr
                 "yesterday" -> item.examDate == yesterdayStr
+                "last_7_days", "last 7 days" -> item.examDate >= sevenDaysAgoStr && item.examDate <= todayStr
                 else -> true
             }
 
             // Reason
             val matchesReason = filter.reason.isNullOrBlank() || item.reason.equals(filter.reason, ignoreCase = true)
 
-            matchesQuery && matchesMyReports && matchesShifted && matchesLan &&
-                matchesCentre && matchesCity && matchesState && matchesZone &&
-                matchesDate && matchesReason
+            matchesQuery && matchesMyReports && matchesShifted && matchesState &&
+                matchesCity && matchesCentre && matchesLan && matchesShift &&
+                matchesZone && matchesDate && matchesReason
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val repeatLockedSystems: StateFlow<List<RepeatLockedSystemSummary>> =
+        filteredIncidents.mapState(viewModelScope) { computeRepeatLockedSystems(it) }
+
+    val topReasonsByCentre: StateFlow<List<ScopedTopReasonsSummary>> =
+        filteredIncidents.mapState(viewModelScope) { computeTopReasonsByScope(it, "CENTRE") }
+
+    val topReasonsByDistrict: StateFlow<List<ScopedTopReasonsSummary>> =
+        filteredIncidents.mapState(viewModelScope) { computeTopReasonsByScope(it, "DISTRICT") }
+
+    val topReasonsByState: StateFlow<List<ScopedTopReasonsSummary>> =
+        filteredIncidents.mapState(viewModelScope) { computeTopReasonsByScope(it, "STATE") }
 
     init {
         loadCentresAndInitialize()
@@ -273,23 +432,27 @@ class SystemIncidentViewModel(
     }
 
     fun setFilterCentre(centre: String?) {
-        _filterState.value = _filterState.value.copy(centre = centre)
+        _filterState.value = _filterState.value.copy(centre = centre, lan = null)
     }
 
     fun setFilterCity(city: String?) {
-        _filterState.value = _filterState.value.copy(city = city)
+        _filterState.value = _filterState.value.copy(city = city, centre = null, lan = null)
     }
 
     fun setFilterState(state: String?) {
-        _filterState.value = _filterState.value.copy(state = state)
+        _filterState.value = _filterState.value.copy(state = state, city = null, centre = null, lan = null)
     }
 
     fun setFilterZone(zone: String?) {
         _filterState.value = _filterState.value.copy(zone = zone)
     }
 
+    fun setFilterShift(shift: String?) {
+        _filterState.value = _filterState.value.copy(shift = shift)
+    }
+
     fun setFilterDateRange(dateRange: String?) {
-        _filterState.value = _filterState.value.copy(dateRange = dateRange)
+        _filterState.value = _filterState.value.copy(dateRange = dateRange ?: "all")
     }
 
     fun setFilterReason(reason: String?) {

@@ -8,6 +8,7 @@ enum class TaskzRole(
     val isOnboardingAllowed: Boolean = false
 ) {
     IT_MANAGER("IT_MANAGER", "IT Manager", 10, ScopeLevel.CENTRE, isOnboardingAllowed = true),
+    SO("SO", "SO (Site Officer)", 15, ScopeLevel.CENTRE, isOnboardingAllowed = true),
     VCO("VCO", "VCO (Venue Head)", 20, ScopeLevel.CITY, isOnboardingAllowed = true),
     CITY_HEAD("CITY_HEAD", "City Head / HOM", 30, ScopeLevel.CITY),
     ROM("ROM", "ROM (Regional Manager)", 40, ScopeLevel.STATE),
@@ -19,6 +20,7 @@ enum class TaskzRole(
         fun fromCode(raw: String?): TaskzRole {
             return when (raw?.trim()?.uppercase()) {
                 "IT_MANAGER", "ITM", "EMPLOYEE", "" , null -> IT_MANAGER
+                "SO", "SITE_OFFICER", "SITE OFFICER" -> SO
                 "VCO", "VENUE_HEAD" -> VCO
                 "CITY_HEAD", "HOM" -> CITY_HEAD
                 "ROM" -> ROM
@@ -29,8 +31,8 @@ enum class TaskzRole(
             }
         }
 
-        val onboardingRoles: List<TaskzRole> = listOf(IT_MANAGER, VCO)
-        val escalationChain: List<TaskzRole> = listOf(IT_MANAGER, VCO, CITY_HEAD, ROM, ZOM, SUPER_ADMIN)
+        val onboardingRoles: List<TaskzRole> = listOf(IT_MANAGER, SO, VCO)
+        val escalationChain: List<TaskzRole> = listOf(IT_MANAGER, SO, VCO, CITY_HEAD, ROM, ZOM, SUPER_ADMIN)
     }
 }
 

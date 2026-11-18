@@ -671,7 +671,12 @@ fun TaskDetailScreen(
                         }
                     }
 
-                    when (currentTask.responseType) {
+                    val effectiveDetailResponseType = if (currentTask.taskType == TaskType.PROGRESS) {
+                        ResponseType.PERCENTAGE
+                    } else {
+                        currentTask.responseType
+                    }
+                    when (effectiveDetailResponseType) {
                         ResponseType.PERCENTAGE -> {
                             Text(
                                 text = "Current Progress: ${responsePercentage.toInt()}% / ${currentTask.targetPercentage ?: 100}%",
@@ -706,7 +711,8 @@ fun TaskDetailScreen(
                                         selected = responsePercentage.toInt() == p.toInt(),
                                         onClick = { responsePercentage = p },
                                         enabled = canComplete && !isLockedBeforeTime,
-                                        label = { Text("${p.toInt()}%") }
+                                        label = { Text("${p.toInt()}%") },
+                                        modifier = Modifier.testTag("task_detail_pct_chip_${p.toInt()}")
                                     )
                                 }
                             }
@@ -721,7 +727,9 @@ fun TaskDetailScreen(
                                     )
                                 },
                                 enabled = canComplete && !isLockedBeforeTime,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("task_detail_submit_percentage_button")
                             ) {
                                 Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))

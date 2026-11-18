@@ -327,7 +327,7 @@ class TaskzSyncManager(
                 if (pullRes.isFailure) {
                     val ex = pullRes.exceptionOrNull()
                     if (ex is SupabaseHttpException && ex.isAuthFailure) {
-                        val refreshed = authRepository.forceRefreshAccessToken().getOrNull()
+                        val refreshed = authRepository.forceRefreshAccessToken(token).getOrNull()
                         if (!refreshed.isNullOrBlank()) {
                             token = refreshed
                             pullRes = executeDeltaPullWithBackoff(token, sinceIso, knownVersion)
@@ -338,6 +338,7 @@ class TaskzSyncManager(
                 if (pullRes.isSuccess) {
                     val payload = pullRes.getOrThrow()
                     reconcileDeltaPayload(token, payload)
+                    runCatching { taskRepository.purgeExpiredTasksOlderThan24Hours() }
                 } else {
                     val err = pullRes.exceptionOrNull()
                     if (err is SupabaseHttpException && err.isAuthFailure) {
@@ -359,6 +360,7 @@ class TaskzSyncManager(
                         runCatching { taskRepository.syncShiftsFromServer(token) }
                         runCatching { taskRepository.syncTasksFromServer(token) }
                         runCatching { systemIncidentRepository.syncIncidentsFromServer() }
+                        runCatching { taskRepository.purgeExpiredTasksOlderThan24Hours() }
                     } else if (err != null) {
                         Log.w(TAG, "Delta sync pull warning: ${err.message}")
                         _lastSyncError.value = err.message

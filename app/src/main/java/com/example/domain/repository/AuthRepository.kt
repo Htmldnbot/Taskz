@@ -10,11 +10,16 @@ import com.example.data.local.dao.SyncMetadataDao
 import com.example.data.local.entity.ProfileEntity
 import com.example.data.remote.AuthSessionResponse
 import com.example.data.remote.SupabaseClient
+import com.example.data.remote.SupabaseHttpException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketException
+import javax.net.ssl.SSLException
 
 class SessionExpiredException(message: String, cause: Throwable? = null) : IOException(message, cause)
 class NetworkUnavailableException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -488,51 +493,75 @@ class AuthRepository(
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
-        val refreshResult = supabaseClient.refreshSession(refreshToken)
-        if (refreshResult.isSuccess) {
-            val newSession = refreshResult.getOrThrow()
-            userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-            Result.success(newSession.accessToken)
-        } else {
-            val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
-            if (isNetworkFailure(err)) {
-                Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", err))
-            } else {
-                val errMsg = err.message.orEmpty()
-                Result.failure(SessionExpiredException("Authentication required: $errMsg", err))
-            }
-        }
+        return executeRefreshWithRetry(refreshToken)
     }
 
     /**
      * Force an immediate token refresh after receiving HTTP 401.
+     * Reuses the already-refreshed token if another coroutine rotated it while waiting on the mutex.
      */
-    suspend fun forceRefreshAccessToken(): Result<String> = tokenRefreshMutex.withLock {
+    suspend fun forceRefreshAccessToken(failedAccessToken: String? = null): Result<String> = tokenRefreshMutex.withLock {
         val session = userPrefs.getUserSession()
+        val currentToken = session.accessToken
+        if (currentToken.isNullOrBlank() ||
+            currentToken.startsWith("offline_") ||
+            currentToken.split(".").size != 3
+        ) {
+            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again."))
+        }
+
+        if (failedAccessToken != null &&
+            currentToken != failedAccessToken &&
+            !isTokenExpired(currentToken, bufferSeconds = 30L)
+        ) {
+            return Result.success(currentToken)
+        }
+
         val refreshToken = session.refreshToken
         if (refreshToken.isNullOrBlank()) {
             return Result.failure(SessionExpiredException("Session expired: Reauthentication required"))
         }
 
-        if (session.accessToken.isNullOrBlank() ||
-            session.accessToken.startsWith("offline_") ||
-            session.accessToken.split(".").size != 3
-        ) {
-            return Result.failure(SessionExpiredException("Session upgrade required: Please sign in again."))
+        return executeRefreshWithRetry(refreshToken)
+    }
+
+    private suspend fun executeRefreshWithRetry(refreshToken: String): Result<String> {
+        val backoffMs = longArrayOf(0L, 500L, 1200L)
+        var lastErr: Throwable = IOException("Unknown refresh error")
+
+        for (attempt in backoffMs.indices) {
+            if (backoffMs[attempt] > 0L) {
+                delay(backoffMs[attempt])
+            }
+            val refreshResult = supabaseClient.refreshSession(refreshToken)
+            if (refreshResult.isSuccess) {
+                val newSession = refreshResult.getOrThrow()
+                userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
+                return Result.success(newSession.accessToken)
+            }
+            lastErr = refreshResult.exceptionOrNull() ?: IOException("Unknown refresh error")
+            val isTransient = isNetworkFailure(lastErr) ||
+                (lastErr is SupabaseHttpException && (lastErr.isRetryable || lastErr.statusCode >= 500 || lastErr.statusCode == 429))
+            if (!isTransient) {
+                break
+            }
+            Log.w("TaskzAuth", "Transient token refresh failure (attempt ${attempt + 1}): ${lastErr.message}")
         }
 
-        val refreshResult = supabaseClient.refreshSession(refreshToken)
-        if (refreshResult.isSuccess) {
-            val newSession = refreshResult.getOrThrow()
-            userPrefs.updateAccessToken(newSession.accessToken, newSession.refreshToken)
-            Result.success(newSession.accessToken)
+        val isTerminalAuthRejection = lastErr is SupabaseHttpException &&
+            (lastErr.statusCode == 401 || lastErr.statusCode == 403 ||
+                (lastErr.statusCode == 400 && (
+                    lastErr.message.contains("invalid_grant", ignoreCase = true) ||
+                        lastErr.message.contains("refresh_token", ignoreCase = true) ||
+                        lastErr.message.contains("already used", ignoreCase = true) ||
+                        lastErr.message.contains("revoked", ignoreCase = true) ||
+                        lastErr.message.contains("expired", ignoreCase = true)
+                    )))
+
+        return if (isTerminalAuthRejection) {
+            Result.failure(SessionExpiredException("Authentication required: ${lastErr.message}", lastErr))
         } else {
-            val err = refreshResult.exceptionOrNull() ?: Exception("Unknown refresh error")
-            if (isNetworkFailure(err)) {
-                Result.failure(NetworkUnavailableException("Network unavailable: cannot refresh session", err))
-            } else {
-                Result.failure(SessionExpiredException("Authentication required: ${err.message}", err))
-            }
+            Result.failure(NetworkUnavailableException("Temporary network/server issue refreshing session: ${lastErr.message}", lastErr))
         }
     }
 
@@ -652,16 +681,23 @@ class AuthRepository(
 
     fun isNetworkFailure(throwable: Throwable): Boolean {
         if (throwable is NetworkUnavailableException) return true
+        if (throwable is SupabaseHttpException && throwable.isRetryable) return true
         val msg = throwable.message.orEmpty()
         return throwable is java.net.UnknownHostException ||
             throwable is java.net.ConnectException ||
             throwable is java.net.SocketTimeoutException ||
             throwable is java.net.NoRouteToHostException ||
+            throwable is SocketException ||
+            throwable is InterruptedIOException ||
+            throwable is SSLException ||
             msg.contains("resolve host", ignoreCase = true) ||
             msg.contains("failed to connect", ignoreCase = true) ||
             msg.contains("timeout", ignoreCase = true) ||
             msg.contains("unreachable", ignoreCase = true) ||
             msg.contains("route to host", ignoreCase = true) ||
+            msg.contains("connection reset", ignoreCase = true) ||
+            msg.contains("broken pipe", ignoreCase = true) ||
+            msg.contains("unexpected end of stream", ignoreCase = true) ||
             msg.contains("Supabase is not configured", ignoreCase = true) ||
             msg.contains("Network unreachable", ignoreCase = true) ||
             msg.contains("No internet connection", ignoreCase = true)

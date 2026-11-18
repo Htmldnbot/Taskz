@@ -496,6 +496,99 @@ class TaskRepository(
         groupMembersStore[groupId]?.toList() ?: emptyList()
     }
 
+    suspend fun addGroupMembersAndSyncTasks(
+        groupId: String,
+        members: List<com.example.core.model.ScopedMemberSearchResult>
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            if (groupId.isBlank()) return@withContext Result.failure(IllegalArgumentException("Invalid group"))
+            val validMembers = members.filter { com.example.core.network.SupabaseConfig.isValidUuid(it.id) }.distinctBy { it.id }
+            if (validMembers.isEmpty()) return@withContext Result.success(0)
+
+            var token = getActiveAccessToken()
+                ?: return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+
+            var remoteRes = supabaseClient.addGroupMembersAndSyncTasks(token, groupId, validMembers.map { it.id })
+            if (remoteRes.isFailure && isAuthExpiredError(remoteRes.exceptionOrNull())) {
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
+                if (!refreshed.isNullOrBlank()) {
+                    token = refreshed
+                    remoteRes = supabaseClient.addGroupMembersAndSyncTasks(token, groupId, validMembers.map { it.id })
+                }
+            }
+            if (remoteRes.isFailure) {
+                return@withContext Result.failure(remoteRes.exceptionOrNull() ?: IOException("Failed to add members to group"))
+            }
+
+            val existing = groupMembersStore.getOrPut(groupId) { mutableListOf() }
+            val existingIds = existing.map { it.userId }.toMutableSet()
+            for (m in validMembers) {
+                if (existingIds.add(m.id)) {
+                    existing.add(
+                        GroupMember(
+                            id = UUID.randomUUID().toString(),
+                            groupId = groupId,
+                            userId = m.id,
+                            employeeId = m.employeeId,
+                            fullName = m.fullName,
+                            groupRole = "member",
+                            joinedAt = nowIso()
+                        )
+                    )
+                }
+            }
+
+            runCatching { syncGroupsFromServer(token) }
+            runCatching { syncTasksFromServer(token) }
+            val respObj = remoteRes.getOrNull()
+            val addedCount = respObj?.optInt("added_members", validMembers.size) ?: validMembers.size
+            Result.success(addedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun assignTasksToGroupAndSync(
+        groupId: String,
+        taskIds: List<String>
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            if (groupId.isBlank()) return@withContext Result.failure(IllegalArgumentException("Invalid group"))
+            val validTaskIds = taskIds.filter { com.example.core.network.SupabaseConfig.isValidUuid(it) }.distinct()
+            if (validTaskIds.isEmpty()) return@withContext Result.success(0)
+
+            var token = getActiveAccessToken()
+                ?: return@withContext Result.failure(IllegalStateException("Authentication required: Missing session token."))
+
+            var remoteRes = supabaseClient.assignTasksToGroupAndSync(token, groupId, validTaskIds)
+            if (remoteRes.isFailure && isAuthExpiredError(remoteRes.exceptionOrNull())) {
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
+                if (!refreshed.isNullOrBlank()) {
+                    token = refreshed
+                    remoteRes = supabaseClient.assignTasksToGroupAndSync(token, groupId, validTaskIds)
+                }
+            }
+            if (remoteRes.isFailure) {
+                return@withContext Result.failure(remoteRes.exceptionOrNull() ?: IOException("Failed to assign tasks to group"))
+            }
+
+            val groupTitle = taskGroupDao.getGroupById(groupId)?.title
+            for (tId in validTaskIds) {
+                taskDao.getTaskById(tId)?.let { entity ->
+                    taskDao.updateTask(entity.copy(groupId = groupId, groupTitle = groupTitle ?: entity.groupTitle, updatedAt = nowIso()))
+                }
+            }
+
+            runCatching { syncGroupsFromServer(token) }
+            runCatching { syncTasksFromServer(token) }
+            val respObj = remoteRes.getOrNull()
+            val updatedCount = respObj?.optInt("tasks_updated", validTaskIds.size) ?: validTaskIds.size
+            Result.success(updatedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun getGroupJoinRequests(groupId: String): List<GroupJoinRequest> = withContext(Dispatchers.IO) {
         groupJoinRequestsStore[groupId]?.filter { it.status == "pending" } ?: emptyList()
     }
@@ -794,9 +887,10 @@ class TaskRepository(
                     copyAssignments = copyAssignedEmployees
                 )
                 if (remoteRes.isSuccess) {
+                    val createdShiftId = remoteRes.getOrThrow().takeIf { it.isNotBlank() } ?: newShiftId
                     syncShiftsFromServer(token)
                     syncTasksFromServer(token)
-                    val syncedShift = getShiftById(newShiftId) ?: newShift
+                    val syncedShift = getShiftById(createdShiftId) ?: newShift.copy(id = createdShiftId)
                     return@withContext Result.success(syncedShift)
                 } else {
                     val err = remoteRes.exceptionOrNull()
@@ -892,6 +986,49 @@ class TaskRepository(
         }
     }
 
+    suspend fun repeatShift1ToShift2(
+        sourceShiftId: String? = null,
+        targetDateIso: String = java.time.LocalDate.now().toString()
+    ): Result<Shift> = withContext(Dispatchers.IO) {
+        try {
+            val allShifts = shiftDao.getAllShiftsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
+            val sourceShift = if (!sourceShiftId.isNullOrBlank()) {
+                getShiftById(sourceShiftId)
+            } else {
+                allShifts
+                    .filter {
+                        it.shiftNumber == 1 ||
+                            it.name.contains("shift 1", ignoreCase = true) ||
+                            it.name.contains("shift-1", ignoreCase = true) ||
+                            it.name.trim().endsWith("1")
+                    }
+                    .maxByOrNull { it.startsAt }
+                    ?: allShifts.maxByOrNull { it.startsAt }
+            } ?: return@withContext Result.failure(
+                IOException("No Shift 1 found to repeat. Create Shift 1 first inside a Group.")
+            )
+
+            val durationMillis = (parseDateTimeToMillis(sourceShift.endsAt) - parseDateTimeToMillis(sourceShift.startsAt))
+                .coerceAtLeast(60 * 60 * 1000L)
+            val sourceTimePart = sourceShift.startsAt.substringAfter('T', "09:00").take(5)
+            val srcHour = sourceTimePart.substringBefore(':').toIntOrNull() ?: 9
+            val srcMin = sourceTimePart.substringAfter(':', "00").toIntOrNull() ?: 0
+            val durationHours = ((durationMillis / 3_600_000L).toInt()).coerceIn(4, 8)
+            val shift2Hour = (srcHour + durationHours).coerceIn(12, 22)
+            val newStartsAt = String.format(Locale.US, "%sT%02d:%02d", targetDateIso, shift2Hour, srcMin)
+
+            copyShift(
+                sourceShiftId = sourceShift.id,
+                newShiftName = "Shift 2 ($targetDateIso)",
+                newStartsAt = newStartsAt,
+                copyManpowerRequirements = true,
+                copyAssignedEmployees = true
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     // ============================================================
     // TASKS
     // ============================================================
@@ -899,27 +1036,39 @@ class TaskRepository(
     fun getAllTasksFlow(): Flow<List<TaskItem>> =
         taskDao.getAllTasksFlow().map { list ->
             val userId = getActiveUserId()
-            list.map { entity ->
-                val domain = entity.toDomain()
-                enrichTaskWithParticipantsAndCounts(domain, userId)
+            list.mapNotNull { entity ->
+                if (TaskAlarmScheduler.isTaskExpired24h(entity.createdAt, entity.startsAt, entity.executionTime, entity.dueAt)) {
+                    null
+                } else {
+                    val domain = entity.toDomain()
+                    enrichTaskWithParticipantsAndCounts(domain, userId)
+                }
             }
         }
 
     fun getTasksForGroupFlow(groupId: String): Flow<List<TaskItem>> =
         taskDao.getTasksForGroupFlow(groupId).map { list ->
             val userId = getActiveUserId()
-            list.map { entity ->
-                val domain = entity.toDomain()
-                enrichTaskWithParticipantsAndCounts(domain, userId)
+            list.mapNotNull { entity ->
+                if (TaskAlarmScheduler.isTaskExpired24h(entity.createdAt, entity.startsAt, entity.executionTime, entity.dueAt)) {
+                    null
+                } else {
+                    val domain = entity.toDomain()
+                    enrichTaskWithParticipantsAndCounts(domain, userId)
+                }
             }
         }
 
     fun getTasksForShiftFlow(shiftId: String): Flow<List<TaskItem>> =
         taskDao.getTasksForShiftFlow(shiftId).map { list ->
             val userId = getActiveUserId()
-            list.map { entity ->
-                val domain = entity.toDomain()
-                enrichTaskWithParticipantsAndCounts(domain, userId)
+            list.mapNotNull { entity ->
+                if (TaskAlarmScheduler.isTaskExpired24h(entity.createdAt, entity.startsAt, entity.executionTime, entity.dueAt)) {
+                    null
+                } else {
+                    val domain = entity.toDomain()
+                    enrichTaskWithParticipantsAndCounts(domain, userId)
+                }
             }
         }
 
@@ -1087,6 +1236,12 @@ class TaskRepository(
             val effectiveLocation = location?.trim()?.takeIf { it.isNotBlank() }
                 ?: group?.title?.takeIf { !com.example.core.network.SupabaseConfig.isValidUuid(targetGroupId) }
 
+            val effectiveResponseType = if (taskType == TaskType.PROGRESS) {
+                ResponseType.PERCENTAGE
+            } else {
+                responseType
+            }
+
             val task = TaskItem(
                 id = taskId,
                 groupId = targetGroupId,
@@ -1121,7 +1276,7 @@ class TaskRepository(
                 remindUntilCompleted = remindUntilCompleted,
                 overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
                 maxOverdueReminders = maxOverdueReminders,
-                responseType = responseType,
+                responseType = effectiveResponseType,
                 lanTargetList = lanTargetList,
                 completionPolicy = completionPolicy,
                 responseFormSchemaJson = responseFormSchemaJson,
@@ -1167,7 +1322,7 @@ class TaskRepository(
                 put("remind_until_completed", remindUntilCompleted)
                 if (overdueReminderIntervalMinutes != null) put("overdue_reminder_interval_minutes", overdueReminderIntervalMinutes)
                 if (maxOverdueReminders != null) put("max_overdue_reminders", maxOverdueReminders)
-                put("response_type", responseType.name)
+                put("response_type", effectiveResponseType.name)
                 put("lan_target_list", JSONArray(lanTargetList))
                 put("completion_policy", completionPolicy.name)
                 if (!responseFormSchemaJson.isNullOrBlank()) {
@@ -1218,7 +1373,7 @@ class TaskRepository(
                     firstMsg.contains("401") ||
                     firstMsg.contains("Unauthorized", ignoreCase = true)
                 ) {
-                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         token = refreshed
                         remoteRes = supabaseClient.createTaskAtomic(token, taskPayload)
@@ -1411,7 +1566,7 @@ class TaskRepository(
     suspend fun removeDeletedTasksLocally(taskIds: List<String>) = withContext(Dispatchers.IO) {
         for (taskId in taskIds) {
             if (taskId.isBlank()) continue
-            runCatching { taskAlarmScheduler.cancelAlarmsForTask(taskId) }
+            runCatching { taskAlarmScheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true) }
             runCatching { taskDao.deleteTask(taskId) }
             runCatching { taskResponseDao.deleteResponsesForTask(taskId) }
             runCatching { taskResponseDao.deleteAcknowledgementsForTask(taskId) }
@@ -1420,6 +1575,32 @@ class TaskRepository(
             activityLogStore.remove(taskId)
             taskVisibleUsersStore.remove(taskId)
         }
+    }
+
+    suspend fun purgeExpiredTasksOlderThan24Hours(nowMillis: Long = System.currentTimeMillis()): Int = withContext(Dispatchers.IO) {
+        val snapshot = taskDao.getAllTasksSnapshot()
+        val expiredIds = snapshot.filter { entity ->
+            TaskAlarmScheduler.isTaskExpired24h(
+                createdAt = entity.createdAt,
+                startsAt = entity.startsAt,
+                executionTime = entity.executionTime,
+                dueAt = entity.dueAt,
+                nowMillis = nowMillis
+            )
+        }.map { it.id }
+
+        if (expiredIds.isNotEmpty()) {
+            removeDeletedTasksLocally(expiredIds)
+        }
+
+        val token = getActiveAccessToken()
+        if (!token.isNullOrBlank() &&
+            com.example.core.network.SupabaseConfig.isConfigured &&
+            TaskzApplication.instance.networkMonitor.isCurrentlyConnected()
+        ) {
+            runCatching { supabaseClient.purgeExpiredTasks24hRpc(token) }
+        }
+        expiredIds.size
     }
 
     suspend fun updateTask(
@@ -1467,7 +1648,7 @@ class TaskRepository(
         if (!token.isNullOrBlank() && TaskzApplication.instance.networkMonitor.isCurrentlyConnected()) {
             var res = supabaseClient.updateTaskFields(token, taskId, updatesObj)
             if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                 if (!refreshed.isNullOrBlank()) {
                     res = supabaseClient.updateTaskFields(refreshed, taskId, updatesObj)
                 }
@@ -1620,12 +1801,66 @@ class TaskRepository(
                 } else ""
             } catch (_: Exception) { "" }
 
+            val remoteCreatedAt = taskJson.optNullableString("created_at")
+            val remoteStartsAt = taskJson.optNullableString("starts_at")
+            val remoteExecutionTime = taskJson.optNullableString("execution_time")
+            val remoteDueAt = taskJson.optNullableString("due_at")
             val existing = taskDao.getTaskById(taskId)
-            val remoteVersion = taskJson.optLong("version", 1L)
-            if (existing != null && (taskId in pendingTaskIds || existing.localSyncState != "SYNCED" || remoteVersion < existing.version)) {
-                // Keep unsynced or newer local state intact until server reconciles
-                domainTasks.add(existing.toDomain())
+
+            if (TaskAlarmScheduler.isTaskExpired24h(remoteCreatedAt, remoteStartsAt, remoteExecutionTime, remoteDueAt)) {
+                if (existing != null) {
+                    removeDeletedTasksLocally(listOf(taskId))
+                }
                 continue
+            }
+
+            val remoteVersion = taskJson.optLong("version", 1L)
+            val localResponses = taskResponseDao.getResponsesForTask(taskId)
+            val targetPct = if (taskJson.has("target_percentage") && !taskJson.isNull("target_percentage")) {
+                taskJson.getInt("target_percentage")
+            } else {
+                existing?.targetPercentage ?: 100
+            }
+            val hasLocalCompletedResponse = !currentUserId.isNullOrBlank() && localResponses.any { resp ->
+                resp.userId == currentUserId && resp.syncStatus != "FAILED" && (
+                    resp.responseValue.equals("YES", ignoreCase = true) ||
+                        resp.responseValue.equals("COMPLETED", ignoreCase = true) ||
+                        (resp.percentageValue != null && resp.percentageValue >= targetPct)
+                    )
+            }
+            val remoteStatus = taskJson.optString("status", "open")
+            val isRemoteResolved = remoteStatus.equals("completed", ignoreCase = true) ||
+                remoteStatus.equals("cancelled", ignoreCase = true) ||
+                remoteStatus.equals("pending_confirmation", ignoreCase = true)
+            val isExistingResolved = existing != null && (
+                existing.status.equals("completed", ignoreCase = true) ||
+                    existing.status.equals("cancelled", ignoreCase = true) ||
+                    existing.status.equals("pending_confirmation", ignoreCase = true) ||
+                    hasLocalCompletedResponse
+                )
+
+            if (existing != null && (
+                    taskId in pendingTaskIds ||
+                        existing.localSyncState != "SYNCED" ||
+                        remoteVersion < existing.version ||
+                        (isExistingResolved && !isRemoteResolved)
+                    )
+            ) {
+                // Keep unsynced, newer, or locally resolved state intact until server catches up
+                val preservedDomain = existing.toDomain()
+                if (isExistingResolved) {
+                    runCatching { taskAlarmScheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true) }
+                }
+                domainTasks.add(preservedDomain)
+                continue
+            }
+
+            val rawTaskType = taskJson.optString("task_type", "SIMPLE")
+            val rawResponseType = taskJson.optString("response_type", "COMPLETED_NOT_COMPLETED")
+            val effectiveResponseType = if (rawTaskType.equals("PROGRESS", ignoreCase = true)) {
+                ResponseType.PERCENTAGE.name
+            } else {
+                rawResponseType
             }
 
             val entity = TaskEntity(
@@ -1637,10 +1872,10 @@ class TaskRepository(
                 title = taskJson.optNullableString("title") ?: "Untitled Task",
                 description = taskJson.optNullableString("description"),
                 location = taskJson.optNullableString("location"),
-                startsAt = taskJson.optNullableString("starts_at"),
-                dueAt = taskJson.optNullableString("due_at"),
+                startsAt = remoteStartsAt,
+                dueAt = remoteDueAt,
                 priority = taskJson.optString("priority", "normal"),
-                status = taskJson.optString("status", "open"),
+                status = remoteStatus,
                 visibility = taskJson.optString("visibility", "everyone"),
                 allowSelfJoin = taskJson.optBoolean("allow_self_join", true),
                 joinRequiresApproval = taskJson.optBoolean("join_requires_approval", true),
@@ -1649,20 +1884,20 @@ class TaskRepository(
                 maxParticipants = if (taskJson.has("max_participants") && !taskJson.isNull("max_participants")) taskJson.getInt("max_participants") else null,
                 createdBy = taskJson.optString("created_by"),
                 creatorName = taskJson.optNullableString("creator_name") ?: existing?.creatorName,
-                createdAt = taskJson.optNullableString("created_at") ?: nowIso(),
+                createdAt = remoteCreatedAt ?: nowIso(),
                 updatedAt = taskJson.optNullableString("updated_at") ?: nowIso(),
-                taskType = taskJson.optString("task_type", "SIMPLE"),
+                taskType = rawTaskType,
                 importance = taskJson.optString("importance", "NORMAL"),
                 urgencyType = taskJson.optString("urgency_type", "BEFORE_DEADLINE"),
-                executionTime = taskJson.optNullableString("execution_time"),
-                targetPercentage = if (taskJson.has("target_percentage") && !taskJson.isNull("target_percentage")) taskJson.getInt("target_percentage") else 100,
+                executionTime = remoteExecutionTime,
+                targetPercentage = targetPct,
                 repeatIntervalMinutes = if (taskJson.has("repeat_interval_minutes") && !taskJson.isNull("repeat_interval_minutes")) taskJson.getInt("repeat_interval_minutes") else null,
                 alarmType = taskJson.optString("alarm_type", "SOUND_ALERT"),
                 advanceRemindersMinutesCsv = advCsv,
                 remindUntilCompleted = taskJson.optBoolean("remind_until_completed", false),
                 overdueReminderIntervalMinutes = if (taskJson.has("overdue_reminder_interval_minutes") && !taskJson.isNull("overdue_reminder_interval_minutes")) taskJson.getInt("overdue_reminder_interval_minutes") else 5,
                 maxOverdueReminders = if (taskJson.has("max_overdue_reminders") && !taskJson.isNull("max_overdue_reminders")) taskJson.getInt("max_overdue_reminders") else 3,
-                responseType = taskJson.optString("response_type", "COMPLETED_NOT_COMPLETED"),
+                responseType = effectiveResponseType,
                 lanTargetListCsv = lanCsv,
                 currentProgress = taskJson.optInt("current_progress", 0),
                 lastProgressUpdate = taskJson.optNullableString("last_progress_update"),
@@ -1676,7 +1911,7 @@ class TaskRepository(
                 cityId = taskJson.optNullableString("city_id"),
                 centreId = taskJson.optNullableString("centre_id"),
                 targetRoleCodesCsv = targetRolesCsv,
-                version = taskJson.optLong("version", 1L),
+                version = remoteVersion,
                 localSyncState = "SYNCED"
             )
             entities.add(entity)
@@ -1687,7 +1922,12 @@ class TaskRepository(
             )
             domainTasks.add(domain)
 
-            if (scheduleAlarms && (domain.isAssignedToMe || domain.createdBy == currentUserId || domain.targetRoleCodes.isNotEmpty())) {
+            val shouldStopAlarms = isRemoteResolved ||
+                hasLocalCompletedResponse ||
+                TaskAlarmScheduler.isTaskExpired24h(domain.createdAt, domain.startsAt, domain.executionTime, domain.dueAt)
+            if (shouldStopAlarms) {
+                runCatching { taskAlarmScheduler.cancelAlarmsForTask(domain.id, stopActiveAlarm = true) }
+            } else if (scheduleAlarms && (domain.isAssignedToMe || domain.createdBy == currentUserId || domain.targetRoleCodes.isNotEmpty())) {
                 try {
                     taskAlarmScheduler.scheduleAlarmsForTask(domain)
                 } catch (e: Exception) {
@@ -1708,7 +1948,7 @@ class TaskRepository(
         if (res.isFailure) {
             val errMsg = res.exceptionOrNull()?.message.orEmpty()
             if (isAuthExpiredError(errMsg)) {
-                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                 if (!refreshed.isNullOrBlank()) {
                     token = refreshed
                     res = syncResponsesFromServer(token, taskId)
@@ -1795,19 +2035,28 @@ class TaskRepository(
                 )
                 entities.add(entity)
 
-                // Cache members
+                // Cache active members (extracting joined profile details)
                 val membersArr = gJson.optJSONArray("group_members")
                 val mList = mutableListOf<GroupMember>()
                 if (membersArr != null) {
                     for (i in 0 until membersArr.length()) {
                         val mObj = membersArr.getJSONObject(i)
+                        val memberStatus = mObj.optString("status", "active")
+                        if (!memberStatus.equals("active", ignoreCase = true)) continue
+                        val prof = mObj.optJSONObject("profiles")
+                        val empId = prof.optNullableString("employee_id")
+                            ?: mObj.optNullableString("employee_id")
+                            ?: ""
+                        val fullName = prof.optNullableString("full_name")
+                            ?: mObj.optNullableString("full_name")
+                            ?: "Member"
                         mList.add(
                             GroupMember(
                                 id = mObj.optString("id", UUID.randomUUID().toString()),
                                 groupId = gId,
                                 userId = mObj.optString("user_id"),
-                                employeeId = mObj.optString("employee_id", ""),
-                                fullName = mObj.optString("full_name", "Member"),
+                                employeeId = empId,
+                                fullName = fullName,
                                 groupRole = mObj.optString("source", "member"),
                                 joinedAt = mObj.optString("joined_at", nowIso())
                             )
@@ -1869,13 +2118,14 @@ class TaskRepository(
                 errMsg.contains("401") ||
                 errMsg.contains("Unauthorized", ignoreCase = true)
             ) {
-                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                 if (!refreshed.isNullOrBlank()) {
                     token = refreshed
                     res = syncTasksFromServer(token)
                 }
             }
         }
+        runCatching { purgeExpiredTasksOlderThan24Hours() }
         return res
     }
 
@@ -1949,6 +2199,7 @@ class TaskRepository(
 
             val previousTaskEntity = taskDao.getTaskById(taskId)
             val task = previousTaskEntity?.toDomain()
+            val effectiveResponseType = if (task?.taskType == TaskType.PROGRESS) ResponseType.PERCENTAGE else responseType
             val isMultiLan = !task?.lanTargetList.isNullOrEmpty() || task?.taskType == TaskType.MULTI_CONFIRMATION
 
             // Prevent duplicate YES confirmations
@@ -1966,7 +2217,7 @@ class TaskRepository(
                 employeeId = empId,
                 employeeName = userName,
                 lanNumber = lanNumber,
-                responseType = responseType,
+                responseType = effectiveResponseType,
                 responseValue = responseValue,
                 percentageValue = percentage,
                 numericValue1 = numeric1,
@@ -1982,7 +2233,7 @@ class TaskRepository(
 
             // Durable Outbox Entry (PART 4)
             val payload = JSONObject().apply {
-                put("responseType", responseType.name)
+                put("responseType", effectiveResponseType.name)
                 if (responseValue != null) put("responseValue", responseValue)
                 if (percentage != null) put("percentage", percentage)
                 if (numeric1 != null) put("numeric1", numeric1)
@@ -2010,25 +2261,32 @@ class TaskRepository(
             )
             val outboxId = TaskzDatabase.getInstance(context).outboxDao().enqueueEvent(outboxEvent)
 
-            // For Progress or Single Assignee (non-multi-LAN), update progress locally
+            // For Progress or Single Assignee (non-multi-LAN), protect local state against sync revert and silence alarms
             if (percentage != null && !isMultiLan) {
-                taskDao.updateTaskProgress(taskId, percentage, nowIso)
-                if (percentage >= (task?.targetPercentage ?: 100)) {
-                    if (task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION) {
-                        taskDao.updateTaskStatus(taskId, "pending_confirmation")
+                val targetPct = (task?.targetPercentage ?: 100).coerceAtLeast(1)
+                if (percentage >= targetPct) {
+                    val resolvedStatus = if (task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION) {
+                        "pending_confirmation"
                     } else {
-                        taskDao.updateTaskStatus(taskId, "completed")
-                        taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                        "completed"
                     }
+                    taskDao.markLocalTaskCompletionState(taskId, resolvedStatus, percentage, nowIso, "PENDING_SYNC")
+                    taskAlarmScheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+                } else {
+                    taskDao.markLocalTaskCompletionState(taskId, "in_progress", percentage, nowIso, "PENDING_SYNC")
                 }
             } else if (responseValue?.equals("YES", ignoreCase = true) == true && !isMultiLan) {
-                // Single YES response confirms task complete and cancels repeating/snoozing alarms!
-                taskDao.updateTaskStatus(taskId, "completed")
-                taskDao.updateTaskProgress(taskId, 100, nowIso)
-                taskAlarmScheduler.cancelAlarmsForTask(taskId)
-            } else if (responseType == ResponseType.YES_NO && responseValue?.equals("NO", ignoreCase = true) == true) {
+                // Single YES response confirms task complete and cancels all repeating/snoozing alarms!
+                val resolvedStatus = if (task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION) {
+                    "pending_confirmation"
+                } else {
+                    "completed"
+                }
+                taskDao.markLocalTaskCompletionState(taskId, resolvedStatus, 100, nowIso, "PENDING_SYNC")
+                taskAlarmScheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+            } else if (effectiveResponseType == ResponseType.YES_NO && responseValue?.equals("NO", ignoreCase = true) == true) {
                 // NO response keeps task active and schedules follow-up reminder using task default (or 10 mins)
-                taskDao.updateTaskStatus(taskId, "in_progress")
+                taskDao.markLocalTaskCompletionState(taskId, "in_progress", task?.currentProgress ?: 0, nowIso, "PENDING_SYNC")
                 val reminderMins = (task?.overdueReminderIntervalMinutes ?: task?.repeatIntervalMinutes ?: 10).coerceAtLeast(1)
                 taskAlarmScheduler.scheduleSnoozeAlarm(
                     taskId = taskId,
@@ -2040,7 +2298,7 @@ class TaskRepository(
                 )
             } else if (isMultiLan) {
                 // Multi-LAN task: NEVER mark task completed from a single LAN submission!
-                taskDao.updateTaskStatus(taskId, "in_progress")
+                taskDao.markLocalTaskCompletionState(taskId, "in_progress", task?.currentProgress ?: 0, nowIso, "PENDING_SYNC")
             }
 
             var finalItem = item
@@ -2050,7 +2308,7 @@ class TaskRepository(
                 var res = supabaseClient.submitTaskResponse(
                     accessToken = activeToken,
                     taskId = taskId,
-                    responseType = responseType.name,
+                    responseType = effectiveResponseType.name,
                     responseValue = responseValue,
                     percentage = percentage,
                     numeric1 = numeric1,
@@ -2062,13 +2320,13 @@ class TaskRepository(
                     dynamicValues = dynamicValues
                 )
                 if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(activeToken).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         activeToken = refreshed
                         res = supabaseClient.submitTaskResponse(
                             accessToken = activeToken,
                             taskId = taskId,
-                            responseType = responseType.name,
+                            responseType = effectiveResponseType.name,
                             responseValue = responseValue,
                             percentage = percentage,
                             numeric1 = numeric1,
@@ -2089,9 +2347,17 @@ class TaskRepository(
 
                     val serverStatus = serverObj.optString("task_status")
                     if (serverStatus.isNotBlank()) {
-                        taskDao.updateTaskStatus(taskId, serverStatus)
-                        if (serverStatus.equals("completed", ignoreCase = true)) {
-                            taskAlarmScheduler.cancelAlarmsForTask(taskId)
+                        val resolvedProg = percentage ?: if (serverStatus.equals("completed", true)) 100 else (task?.currentProgress ?: 0)
+                        taskDao.markLocalTaskCompletionState(taskId, serverStatus, resolvedProg, nowIso, "SYNCED")
+                        if (serverStatus.equals("completed", ignoreCase = true) ||
+                            serverStatus.equals("pending_confirmation", ignoreCase = true) ||
+                            serverStatus.equals("cancelled", ignoreCase = true)
+                        ) {
+                            taskAlarmScheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+                        }
+                    } else {
+                        taskDao.getTaskById(taskId)?.let { cur ->
+                            taskDao.markLocalTaskCompletionState(taskId, cur.status, cur.currentProgress, nowIso, "SYNCED")
                         }
                     }
                     val remaining = db.outboxDao().getPendingEventsForUser(userId).size
@@ -2191,7 +2457,7 @@ class TaskRepository(
             if (!activeToken.isNullOrBlank() && TaskzApplication.instance.networkMonitor.isCurrentlyConnected()) {
                 var res = supabaseClient.acknowledgeTaskAlarm(activeToken, taskId, eventId, nowIso)
                 if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(activeToken).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         activeToken = refreshed
                         res = supabaseClient.acknowledgeTaskAlarm(activeToken, taskId, eventId, nowIso)
@@ -2987,7 +3253,7 @@ class TaskRepository(
                         val obj = sanitizeTaskPayloadForSupabase(JSONObject(ev.payloadJson))
                         var res = supabaseClient.createTaskAtomic(token, obj)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.createTaskAtomic(token, obj)
@@ -3023,7 +3289,7 @@ class TaskRepository(
                         if (targetTaskId.isNotBlank()) {
                             var res = supabaseClient.deleteTask(token, targetTaskId)
                             if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                                 if (!refreshed.isNullOrBlank()) {
                                     token = refreshed
                                     res = supabaseClient.deleteTask(token, targetTaskId)
@@ -3058,7 +3324,7 @@ class TaskRepository(
                         val updates = payload.optJSONObject("updates") ?: payload
                         var res = supabaseClient.updateTaskFields(token, targetTaskId, updates)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.updateTaskFields(token, targetTaskId, updates)
@@ -3088,7 +3354,7 @@ class TaskRepository(
                         val payload = JSONObject(ev.payloadJson)
                         var res = supabaseClient.createGroup(token, payload)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.createGroup(token, payload)
@@ -3118,7 +3384,7 @@ class TaskRepository(
                         val payload = JSONObject(ev.payloadJson)
                         var res = supabaseClient.createShift(token, payload)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.createShift(token, payload)
@@ -3177,7 +3443,7 @@ class TaskRepository(
                             dynamicValues = dynMap.takeIf { it.isNotEmpty() }
                         )
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.submitTaskResponse(
@@ -3204,7 +3470,15 @@ class TaskRepository(
                             db.taskResponseDao().markResponseSynced(ev.eventId)
                             val newStatus = serverObj.optString("task_status")
                             if (newStatus.isNotBlank()) {
-                                db.taskDao().updateTaskStatus(ev.taskId, newStatus)
+                                val resolvedProg = pct ?: if (newStatus.equals("completed", true)) 100 else (db.taskDao().getTaskById(ev.taskId)?.currentProgress ?: 0)
+                                db.taskDao().markLocalTaskCompletionState(ev.taskId, newStatus, resolvedProg, nowIso(), "SYNCED")
+                                if (newStatus.equals("completed", true) || newStatus.equals("pending_confirmation", true) || newStatus.equals("cancelled", true)) {
+                                    taskAlarmScheduler.cancelAlarmsForTask(ev.taskId, stopActiveAlarm = true)
+                                }
+                            } else {
+                                db.taskDao().getTaskById(ev.taskId)?.let { cur ->
+                                    db.taskDao().markLocalTaskCompletionState(ev.taskId, cur.status, cur.currentProgress, nowIso(), "SYNCED")
+                                }
                             }
                         } else {
                             val ex = res.exceptionOrNull()
@@ -3237,7 +3511,7 @@ class TaskRepository(
                             deviceTimestamp = devTs
                         )
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                            val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                             if (!refreshed.isNullOrBlank()) {
                                 token = refreshed
                                 res = supabaseClient.acknowledgeTaskAlarm(

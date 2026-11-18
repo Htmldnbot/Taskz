@@ -24,11 +24,20 @@ import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.core.model.AlarmType
+import com.example.core.model.ResponseType
 import com.example.core.model.TaskImportance
+import com.example.core.model.TaskType
+import com.example.data.local.TaskzDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class TaskAlarmService : Service() {
 
@@ -39,6 +48,7 @@ class TaskAlarmService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val autoStopHandler = Handler(Looper.getMainLooper())
     private val autoStopRunnable = Runnable {
         stopAndRelease()
@@ -84,6 +94,7 @@ class TaskAlarmService : Service() {
         val location = intent?.getStringExtra(TaskAlarmScheduler.EXTRA_LOCATION) ?: ""
         val taskType = intent?.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE) ?: "SIMPLE"
         val responseTypeStr = intent?.getStringExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE) ?: "COMPLETED_NOT_COMPLETED"
+        val targetPercentage = intent?.getIntExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, 100) ?: 100
         val reminderInterval = intent?.getIntExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, 10) ?: 10
         val alarmId = intent?.getIntExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, taskId.hashCode()) ?: 1001
 
@@ -117,6 +128,7 @@ class TaskAlarmService : Service() {
             putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
             putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
             putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseTypeStr)
+            putExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, targetPercentage)
             putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
             putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
         }
@@ -239,6 +251,34 @@ class TaskAlarmService : Service() {
 
         if (shouldFullScreen) {
             launchFullScreenIfPermitted(fullScreenIntent)
+        }
+
+        if (taskId.isNotBlank()) {
+            serviceScope.launch {
+                val db = TaskzDatabase.getInstance(applicationContext)
+                val task = db.taskDao().getTaskById(taskId)?.toDomain()
+                val responses = db.taskResponseDao().getResponsesForTask(taskId)
+                val alreadyDone = task == null ||
+                    task.status.lowercase() in setOf("completed", "cancelled", "pending_confirmation") ||
+                    TaskAlarmScheduler.isTaskExpired24h(task.createdAt, task.startsAt, task.executionTime, task.dueAt) ||
+                    (task.lanTargetList.isEmpty() && responses.any {
+                        it.syncStatus != "FAILED" && (
+                            it.responseValue.equals("YES", true) ||
+                                it.responseValue.equals("COMPLETED", true) ||
+                                ((task.taskType == TaskType.PROGRESS || task.responseType == ResponseType.PERCENTAGE) &&
+                                    (it.percentageValue ?: 0) >= (task.targetPercentage ?: 100))
+                            )
+                    })
+                if (alreadyDone) {
+                    Log.i(TAG, "Task $taskId already resolved; stopping TaskAlarmService immediately")
+                    runCatching { NotificationManagerCompat.from(this@TaskAlarmService).cancel(notifId) }
+                    TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId, stopActiveAlarm = false)
+                    autoStopHandler.post {
+                        stopAndRelease()
+                        stopSelf()
+                    }
+                }
+            }
         }
 
         return START_NOT_STICKY
@@ -443,6 +483,7 @@ class TaskAlarmService : Service() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         stopAndRelease()
         super.onDestroy()
     }

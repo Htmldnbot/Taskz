@@ -185,6 +185,26 @@ class ShiftsViewModel(
         }
     }
 
+    fun repeatShift1ToShift2(
+        sourceShiftId: String? = null,
+        onSuccess: (Shift) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.repeatShift1ToShift2(sourceShiftId = sourceShiftId)
+            res.fold(
+                onSuccess = { newShift ->
+                    _actionEvent.emit("Shift 1 tasks repeated to ${newShift.name}")
+                    onSuccess(newShift)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to repeat Shift 1 to Shift 2")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
     private fun parseDateTimeToMillis(isoString: String): Long {
         return try {
             SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).parse(isoString)?.time ?: System.currentTimeMillis()

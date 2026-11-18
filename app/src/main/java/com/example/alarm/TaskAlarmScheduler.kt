@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AlarmType
 import com.example.core.model.TaskImportance
@@ -24,6 +25,7 @@ class TaskAlarmScheduler(private val context: Context) {
 
     companion object {
         private const val TAG = "TaskAlarmScheduler"
+        const val TASK_TTL_MILLIS = 24L * 60L * 60L * 1000L
         const val EXTRA_TASK_ID = "extra_task_id"
         const val EXTRA_TASK_TITLE = "extra_task_title"
         const val EXTRA_IMPORTANCE = "extra_importance"
@@ -35,12 +37,31 @@ class TaskAlarmScheduler(private val context: Context) {
         const val EXTRA_LOCATION = "extra_location"
         const val EXTRA_TASK_TYPE = "extra_task_type"
         const val EXTRA_RESPONSE_TYPE = "extra_response_type"
+        const val EXTRA_TARGET_PERCENTAGE = "extra_target_percentage"
         const val EXTRA_REMINDER_INTERVAL = "extra_reminder_interval"
 
         const val ACTION_ALARM_TRIGGER = "com.example.alarm.ACTION_ALARM_TRIGGER"
         const val ACTION_ACKNOWLEDGE = "com.example.alarm.ACTION_ACKNOWLEDGE"
         const val ACTION_SNOOZE = "com.example.alarm.ACTION_SNOOZE"
         const val ACTION_COMPLETE = "com.example.alarm.ACTION_COMPLETE"
+
+        fun isTaskExpired24h(
+            createdAt: String?,
+            startsAt: String?,
+            executionTime: String?,
+            dueAt: String?,
+            nowMillis: Long = System.currentTimeMillis()
+        ): Boolean {
+            val timestamps = listOfNotNull(
+                createdAt?.let { TaskItem.parseIsoToMillis(it) },
+                startsAt?.let { TaskItem.parseIsoToMillis(it) },
+                executionTime?.let { TaskItem.parseIsoToMillis(it) },
+                dueAt?.let { TaskItem.parseIsoToMillis(it) }
+            )
+            if (timestamps.isEmpty()) return false
+            val latestReferenceMillis = timestamps.max()
+            return (nowMillis - latestReferenceMillis) >= TASK_TTL_MILLIS
+        }
     }
 
     /**
@@ -55,14 +76,16 @@ class TaskAlarmScheduler(private val context: Context) {
         }
 
         if (task.status.equals("completed", ignoreCase = true) ||
-            task.status.equals("cancelled", ignoreCase = true)
+            task.status.equals("cancelled", ignoreCase = true) ||
+            task.status.equals("pending_confirmation", ignoreCase = true) ||
+            isTaskExpired24h(task.createdAt, task.startsAt, task.executionTime, task.dueAt)
         ) {
-            cancelAlarmsForTask(task.id)
+            cancelAlarmsForTask(task.id, stopActiveAlarm = true)
             return@withContext
         }
 
-        // Cancel previous alarms for this task first
-        cancelAlarmsForTask(task.id)
+        // Cancel previous alarms for this task before rescheduling
+        cancelAlarmsForTask(task.id, stopActiveAlarm = false)
 
         val mainTimeMillis = task.executionTime?.let { TaskItem.parseIsoToMillis(it) }
             ?: task.startsAt?.let { TaskItem.parseIsoToMillis(it) }
@@ -171,6 +194,7 @@ class TaskAlarmScheduler(private val context: Context) {
                 putExtra(EXTRA_LOCATION, cachedTask.location ?: "")
                 putExtra(EXTRA_TASK_TYPE, cachedTask.taskType.name)
                 putExtra(EXTRA_RESPONSE_TYPE, cachedTask.responseType.name)
+                putExtra(EXTRA_TARGET_PERCENTAGE, cachedTask.targetPercentage ?: 100)
                 putExtra(EXTRA_REMINDER_INTERVAL, (cachedTask.overdueReminderIntervalMinutes ?: cachedTask.repeatIntervalMinutes ?: 10).coerceAtLeast(1))
             }
         }
@@ -190,17 +214,32 @@ class TaskAlarmScheduler(private val context: Context) {
     }
 
     /**
-     * Cancels all scheduled alarms for a task.
+     * Cancels all scheduled alarms, deterministic PendingIntents, and posted notifications for a task.
      */
-    suspend fun cancelAlarmsForTask(taskId: String) = withContext(Dispatchers.IO) {
+    suspend fun cancelAlarmsForTask(taskId: String, stopActiveAlarm: Boolean = true) = withContext(Dispatchers.IO) {
+        if (stopActiveAlarm) {
+            runCatching { TaskAlarmService.stopAlarm(context) }
+        }
         val existingAlarms = database.scheduledAlarmDao().getAlarmsForTask(taskId)
-        for (record in existingAlarms) {
+        val deterministicOffsets = listOf(
+            0, -1, -2, -3, -5, -10, -15, -20, -30, -45, -60,
+            1001, 1002, 1003, 1004, 1005, 1006,
+            5001, 5002, 5003, 5005, 5010, 5015, 5020, 5030
+        )
+        val candidateAlarmIds = buildSet {
+            existingAlarms.forEach { add(it.alarmId) }
+            deterministicOffsets.forEach { add(generateAlarmId(taskId, it)) }
+            add(taskId.hashCode())
+        }
+
+        val notifManager = runCatching { NotificationManagerCompat.from(context) }.getOrNull()
+        for (alarmId in candidateAlarmIds) {
             val intent = Intent(context, TaskAlarmReceiver::class.java).apply {
                 action = ACTION_ALARM_TRIGGER
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                record.alarmId,
+                alarmId,
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )
@@ -208,9 +247,11 @@ class TaskAlarmScheduler(private val context: Context) {
                 alarmManager.cancel(pendingIntent)
                 pendingIntent.cancel()
             }
+            runCatching { notifManager?.cancel(alarmId) }
         }
+        runCatching { notifManager?.cancel(1001) }
         database.scheduledAlarmDao().deleteAlarmsForTask(taskId)
-        Log.d(TAG, "Cancelled all alarms for task $taskId")
+        Log.d(TAG, "Cancelled all alarms & notifications for task $taskId (candidates=${candidateAlarmIds.size})")
     }
 
     /**
@@ -278,6 +319,7 @@ class TaskAlarmScheduler(private val context: Context) {
             putExtra(EXTRA_LOCATION, task.location)
             putExtra(EXTRA_TASK_TYPE, task.taskType.name)
             putExtra(EXTRA_RESPONSE_TYPE, task.responseType.name)
+            putExtra(EXTRA_TARGET_PERCENTAGE, task.targetPercentage ?: 100)
             putExtra(EXTRA_REMINDER_INTERVAL, (task.overdueReminderIntervalMinutes ?: task.repeatIntervalMinutes ?: 10).coerceAtLeast(1))
         }
 

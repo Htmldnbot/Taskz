@@ -514,6 +514,7 @@ fun HomeScreen(
         // Role-Aware Dashboard Summary Statistics
         val overviewHeading = when (authContext.activeRole) {
             com.example.core.model.TaskzRole.IT_MANAGER -> "Centre & LAN Operations (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.SO -> "Site Operations (${authContext.scope.summaryLabel()})"
             com.example.core.model.TaskzRole.VCO -> "Venue & City Coordination (${authContext.scope.summaryLabel()})"
             com.example.core.model.TaskzRole.CITY_HEAD -> "City Operational Overview (${authContext.scope.summaryLabel()})"
             com.example.core.model.TaskzRole.ROM -> "State / Region Overview (${authContext.scope.summaryLabel()})"

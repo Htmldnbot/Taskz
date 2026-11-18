@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -60,6 +61,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -326,12 +328,23 @@ fun CreateTaskScreen(
         }
     }
 
-    // Auto-load scoped directory colleagues across the caller's authorized city/scope
-    LaunchedEffect(selectedScope, selectedCity?.id, selectedCentre?.id, selectedTargetRoles.toList()) {
+    // Auto-load scoped directory colleagues across the caller's selected scope (State / City / Centre)
+    LaunchedEffect(selectedScope, selectedState?.id, selectedCity?.id, selectedCentre?.id, selectedTargetRoles.toList()) {
+        val searchStateId = selectedState?.id ?: authContext.scope.stateId
+        val searchCityId = when (selectedScope) {
+            TaskScopeLevel.STATE, TaskScopeLevel.ZONE, TaskScopeLevel.NATIONAL -> null
+            else -> selectedCity?.id ?: authContext.scope.cityId
+        }
+        val searchCentreId = when (selectedScope) {
+            TaskScopeLevel.TEST_CENTRE, TaskScopeLevel.LAN -> selectedCentre?.id ?: authContext.scope.centreId
+            else -> null
+        }
         tasksViewModel.searchScopedMembers(
             query = memberSearchQuery,
             roleCode = selectedTargetRoles.singleOrNull(),
-            centreId = null
+            centreId = searchCentreId,
+            stateId = searchStateId,
+            cityId = searchCityId
         )
     }
 
@@ -474,7 +487,7 @@ fun CreateTaskScreen(
             targetPercentage = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) targetPercentage else 100,
             alarmType = selectedPriority.alarmType,
             advanceRemindersMinutes = listOf(0),
-            remindUntilCompleted = true,
+            remindUntilCompleted = false,
             overdueReminderIntervalMinutes = resolvedSnoozeMinutes,
             responseType = if (selectedTaskType == SimpleTaskType.PROGRESSIVE) ResponseType.PERCENTAGE else ResponseType.YES_NO,
             lanTargetList = parsedLans,
@@ -1320,6 +1333,7 @@ fun CreateTaskScreen(
                     ) {
                         val selectableTargetRoles = listOf(
                             TaskzRole.IT_MANAGER,
+                            TaskzRole.SO,
                             TaskzRole.VCO,
                             TaskzRole.CITY_HEAD,
                             TaskzRole.ROM,
@@ -1339,6 +1353,14 @@ fun CreateTaskScreen(
                                 modifier = Modifier.testTag("target_role_chip_${role.code.lowercase()}")
                             )
                         }
+                    }
+
+                    if (selectedScope == TaskScopeLevel.STATE) {
+                        Text(
+                            text = "State-Wide Mode: Visible & assignable to all VCO, SO, and IT Managers across ${selectedState?.name ?: stateName.ifBlank { "selected State" }}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
 
                     Row(
@@ -1401,10 +1423,21 @@ fun CreateTaskScreen(
                         value = memberSearchQuery,
                         onValueChange = {
                             memberSearchQuery = it
+                            val searchStateId = selectedState?.id ?: authContext.scope.stateId
+                            val searchCityId = when (selectedScope) {
+                                TaskScopeLevel.STATE, TaskScopeLevel.ZONE, TaskScopeLevel.NATIONAL -> null
+                                else -> selectedCity?.id ?: authContext.scope.cityId
+                            }
+                            val searchCentreId = when (selectedScope) {
+                                TaskScopeLevel.TEST_CENTRE, TaskScopeLevel.LAN -> selectedCentre?.id ?: authContext.scope.centreId
+                                else -> null
+                            }
                             tasksViewModel.searchScopedMembers(
                                 query = it,
                                 roleCode = selectedTargetRoles.singleOrNull(),
-                                centreId = null
+                                centreId = searchCentreId,
+                                stateId = searchStateId,
+                                cityId = searchCityId
                             )
                         },
                         label = { Text("Search Scoped Directory") },
@@ -1416,6 +1449,42 @@ fun CreateTaskScreen(
                             .testTag("create_task_member_search"),
                         shape = RoundedCornerShape(10.dp)
                     )
+
+                    if (scopedSearchResults.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = {
+                                scopedSearchResults.forEach { member ->
+                                    val asProfile = UserProfile(
+                                        id = member.id,
+                                        employeeId = member.employeeId,
+                                        fullName = member.fullName,
+                                        email = member.email,
+                                        mobile = member.mobile.orEmpty(),
+                                        activeRoleCode = member.activeRoleCode,
+                                        assignedRoleCodes = member.assignedRoles.ifEmpty { listOf(member.activeRoleCode) },
+                                        centreId = member.centreId,
+                                        centreCode = member.centreCode,
+                                        cityName = member.cityName,
+                                        stateId = member.stateId,
+                                        stateName = member.stateName,
+                                        isActive = member.isActive
+                                    )
+                                    if (selectedInvitees.none { it.id == member.id || (member.employeeId.isNotBlank() && it.employeeId == member.employeeId) }) {
+                                        selectedInvitees.add(asProfile)
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("btn_add_all_scoped_members")
+                        ) {
+                            Icon(Icons.Default.People, contentDescription = "Add all members in scope", modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add All in Scope (${scopedSearchResults.size})", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
 
                     // Selected Members Chips
                     if (selectedInvitees.isNotEmpty()) {
@@ -1452,7 +1521,7 @@ fun CreateTaskScreen(
                         ) {
                             Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 if (scopedSearchResults.isNotEmpty()) {
-                                    scopedSearchResults.take(10).forEach { member ->
+                                    scopedSearchResults.take(20).forEach { member ->
                                         val asProfile = UserProfile(
                                             id = member.id,
                                             employeeId = member.employeeId,

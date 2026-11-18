@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -23,12 +25,15 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlaylistAddCheck
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Task
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,10 +46,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -52,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.Shift
@@ -90,8 +98,15 @@ fun GroupDetailScreen(
     val groupTasks = remember(allTasks, activeGroup.id) {
         allTasks.filter { it.groupId == activeGroup.id }
     }
+    val assignableTasks = remember(allTasks) {
+        allTasks.filter {
+            !it.status.equals("completed", ignoreCase = true) &&
+                !it.status.equals("cancelled", ignoreCase = true)
+        }
+    }
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+    var showBatchAssignDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(activeGroup.id) {
@@ -281,6 +296,24 @@ fun GroupDetailScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { showBatchAssignDialog = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("btn_assign_tasks_to_group")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlaylistAddCheck,
+                    contentDescription = "Batch Assign Tasks",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Assign Multiple Tasks to All Group Members")
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             // Tabs: Shifts vs Tasks
@@ -349,5 +382,116 @@ fun GroupDetailScreen(
                 }
             }
         }
+    }
+
+    if (showBatchAssignDialog) {
+        var selectedTaskIds by remember(groupTasks) {
+            mutableStateOf(groupTasks.map { it.id }.toSet())
+        }
+        AlertDialog(
+            onDismissRequest = { showBatchAssignDialog = false },
+            title = { Text("Assign Tasks to Group", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Every active member in '${activeGroup.title}' will automatically be assigned all selected tasks.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (assignableTasks.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                val allIds = assignableTasks.map { it.id }.toSet()
+                                selectedTaskIds = if (allIds.all { it in selectedTaskIds }) emptySet() else allIds
+                            },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("btn_select_all_batch_tasks")
+                        ) {
+                            Text("Select / Deselect All (${assignableTasks.size})")
+                        }
+                    }
+                    if (assignableTasks.isEmpty()) {
+                        Text(
+                            text = "No open tasks available to assign.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 260.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(assignableTasks, key = { it.id }) { task ->
+                                val isChecked = task.id in selectedTaskIds
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .clickable {
+                                            selectedTaskIds = if (isChecked) selectedTaskIds - task.id else selectedTaskIds + task.id
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = { checked ->
+                                            selectedTaskIds = if (checked) selectedTaskIds + task.id else selectedTaskIds - task.id
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = task.title,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${task.taskType.name} • ${task.scopeLevel.label}" +
+                                                (task.groupTitle?.let { " • $it" } ?: ""),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        groupsViewModel.assignTasksToGroupAndSync(activeGroup.id, selectedTaskIds.toList()) {
+                            showBatchAssignDialog = false
+                        }
+                    },
+                    enabled = selectedTaskIds.isNotEmpty(),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_confirm_batch_assign_tasks")
+                ) {
+                    Text("Assign (${selectedTaskIds.size})")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showBatchAssignDialog = false },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel")
+                }
+            },
+            modifier = Modifier.testTag("dialog_batch_assign_tasks")
+        )
     }
 }

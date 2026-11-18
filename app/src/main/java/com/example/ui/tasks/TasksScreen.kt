@@ -45,10 +45,14 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,9 +67,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.TaskItem
+import com.example.core.model.TaskType
+import com.example.ui.common.OrderedCascadingFilterBar
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
 import com.example.ui.theme.TaskzWarning
@@ -82,7 +87,12 @@ fun TasksScreen(
     val tasks by viewModel.filteredTasks.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val selectedSubFilter by viewModel.selectedSubFilter.collectAsStateWithLifecycle()
-    val selectedCityFilter by viewModel.selectedCityFilter.collectAsStateWithLifecycle()
+    val filterState by viewModel.tasksFilterState.collectAsStateWithLifecycle()
+    val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
+    val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
+    val availableCentres by viewModel.availableCentres.collectAsStateWithLifecycle()
+    val availableLans by viewModel.availableLans.collectAsStateWithLifecycle()
+    val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
     val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -143,14 +153,14 @@ fun TasksScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Sub-filter chips (All, Today, Upcoming, Completed)
-            Row(
+            LazyRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                TaskSubFilter.values().forEach { filter ->
+                items(TaskSubFilter.values().toList()) { filter ->
                     FilterChip(
                         selected = selectedSubFilter == filter,
                         onClick = { viewModel.setSubFilter(filter) },
@@ -167,43 +177,88 @@ fun TasksScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // City-wise Filter Chips
-            if (orgHierarchy.cities.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // Quick Operations Bar: Repeat Shift 1 -> 2 & Groups
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.repeatShift1ToShift2() },
+                    enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_repeat_shift_1_to_2")
                 ) {
-                    item {
-                        FilterChip(
-                            selected = selectedCityFilter == null,
-                            onClick = { viewModel.setCityFilter(null) },
-                            label = {
-                                Text(
-                                    text = "All Cities",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            },
-                            modifier = Modifier.testTag("city_filter_all")
-                        )
-                    }
-                    items(orgHierarchy.cities, key = { it.id }) { city ->
-                        FilterChip(
-                            selected = selectedCityFilter == city.id,
-                            onClick = {
-                                viewModel.setCityFilter(if (selectedCityFilter == city.id) null else city.id)
-                            },
-                            label = {
-                                Text(
-                                    text = city.name,
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            },
-                            modifier = Modifier.testTag("city_filter_${city.code.lowercase()}")
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Repeat Shift 1 tasks to Shift 2",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Repeat Shift 1 → 2", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(modifier = Modifier.height(6.dp))
+
+                OutlinedButton(
+                    onClick = onManageGroupsClick,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_manage_groups_shortcut")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Groups,
+                        contentDescription = "Manage Task Groups",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Groups", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Ordered Cascading Dropdown Filters: 1. State -> 2. City -> 3. Test Centre -> 4. LAN -> Shift -> Date
+            val selectedStateName = availableStates.firstOrNull { it.id == filterState.stateId }?.name
+            val selectedCityName = availableCities.firstOrNull { it.id == filterState.cityId }?.name
+            val selectedCentreLabel = availableCentres.firstOrNull { it.id == filterState.centreId }?.let { "${it.code} · ${it.name}" }
+            val centreLabelOptions = remember(availableCentres) {
+                availableCentres.map { "${it.code} · ${it.name}" }
+            }
+
+            OrderedCascadingFilterBar(
+                selectedState = selectedStateName,
+                stateOptions = availableStates.map { it.name },
+                onStateSelected = { name ->
+                    viewModel.setStateFilter(availableStates.firstOrNull { it.name == name }?.id)
+                },
+                selectedCity = selectedCityName,
+                cityOptions = availableCities.map { it.name },
+                onCitySelected = { name ->
+                    viewModel.setCityFilter(availableCities.firstOrNull { it.name == name }?.id)
+                },
+                selectedCentre = selectedCentreLabel,
+                centreOptions = centreLabelOptions,
+                onCentreSelected = { label ->
+                    val centre = availableCentres.firstOrNull { "${it.code} · ${it.name}" == label }
+                    viewModel.setCentreFilter(centre?.id)
+                },
+                selectedLan = filterState.lan,
+                lanOptions = availableLans,
+                onLanSelected = { viewModel.setLanFilter(it) },
+                selectedShift = filterState.shift,
+                shiftOptions = availableShifts,
+                onShiftSelected = { viewModel.setShiftFilter(it) },
+                selectedDate = filterState.dateFilter,
+                dateOptions = viewModel.availableDateOptions,
+                onDateSelected = { viewModel.setDateFilter(it) },
+                onClearAll = { viewModel.clearAllFilters() },
+                initiallyExpanded = false
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Search Bar & Refresh Action
             Row(
@@ -228,7 +283,9 @@ fun TasksScreen(
                 IconButton(
                     onClick = { viewModel.refreshTasks() },
                     enabled = !isLoading,
-                    modifier = Modifier.testTag("btn_refresh_tasks")
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("btn_refresh_tasks")
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -476,6 +533,34 @@ fun TaskCard(
                         )
                     }
                 }
+            }
+
+            if (task.taskType == TaskType.PROGRESS) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Progressive Completion",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "${task.currentProgress}% / ${task.targetPercentage ?: 100}%",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { (task.currentProgress.coerceIn(0, 100)) / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

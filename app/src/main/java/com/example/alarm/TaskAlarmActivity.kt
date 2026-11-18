@@ -87,6 +87,7 @@ import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.CompletionPolicy
 import com.example.core.model.ResponseType
 import com.example.core.model.TaskResponseItem
+import com.example.core.model.TaskType
 import com.example.data.local.TaskzDatabase
 import com.example.data.local.entity.OutboxEventEntity
 import com.example.data.local.entity.TaskAcknowledgementEntity
@@ -136,9 +137,15 @@ class TaskAlarmActivity : ComponentActivity() {
         val description = intent.getStringExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION) ?: ""
         val location = intent.getStringExtra(TaskAlarmScheduler.EXTRA_LOCATION) ?: ""
         val taskType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE) ?: "SIMPLE"
-        val initialResponseType = runCatching {
+        val rawResponseType = runCatching {
             ResponseType.valueOf(intent.getStringExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE) ?: ResponseType.COMPLETED_NOT_COMPLETED.name)
         }.getOrDefault(ResponseType.COMPLETED_NOT_COMPLETED)
+        val initialResponseType = if (taskType.equals(TaskType.PROGRESS.name, ignoreCase = true)) {
+            ResponseType.PERCENTAGE
+        } else {
+            rawResponseType
+        }
+        val initialTargetPercentage = intent.getIntExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, 100).coerceIn(1, 100)
         val initialReminderInterval = intent.getIntExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, 10).coerceAtLeast(1)
         activeAlarmId = intent.getIntExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, -1)
 
@@ -151,6 +158,7 @@ class TaskAlarmActivity : ComponentActivity() {
                 var actionState by remember { mutableStateOf(AlarmActionState.IDLE) }
                 var statusMessage by remember { mutableStateOf("") }
                 var resolvedResponseType by remember { mutableStateOf(initialResponseType) }
+                var resolvedTargetPercentage by remember { mutableStateOf(initialTargetPercentage) }
                 var resolvedReminderInterval by remember { mutableStateOf(initialReminderInterval) }
                 val coroutineScope = rememberCoroutineScope()
 
@@ -160,7 +168,18 @@ class TaskAlarmActivity : ComponentActivity() {
                             TaskzDatabase.getInstance(applicationContext).taskDao().getTaskById(taskId)?.toDomain()
                         }
                         if (cached != null) {
-                            resolvedResponseType = cached.responseType
+                            if (cached.status.lowercase() in setOf("completed", "cancelled", "pending_confirmation")) {
+                                stopAllAlarmOutputs()
+                                TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+                                finish()
+                                return@LaunchedEffect
+                            }
+                            resolvedResponseType = if (cached.taskType == TaskType.PROGRESS) {
+                                ResponseType.PERCENTAGE
+                            } else {
+                                cached.responseType
+                            }
+                            resolvedTargetPercentage = (cached.targetPercentage ?: 100).coerceIn(1, 100)
                             resolvedReminderInterval = (cached.overdueReminderIntervalMinutes
                                 ?: cached.repeatIntervalMinutes
                                 ?: 10).coerceAtLeast(1)
@@ -177,6 +196,7 @@ class TaskAlarmActivity : ComponentActivity() {
                     location = location,
                     taskType = taskType,
                     responseType = resolvedResponseType,
+                    targetPercentage = resolvedTargetPercentage,
                     reminderIntervalMinutes = resolvedReminderInterval,
                     actionState = actionState,
                     statusMessage = statusMessage,
@@ -185,6 +205,21 @@ class TaskAlarmActivity : ComponentActivity() {
                         coroutineScope.launch {
                             recordAcknowledgement(taskId)
                             finish()
+                        }
+                    },
+                    onPercentageResponse = { pct ->
+                        stopAllAlarmOutputs()
+                        actionState = AlarmActionState.PROCESSING
+                        coroutineScope.launch {
+                            handlePercentageAction(
+                                taskId = taskId,
+                                targetPercentage = resolvedTargetPercentage,
+                                percentage = pct,
+                                onStateChange = { newState, msg ->
+                                    actionState = newState
+                                    statusMessage = msg
+                                }
+                            )
                         }
                     },
                     onYesNoResponse = { value ->
@@ -570,7 +605,7 @@ class TaskAlarmActivity : ComponentActivity() {
             if (res.isFailure) {
                 val err = res.exceptionOrNull()?.message.orEmpty()
                 if (err.contains("JWT", true) || err.contains("401", true) || err.contains("Unauthorized", true)) {
-                    val refreshed = authRepo.forceRefreshAccessToken().getOrNull()
+                    val refreshed = authRepo.forceRefreshAccessToken(token).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         token = refreshed
                         res = client.submitTaskResponse(
@@ -595,9 +630,10 @@ class TaskAlarmActivity : ComponentActivity() {
                 db.taskResponseDao().markResponseSynced(idempotencyKey)
 
                 if (serverStatus.equals("pending_confirmation", ignoreCase = true) || requiresConfirmation) {
-                    db.taskDao().updateTaskStatus(taskId, "pending_confirmation")
+                    db.taskDao().markLocalTaskCompletionState(taskId, "pending_confirmation", 100, nowIso, syncState = "SYNCED")
+                    TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
                 } else if (serverStatus.equals("completed", ignoreCase = true)) {
-                    db.taskDao().updateTaskStatus(taskId, "completed")
+                    db.taskDao().markLocalTaskCompletionState(taskId, "completed", 100, nowIso, syncState = "SYNCED")
                     TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
                 }
                 if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
@@ -605,9 +641,15 @@ class TaskAlarmActivity : ComponentActivity() {
                     db.syncMetadataDao().updateSyncStatus("SYNCED", "Verified with Server")
                 }
             } else {
+                val targetLocalStatus = if (requiresConfirmation) "pending_confirmation" else "completed"
+                db.taskDao().markLocalTaskCompletionState(taskId, targetLocalStatus, 100, nowIso, syncState = "PENDING_SYNC")
+                TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
                 SyncWorker.enqueueSync(applicationContext)
             }
         } else {
+            val targetLocalStatus = if (requiresConfirmation) "pending_confirmation" else "completed"
+            db.taskDao().markLocalTaskCompletionState(taskId, targetLocalStatus, 100, nowIso, syncState = "PENDING_SYNC")
+            TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
             SyncWorker.enqueueSync(applicationContext)
         }
 
@@ -622,6 +664,152 @@ class TaskAlarmActivity : ComponentActivity() {
                 else -> {
                     onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "RESPONSE SAVED\nPENDING SYNC")
                 }
+            }
+        }
+    }
+
+    private suspend fun handlePercentageAction(
+        taskId: String,
+        targetPercentage: Int,
+        percentage: Int,
+        onStateChange: (AlarmActionState, String) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val db = TaskzDatabase.getInstance(applicationContext)
+        val userPrefs = UserPreferencesDataStore(applicationContext)
+        val session = userPrefs.getUserSession()
+        val profile = db.profileDao().getCachedProfile()
+
+        val userId = session.userId ?: profile?.id
+        if (userId.isNullOrBlank()) {
+            withContext(Dispatchers.Main) {
+                onStateChange(AlarmActionState.ERROR, "Authentication required")
+            }
+            return@withContext
+        }
+
+        val empId = profile?.employeeId ?: ""
+        val empName = profile?.fullName ?: empId
+        val nowIso = java.time.Instant.now().toString()
+        val idempotencyKey = UUID.randomUUID().toString()
+        val clampedPct = percentage.coerceIn(0, 100)
+        val task = db.taskDao().getTaskById(taskId)?.toDomain()
+        val effectiveTarget = (task?.targetPercentage ?: targetPercentage).coerceIn(1, 100)
+        val requiresConfirmation = task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION ||
+            task?.requiresCompletionConfirmation == true
+        val reachedTarget = clampedPct >= effectiveTarget
+
+        val localResponse = TaskResponseEntity(
+            id = idempotencyKey,
+            taskId = taskId,
+            userId = userId,
+            employeeId = empId,
+            employeeName = empName,
+            lanNumber = null,
+            responseType = ResponseType.PERCENTAGE.name,
+            responseValue = "$clampedPct%",
+            percentageValue = clampedPct,
+            numericValue1 = null,
+            numericValue2 = null,
+            textValue = "Progress updated to $clampedPct% from alarm",
+            dynamicValuesJson = "{}",
+            submittedAt = nowIso,
+            syncStatus = "PENDING_SYNC"
+        )
+        db.taskResponseDao().insertResponse(localResponse)
+
+        val payload = JSONObject().apply {
+            put("responseType", ResponseType.PERCENTAGE.name)
+            put("responseValue", "$clampedPct%")
+            put("percentage", clampedPct)
+            put("textValue", localResponse.textValue)
+            put("deviceTimestamp", nowIso)
+        }
+        val outboxId = db.outboxDao().enqueueEvent(
+            OutboxEventEntity(
+                eventId = idempotencyKey,
+                userId = userId,
+                taskId = taskId,
+                operationType = "PROGRESS_UPDATE",
+                payloadJson = payload.toString(),
+                syncStatus = "PENDING",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+
+        val localStatus = when {
+            reachedTarget && requiresConfirmation -> "pending_confirmation"
+            reachedTarget -> "completed"
+            else -> "in_progress"
+        }
+        db.taskDao().markLocalTaskCompletionState(taskId, localStatus, clampedPct, nowIso, syncState = "PENDING_SYNC")
+        if (reachedTarget) {
+            TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
+        }
+
+        val authRepo = com.example.TaskzApplication.instance.authRepository
+        var token = authRepo.getValidAccessToken().getOrNull()
+            ?: session.accessToken?.takeIf {
+                it.isNotBlank() && !it.startsWith("offline_") && it.split(".").size == 3
+            }
+        var isServerConfirmed = false
+
+        if (!token.isNullOrBlank()) {
+            val client = SupabaseClient()
+            var res = client.submitTaskResponse(
+                accessToken = token,
+                taskId = taskId,
+                responseType = ResponseType.PERCENTAGE.name,
+                responseValue = "$clampedPct%",
+                percentage = clampedPct,
+                text = localResponse.textValue,
+                idempotencyKey = idempotencyKey,
+                deviceTimestamp = nowIso
+            )
+            if (res.isFailure) {
+                val err = res.exceptionOrNull()?.message.orEmpty()
+                if (err.contains("JWT", true) || err.contains("401", true) || err.contains("Unauthorized", true)) {
+                    val refreshed = authRepo.forceRefreshAccessToken(token).getOrNull()
+                    if (!refreshed.isNullOrBlank()) {
+                        token = refreshed
+                        res = client.submitTaskResponse(
+                            accessToken = token,
+                            taskId = taskId,
+                            responseType = ResponseType.PERCENTAGE.name,
+                            responseValue = "$clampedPct%",
+                            percentage = clampedPct,
+                            text = localResponse.textValue,
+                            idempotencyKey = idempotencyKey,
+                            deviceTimestamp = nowIso
+                        )
+                    }
+                }
+            }
+            if (res.isSuccess) {
+                isServerConfirmed = true
+                val serverObj = res.getOrThrow()
+                val srvStatus = serverObj.optString("task_status", localStatus)
+                db.outboxDao().markEventSynced(outboxId, idempotencyKey, System.currentTimeMillis())
+                db.taskResponseDao().markResponseSynced(idempotencyKey)
+                db.taskDao().markLocalTaskCompletionState(taskId, srvStatus, clampedPct, nowIso, syncState = "SYNCED")
+                if (srvStatus.equals("completed", true) || srvStatus.equals("pending_confirmation", true) || reachedTarget) {
+                    TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
+                }
+                if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
+                    db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
+                    db.syncMetadataDao().updateSyncStatus("SYNCED", "Verified with Server")
+                }
+            } else {
+                SyncWorker.enqueueSync(applicationContext)
+            }
+        } else {
+            SyncWorker.enqueueSync(applicationContext)
+        }
+
+        withContext(Dispatchers.Main) {
+            if (isServerConfirmed) {
+                onStateChange(AlarmActionState.SERVER_CONFIRMED, "PROGRESS $clampedPct% SYNCED")
+            } else {
+                onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "PROGRESS $clampedPct% SAVED\nPENDING SYNC")
             }
         }
     }
@@ -694,8 +882,7 @@ class TaskAlarmActivity : ComponentActivity() {
 
         val scheduler = TaskAlarmScheduler(applicationContext)
         if (isYes) {
-            db.taskDao().updateTaskStatus(taskId, "completed")
-            db.taskDao().updateTaskProgress(taskId, 100, nowIso)
+            db.taskDao().markLocalTaskCompletionState(taskId, "completed", 100, nowIso, syncState = "PENDING_SYNC")
             scheduler.cancelAlarmsForTask(taskId)
         } else {
             db.taskDao().updateTaskStatus(taskId, "in_progress")
@@ -733,7 +920,7 @@ class TaskAlarmActivity : ComponentActivity() {
             if (res.isFailure) {
                 val err = res.exceptionOrNull()?.message.orEmpty()
                 if (err.contains("JWT", true) || err.contains("401", true) || err.contains("Unauthorized", true)) {
-                    val refreshed = authRepo.forceRefreshAccessToken().getOrNull()
+                    val refreshed = authRepo.forceRefreshAccessToken(token).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         token = refreshed
                         res = client.submitTaskResponse(
@@ -754,6 +941,10 @@ class TaskAlarmActivity : ComponentActivity() {
                 isServerConfirmed = true
                 db.outboxDao().markEventSynced(outboxId, idempotencyKey, System.currentTimeMillis())
                 db.taskResponseDao().markResponseSynced(idempotencyKey)
+                if (isYes) {
+                    db.taskDao().markLocalTaskCompletionState(taskId, "completed", 100, nowIso, syncState = "SYNCED")
+                    scheduler.cancelAlarmsForTask(taskId)
+                }
                 if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
                     db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
                     db.syncMetadataDao().updateSyncStatus("SYNCED", "Verified with Server")
@@ -802,10 +993,12 @@ fun TaskAlarmScreen(
     location: String,
     taskType: String,
     responseType: ResponseType,
+    targetPercentage: Int = 100,
     reminderIntervalMinutes: Int,
     actionState: AlarmActionState,
     statusMessage: String,
     onAcknowledge: () -> Unit,
+    onPercentageResponse: (Int) -> Unit = {},
     onYesNoResponse: (String) -> Unit,
     onSnooze: (Int) -> Unit,
     onOpenTask: () -> Unit,
@@ -1046,35 +1239,59 @@ fun TaskAlarmScreen(
                         Text(text = "DISMISS", fontWeight = FontWeight.Bold)
                     }
                 } else {
-                    when (responseType) {
+                    val effectiveResponseType = if (taskType.equals(TaskType.PROGRESS.name, ignoreCase = true)) {
+                        ResponseType.PERCENTAGE
+                    } else {
+                        responseType
+                    }
+                    when (effectiveResponseType) {
                         ResponseType.PERCENTAGE -> {
-                            // Percentage tasks keep BOTH Acknowledge Alarm AND Response actions
-                            Button(
+                            Text(
+                                text = "Select Progress Percentage (Target: ${targetPercentage}%)",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf(25, 50, 75, 100).forEach { pct ->
+                                    val isDoneTarget = pct >= targetPercentage
+                                    Button(
+                                        onClick = { onPercentageResponse(pct) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isDoneTarget) TaskzSuccess else accentColor
+                                        ),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(54.dp)
+                                            .testTag("alarm_btn_pct_$pct")
+                                    ) {
+                                        Text(
+                                            text = "$pct%",
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            OutlinedButton(
                                 onClick = onAcknowledge,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                                shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(52.dp)
+                                    .height(48.dp)
                                     .testTag("alarm_btn_acknowledge")
                             ) {
                                 Icon(imageVector = Icons.Default.Check, contentDescription = null)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "ACKNOWLEDGE ALARM", fontWeight = FontWeight.Bold)
-                            }
-
-                            OutlinedButton(
-                                onClick = onOpenTask,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = TaskzSuccess),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("alarm_btn_update_progress")
-                            ) {
-                                Icon(imageVector = Icons.Default.OpenInNew, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "UPDATE PROGRESS (%)", fontWeight = FontWeight.SemiBold)
+                                Text(text = "ACKNOWLEDGE ONLY", fontWeight = FontWeight.SemiBold)
                             }
                         }
 

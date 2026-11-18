@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -227,10 +228,11 @@ fun CreateShiftScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val defaultDate = remember { java.time.LocalDate.now().toString() }
     var name by rememberSaveable { mutableStateOf("") }
     var shiftNumberStr by rememberSaveable { mutableStateOf("1") }
-    var startsAt by rememberSaveable { mutableStateOf("2026-10-16T08:00") }
-    var endsAt by rememberSaveable { mutableStateOf("2026-10-16T16:00") }
+    var startsAt by rememberSaveable { mutableStateOf("${defaultDate}T08:00") }
+    var endsAt by rememberSaveable { mutableStateOf("${defaultDate}T16:00") }
     var notes by rememberSaveable { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -539,14 +541,23 @@ fun ShiftDetailScreen(
     val shiftTasks = remember(allTasks, activeShift.id) {
         allTasks.filter { it.shiftId == activeShift.id }
     }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(activeShift.id) {
         shiftsViewModel.loadShiftDetails(activeShift.id)
     }
 
+    LaunchedEffect(Unit) {
+        shiftsViewModel.actionEvent.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -684,20 +695,45 @@ fun ShiftDetailScreen(
             ) {
                 OutlinedButton(
                     onClick = { onCopyShiftClick(activeShift) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_copy_shift")
                 ) {
-                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy Shift", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Copy Shift")
                 }
 
                 Button(
                     onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_add_shift_task")
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Task", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Add Task")
+                }
+            }
+
+            if (activeShift.shiftNumber == 1 || activeShift.name.contains("1")) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        shiftsViewModel.repeatShift1ToShift2(activeShift.id) { newShift ->
+                            shiftsViewModel.selectShift(newShift)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_shift_repeat_to_2")
+                ) {
+                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Repeat Shift 1 to Shift 2", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Repeat Shift 1 Tasks → Shift 2")
                 }
             }
 
@@ -743,8 +779,9 @@ fun CopyShiftScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val todayStr = remember { java.time.LocalDate.now().toString() }
     var newShiftName by rememberSaveable { mutableStateOf("${sourceShift.name} (Copy)") }
-    var newStartsAt by rememberSaveable { mutableStateOf("2026-10-17T08:00") }
+    var newStartsAt by rememberSaveable { mutableStateOf("${todayStr}T14:00") }
 
     var copyRequirements by rememberSaveable { mutableStateOf(true) } // Default ON
     var copyAssignments by rememberSaveable { mutableStateOf(false) } // Default OFF

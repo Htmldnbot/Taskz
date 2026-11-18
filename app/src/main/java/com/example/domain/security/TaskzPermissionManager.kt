@@ -77,7 +77,7 @@ class TaskzPermissionManager(
                     ScopeLevel.GLOBAL -> false
                 }
             }
-            TaskzRole.IT_MANAGER -> {
+            TaskzRole.IT_MANAGER, TaskzRole.SO -> {
                 when (targetScope) {
                     ScopeLevel.ZONE -> scope.zoneId != null && zoneId != null && scope.zoneId == zoneId
                     ScopeLevel.STATE -> scope.stateId != null && stateId != null && scope.stateId == stateId
@@ -150,9 +150,9 @@ class TaskzPermissionManager(
         return when (task.scopeLevel) {
             ScopeLevel.GLOBAL -> true
             ScopeLevel.ZONE -> role == TaskzRole.ZOM
-            ScopeLevel.STATE -> role in setOf(TaskzRole.ROM, TaskzRole.ZOM)
-            ScopeLevel.CITY -> role in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO)
-            ScopeLevel.CENTRE -> role in setOf(TaskzRole.IT_MANAGER, TaskzRole.VCO)
+            ScopeLevel.STATE -> role in setOf(TaskzRole.VCO, TaskzRole.CITY_HEAD, TaskzRole.ROM, TaskzRole.ZOM, TaskzRole.SO, TaskzRole.IT_MANAGER)
+            ScopeLevel.CITY -> role in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.SO, TaskzRole.IT_MANAGER)
+            ScopeLevel.CENTRE -> role in setOf(TaskzRole.IT_MANAGER, TaskzRole.SO, TaskzRole.VCO)
         }
     }
 
@@ -178,7 +178,7 @@ class TaskzPermissionManager(
     )
 
     fun canCreateStateTask(): Boolean = isActiveAccount() && getActiveRole() in setOf(
-        TaskzRole.ROM, TaskzRole.ZOM, TaskzRole.COMMAND_CENTER, TaskzRole.SUPER_ADMIN
+        TaskzRole.VCO, TaskzRole.CITY_HEAD, TaskzRole.ROM, TaskzRole.ZOM, TaskzRole.COMMAND_CENTER, TaskzRole.SUPER_ADMIN
     )
 
     fun canCreateZoneTask(): Boolean = isActiveAccount() && getActiveRole() in setOf(

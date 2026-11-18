@@ -43,11 +43,27 @@ interface TaskDao {
     @Query("UPDATE cached_tasks SET currentProgress = :progress, lastProgressUpdate = :updatedAt WHERE id = :taskId")
     suspend fun updateTaskProgress(taskId: String, progress: Int, updatedAt: String)
 
+    @Query(
+        "UPDATE cached_tasks SET status = :status, currentProgress = :progress, " +
+            "lastProgressUpdate = :updatedAt, updatedAt = :updatedAt, " +
+            "localSyncState = :syncState, version = version + 1 WHERE id = :taskId"
+    )
+    suspend fun markLocalTaskCompletionState(
+        taskId: String,
+        status: String,
+        progress: Int,
+        updatedAt: String,
+        syncState: String = "PENDING_SYNC"
+    )
+
     @Query("DELETE FROM cached_tasks WHERE id = :taskId")
     suspend fun deleteTask(taskId: String)
 
     @Query("SELECT id FROM cached_tasks")
     suspend fun getTaskIdsSnapshot(): List<String>
+
+    @Query("SELECT * FROM cached_tasks")
+    suspend fun getAllTasksSnapshot(): List<TaskEntity>
 
     @Query("DELETE FROM cached_tasks")
     suspend fun clearAll()

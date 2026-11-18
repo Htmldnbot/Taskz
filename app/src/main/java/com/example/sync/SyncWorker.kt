@@ -152,7 +152,7 @@ class SyncWorker(
                         val payload = sanitizeTaskPayload(JSONObject(event.payloadJson))
                         var res = supabaseClient.createTaskAtomic(token, payload)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.createTaskAtomic(token, payload)
@@ -199,7 +199,7 @@ class SyncWorker(
                         val payload = JSONObject(event.payloadJson)
                         var res = supabaseClient.createGroup(token, payload)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.createGroup(token, payload)
@@ -224,7 +224,7 @@ class SyncWorker(
                         val payload = JSONObject(event.payloadJson)
                         var res = supabaseClient.createShift(token, payload)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.createShift(token, payload)
@@ -274,7 +274,7 @@ class SyncWorker(
                         )
 
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.submitTaskResponse(
@@ -300,10 +300,23 @@ class SyncWorker(
                             outboxDao.markEventSynced(event.id, respId, System.currentTimeMillis())
                             db.taskResponseDao().markResponseSynced(event.eventId)
 
-                            // Update local task progress/status if returned
+                            // Update local task progress/status if returned and silence alarms if resolved
                             val newStatus = serverObj.optString("task_status")
+                            val pct = if (payload.has("percentage") && !payload.isNull("percentage")) payload.getInt("percentage") else null
+                            val nowIso = java.time.Instant.now().toString()
                             if (newStatus.isNotBlank()) {
-                                db.taskDao().updateTaskStatus(event.taskId, newStatus)
+                                val resolvedProg = pct ?: if (newStatus.equals("completed", true)) 100 else (db.taskDao().getTaskById(event.taskId)?.currentProgress ?: 0)
+                                db.taskDao().markLocalTaskCompletionState(event.taskId, newStatus, resolvedProg, nowIso, "SYNCED")
+                                if (newStatus.equals("completed", true) ||
+                                    newStatus.equals("pending_confirmation", true) ||
+                                    newStatus.equals("cancelled", true)
+                                ) {
+                                    com.example.alarm.TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(event.taskId, stopActiveAlarm = true)
+                                }
+                            } else {
+                                db.taskDao().getTaskById(event.taskId)?.let { cur ->
+                                    db.taskDao().markLocalTaskCompletionState(event.taskId, cur.status, cur.currentProgress, nowIso, "SYNCED")
+                                }
                             }
                         } else {
                             val ex = res.exceptionOrNull()
@@ -326,7 +339,7 @@ class SyncWorker(
                         )
 
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.acknowledgeTaskAlarm(
@@ -358,7 +371,7 @@ class SyncWorker(
                                 incident = localIncident.toDomain()
                             )
                             if (res.isFailure && isAuthExpiredError(res.exceptionOrNull()?.message)) {
-                                val forceRes = authRepo.forceRefreshAccessToken()
+                                val forceRes = authRepo.forceRefreshAccessToken(token)
                                 if (forceRes.isSuccess) {
                                     token = forceRes.getOrThrow()
                                     res = supabaseClient.submitSystemIncident(
@@ -395,7 +408,7 @@ class SyncWorker(
                             clientOperationId = event.eventId
                         )
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.escalateSystemIncident(
@@ -444,7 +457,7 @@ class SyncWorker(
                         val updates = payload.optJSONObject("updates") ?: payload
                         var res = supabaseClient.updateTaskFields(token, taskId, updates)
                         if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                            val forceRes = authRepo.forceRefreshAccessToken()
+                            val forceRes = authRepo.forceRefreshAccessToken(token)
                             if (forceRes.isSuccess) {
                                 token = forceRes.getOrThrow()
                                 res = supabaseClient.updateTaskFields(token, taskId, updates)
@@ -522,6 +535,7 @@ class SyncWorker(
         }
 
         runCatching { TaskzApplication.instance.taskzSyncManager.syncNow(forceFull = forceFull) }
+        runCatching { TaskzApplication.instance.taskRepository.purgeExpiredTasksOlderThan24Hours() }
 
         val remainingEvents = outboxDao.getPendingEventsForUser(activeUserId)
         val remainingPending = remainingEvents.size

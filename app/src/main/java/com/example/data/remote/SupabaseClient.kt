@@ -575,7 +575,12 @@ class SupabaseClient(
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException("Session expired. Please log in again."))
+                return@withContext Result.failure(
+                    SupabaseHttpException(
+                        statusCode = response.code,
+                        message = parseErrorMessage(responseBody, "Session refresh failed (${response.code})")
+                    )
+                )
             }
 
             val json = JSONObject(responseBody)
@@ -2157,7 +2162,7 @@ class SupabaseClient(
         try {
             checkConfig()
             val request = Request.Builder()
-                .url("${baseUrl()}/rest/v1/task_groups?select=*,group_members(*)&order=created_at.desc")
+                .url("${baseUrl()}/rest/v1/task_groups?select=*,group_members(*,profiles:user_id(id,employee_id,full_name))&order=created_at.desc")
                 .addHeader("apikey", anonKey())
                 .addHeader("Authorization", "Bearer ${getAuthBearer(accessToken)}")
                 .get()
@@ -3290,13 +3295,17 @@ class SupabaseClient(
         query: String = "",
         roleCode: String? = null,
         centreId: String? = null,
-        limit: Int = 40
+        stateId: String? = null,
+        cityId: String? = null,
+        limit: Int = 100
     ): Result<List<ScopedMemberSearchResult>> = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
                 put("p_query", query)
                 if (!roleCode.isNullOrBlank()) put("p_role_code", roleCode)
                 if (SupabaseConfig.isValidUuid(centreId)) put("p_centre_id", centreId)
+                if (SupabaseConfig.isValidUuid(stateId)) put("p_state_id", stateId)
+                if (SupabaseConfig.isValidUuid(cityId)) put("p_city_id", cityId)
                 put("p_limit", limit)
             }
             executeRpc(accessToken, "search_scoped_members", body).map { raw ->
@@ -3323,6 +3332,52 @@ class SupabaseClient(
                         isActive = o.optBoolean("is_active", true)
                     )
                 }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addGroupMembersAndSyncTasks(
+        accessToken: String,
+        groupId: String,
+        userIds: List<String>
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_group_id", groupId)
+                put("p_user_ids", JSONArray(userIds.filter { SupabaseConfig.isValidUuid(it) }.distinct()))
+            }
+            executeRpc(accessToken, "add_group_members_and_sync_tasks", body).map { raw ->
+                runCatching { JSONObject(raw) }.getOrDefault(JSONObject().put("success", true))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun assignTasksToGroupAndSync(
+        accessToken: String,
+        groupId: String,
+        taskIds: List<String>
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_group_id", groupId)
+                put("p_task_ids", JSONArray(taskIds.filter { SupabaseConfig.isValidUuid(it) }.distinct()))
+            }
+            executeRpc(accessToken, "assign_tasks_to_group_and_sync", body).map { raw ->
+                runCatching { JSONObject(raw) }.getOrDefault(JSONObject().put("success", true))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun purgeExpiredTasks24hRpc(accessToken: String): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            executeRpc(accessToken, "purge_expired_tasks_24h", JSONObject()).map { raw ->
+                raw.trim().toIntOrNull() ?: 0
             }
         } catch (e: Exception) {
             Result.failure(e)

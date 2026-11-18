@@ -7,7 +7,10 @@ import com.example.core.model.AlarmType
 import com.example.core.model.AuthorizationContext
 import com.example.core.model.CompletionPolicy
 import com.example.core.model.LanProgressItem
+import com.example.core.model.OrgCentre
+import com.example.core.model.OrgCity
 import com.example.core.model.OrgHierarchyData
+import com.example.core.model.OrgState
 import com.example.core.model.ResponseType
 import com.example.core.model.ScopeLevel
 import com.example.core.model.ScopedMemberSearchResult
@@ -35,8 +38,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 enum class TaskTabFilter {
     MY_TASKS,
@@ -50,6 +57,15 @@ enum class TaskSubFilter {
     UPCOMING,
     COMPLETED
 }
+
+data class TasksFilterState(
+    val stateId: String? = null,
+    val cityId: String? = null,
+    val centreId: String? = null,
+    val lan: String? = null,
+    val shift: String? = null,
+    val dateFilter: String = "All"
+)
 
 class TasksViewModel(
     private val taskRepository: TaskRepository,
@@ -76,8 +92,12 @@ class TasksViewModel(
     private val _selectedSubFilter = MutableStateFlow(TaskSubFilter.ALL)
     val selectedSubFilter: StateFlow<TaskSubFilter> = _selectedSubFilter.asStateFlow()
 
-    private val _selectedCityFilter = MutableStateFlow<String?>(null)
-    val selectedCityFilter: StateFlow<String?> = _selectedCityFilter.asStateFlow()
+    private val _tasksFilterState = MutableStateFlow(TasksFilterState())
+    val tasksFilterState: StateFlow<TasksFilterState> = _tasksFilterState.asStateFlow()
+
+    val selectedCityFilter: StateFlow<String?> = _tasksFilterState
+        .map { it.cityId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -118,6 +138,79 @@ class TasksViewModel(
     private var responseCollectionJob: kotlinx.coroutines.Job? = null
     private var lanCollectionJob: kotlinx.coroutines.Job? = null
 
+    val availableDateOptions: List<String> = listOf("All", "Today", "Yesterday", "Last 7 Days")
+
+    val availableStates: StateFlow<List<OrgState>> = combine(
+        allTasksFlow,
+        orgHierarchyFlow,
+        permissionManager.contextFlow
+    ) { tasks, orgHierarchy, _ ->
+        val scopedTasks = tasks.filter { permissionManager.canViewTask(it) }
+        val stateIdsFromTasks = scopedTasks.mapNotNull { t ->
+            t.stateId ?: t.centreId?.let { cid -> orgHierarchy.centres.firstOrNull { it.id == cid }?.stateId }
+                ?: t.cityId?.let { cityId -> orgHierarchy.cities.firstOrNull { it.id == cityId }?.stateId }
+        }.toSet()
+
+        if (orgHierarchy.states.isNotEmpty()) {
+            val matching = orgHierarchy.states.filter { it.id in stateIdsFromTasks }
+            (if (matching.isNotEmpty()) matching else orgHierarchy.states).sortedBy { it.name }
+        } else {
+            emptyList()
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableCities: StateFlow<List<OrgCity>> = combine(
+        _tasksFilterState,
+        orgHierarchyFlow
+    ) { filter, orgHierarchy ->
+        orgHierarchy.cities
+            .filter { filter.stateId == null || it.stateId == filter.stateId }
+            .sortedBy { it.name }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableCentres: StateFlow<List<OrgCentre>> = combine(
+        _tasksFilterState,
+        orgHierarchyFlow
+    ) { filter, orgHierarchy ->
+        orgHierarchy.centres
+            .filter { c ->
+                (filter.stateId == null || c.stateId == filter.stateId) &&
+                    (filter.cityId == null || c.cityId == filter.cityId)
+            }
+            .sortedBy { it.code }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Real LANs only — derived exclusively from existing tasks inside upstream State -> City -> Centre filter
+    val availableLans: StateFlow<List<String>> = combine(
+        allTasksFlow,
+        _tasksFilterState,
+        orgHierarchyFlow,
+        permissionManager.contextFlow
+    ) { tasks, filter, orgHierarchy, _ ->
+        tasks.asSequence()
+            .filter { permissionManager.canViewTask(it) }
+            .filter { matchesUpstreamScope(it, filter, orgHierarchy) }
+            .flatMap { extractTaskLans(it).asSequence() }
+            .distinct()
+            .sortedWith(compareBy({ it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE }, { it }))
+            .toList()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableShifts: StateFlow<List<String>> = combine(
+        allTasksFlow,
+        _tasksFilterState,
+        orgHierarchyFlow,
+        permissionManager.contextFlow
+    ) { tasks, filter, orgHierarchy, _ ->
+        tasks.asSequence()
+            .filter { permissionManager.canViewTask(it) }
+            .filter { matchesUpstreamScope(it, filter, orgHierarchy) }
+            .mapNotNull { it.shiftName?.trim()?.takeIf { s -> s.isNotBlank() } }
+            .distinct()
+            .sorted()
+            .toList()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     init {
         refreshTasks()
     }
@@ -133,23 +226,40 @@ class TasksViewModel(
         }
     }
 
+    fun repeatShift1ToShift2() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.repeatShift1ToShift2()
+            res.fold(
+                onSuccess = { shift ->
+                    _actionEvent.emit("Shift 1 tasks repeated to ${shift.name} ✓")
+                    taskRepository.syncTasks()
+                },
+                onFailure = { err ->
+                    _actionEvent.emit(err.message ?: "Unable to repeat Shift 1 tasks")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
     private data class TaskFilterCriteria(
         val tab: TaskTabFilter,
         val subFilter: TaskSubFilter,
-        val cityId: String?,
+        val cascadeFilter: TasksFilterState,
         val query: String
     )
 
     private val filterCriteriaFlow = combine(
         _selectedTab,
         _selectedSubFilter,
-        _selectedCityFilter,
+        _tasksFilterState,
         _searchQuery
-    ) { tab, subFilter, cityId, query ->
-        TaskFilterCriteria(tab, subFilter, cityId, query)
+    ) { tab, subFilter, cascadeFilter, query ->
+        TaskFilterCriteria(tab, subFilter, cascadeFilter, query)
     }
 
-    // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, city filter, query, and tasks flow
+    // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, cascading filters, query, and tasks flow
     val filteredTasks: StateFlow<List<TaskItem>> = combine(
         allTasksFlow,
         filterCriteriaFlow,
@@ -178,36 +288,104 @@ class TasksViewModel(
             TaskSubFilter.COMPLETED -> baseFiltered.filter { it.status == "completed" }
         }
 
-        val cityFiltered = if (criteria.cityId.isNullOrBlank()) {
-            subFiltered
-        } else {
-            val targetCityId = criteria.cityId
-            val selectedCityName = orgHierarchy.cities.firstOrNull { it.id == targetCityId }?.name?.lowercase()
-            val centreIdsInCity = orgHierarchy.centres
-                .filter { it.cityId == targetCityId }
-                .map { it.id }
-                .toSet()
-            subFiltered.filter { task ->
-                task.cityId == targetCityId ||
-                    (task.centreId != null && task.centreId in centreIdsInCity) ||
-                    (!selectedCityName.isNullOrBlank() && task.location?.lowercase()?.contains(selectedCityName) == true)
+        val f = criteria.cascadeFilter
+        val today = LocalDate.now()
+        val yesterday = today.minusDays(1)
+        val weekStart = today.minusDays(6)
+
+        val cascadeFiltered = subFiltered.filter { task ->
+            val matchesScope = matchesUpstreamScope(task, f, orgHierarchy)
+            val matchesLan = f.lan.isNullOrBlank() || extractTaskLans(task).any { it.equals(f.lan, ignoreCase = true) }
+            val matchesShift = f.shift.isNullOrBlank() ||
+                task.shiftName?.equals(f.shift, ignoreCase = true) == true ||
+                task.shiftName?.contains(f.shift, ignoreCase = true) == true
+            val matchesDate = when (f.dateFilter) {
+                "Today" -> extractTaskLocalDate(task) == today
+                "Yesterday" -> extractTaskLocalDate(task) == yesterday
+                "Last 7 Days" -> {
+                    val d = extractTaskLocalDate(task)
+                    d != null && !d.isBefore(weekStart) && !d.isAfter(today)
+                }
+                else -> true
             }
+            matchesScope && matchesLan && matchesShift && matchesDate
         }
 
         if (criteria.query.isBlank()) {
-            cityFiltered
+            cascadeFiltered
         } else {
             val q = criteria.query.trim().lowercase()
-            cityFiltered.filter {
+            cascadeFiltered.filter {
                 it.title.lowercase().contains(q) ||
-                (it.description?.lowercase()?.contains(q) == true) ||
-                (it.groupTitle?.lowercase()?.contains(q) == true) ||
-                (it.location?.lowercase()?.contains(q) == true) ||
-                it.scopeLevel.label.lowercase().contains(q) ||
-                it.targetRoleCodes.any { role -> role.lowercase().contains(q) }
+                    (it.description?.lowercase()?.contains(q) == true) ||
+                    (it.groupTitle?.lowercase()?.contains(q) == true) ||
+                    (it.location?.lowercase()?.contains(q) == true) ||
+                    it.scopeLevel.label.lowercase().contains(q) ||
+                    it.targetRoleCodes.any { role -> role.lowercase().contains(q) }
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun matchesUpstreamScope(
+        task: TaskItem,
+        f: TasksFilterState,
+        orgHierarchy: OrgHierarchyData
+    ): Boolean {
+        val matchesState = if (f.stateId.isNullOrBlank()) {
+            true
+        } else {
+            val selectedStateName = orgHierarchy.states.firstOrNull { it.id == f.stateId }?.name?.lowercase()
+            val cityIdsInState = orgHierarchy.cities.filter { it.stateId == f.stateId }.map { it.id }.toSet()
+            val centreIdsInState = orgHierarchy.centres.filter { it.stateId == f.stateId }.map { it.id }.toSet()
+            task.stateId == f.stateId ||
+                (task.cityId != null && task.cityId in cityIdsInState) ||
+                (task.centreId != null && task.centreId in centreIdsInState) ||
+                (!selectedStateName.isNullOrBlank() && task.location?.lowercase()?.contains(selectedStateName) == true)
+        }
+
+        val matchesCity = if (f.cityId.isNullOrBlank()) {
+            true
+        } else {
+            val selectedCityName = orgHierarchy.cities.firstOrNull { it.id == f.cityId }?.name?.lowercase()
+            val centreIdsInCity = orgHierarchy.centres.filter { it.cityId == f.cityId }.map { it.id }.toSet()
+            task.cityId == f.cityId ||
+                (task.centreId != null && task.centreId in centreIdsInCity) ||
+                (!selectedCityName.isNullOrBlank() && task.location?.lowercase()?.contains(selectedCityName) == true)
+        }
+
+        val matchesCentre = if (f.centreId.isNullOrBlank()) {
+            true
+        } else {
+            val centre = orgHierarchy.centres.firstOrNull { it.id == f.centreId }
+            task.centreId == f.centreId ||
+                (centre != null && (
+                    task.location?.contains(centre.code, ignoreCase = true) == true ||
+                        task.location?.contains(centre.name, ignoreCase = true) == true
+                    ))
+        }
+
+        return matchesState && matchesCity && matchesCentre
+    }
+
+    private fun extractTaskLans(task: TaskItem): List<String> {
+        val result = mutableListOf<String>()
+        result.addAll(task.lanTargetList.map { it.trim() }.filter { it.isNotBlank() && !it.equals("All LANs", ignoreCase = true) })
+        val loc = task.location
+        if (!loc.isNullOrBlank() && loc.startsWith("LAN:", ignoreCase = true)) {
+            val lanSection = loc.substringAfter(":", "").substringBefore("•").trim()
+            lanSection.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() && !it.equals("All LANs", ignoreCase = true) }
+                .forEach { if (it !in result) result.add(it) }
+        }
+        return result.distinct()
+    }
+
+    private fun extractTaskLocalDate(task: TaskItem): LocalDate? {
+        val raw = task.executionTime ?: task.startsAt ?: task.dueAt ?: task.createdAt
+        val millis = TaskItem.parseIsoToMillis(raw) ?: return null
+        return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
+    }
 
     fun allowedTaskScopes(): List<ScopeLevel> = permissionManager.allowedTaskScopes()
     fun canEditTask(task: TaskItem): Boolean = permissionManager.canEditTask(task)
@@ -230,8 +408,46 @@ class TasksViewModel(
         _selectedSubFilter.value = filter
     }
 
+    fun setStateFilter(stateId: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(
+            stateId = stateId,
+            cityId = null,
+            centreId = null,
+            lan = null
+        )
+    }
+
     fun setCityFilter(cityId: String?) {
-        _selectedCityFilter.value = cityId
+        _tasksFilterState.value = _tasksFilterState.value.copy(
+            cityId = cityId,
+            centreId = null,
+            lan = null
+        )
+    }
+
+    fun setCentreFilter(centreId: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(
+            centreId = centreId,
+            lan = null
+        )
+    }
+
+    fun setLanFilter(lan: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(lan = lan)
+    }
+
+    fun setShiftFilter(shift: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(shift = shift)
+    }
+
+    fun setDateFilter(dateFilter: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(
+            dateFilter = dateFilter?.takeIf { it.isNotBlank() } ?: "All"
+        )
+    }
+
+    fun clearAllFilters() {
+        _tasksFilterState.value = TasksFilterState()
     }
 
     fun setSearchQuery(query: String) {
@@ -253,7 +469,6 @@ class TasksViewModel(
             _taskJoinRequests.value = taskRepository.getTaskJoinRequests(taskId)
             _taskActivityLog.value = taskRepository.getTaskActivityLog(taskId)
 
-            // Collect responses reactively (cancel prior collector when reloading)
             responseCollectionJob?.cancel()
             responseCollectionJob = launch {
                 taskRepository.getResponsesForTaskFlow(taskId).collect { resps ->
@@ -261,7 +476,6 @@ class TasksViewModel(
                 }
             }
 
-            // Collect LAN progress if task has LAN targets
             lanCollectionJob?.cancel()
             if (updated != null && updated.lanTargetList.isNotEmpty()) {
                 lanCollectionJob = launch {
@@ -273,7 +487,6 @@ class TasksViewModel(
                 _lanProgress.value = emptyList()
             }
 
-            // Pull latest responses from server so teammates' responses appear immediately
             launch {
                 taskRepository.syncTaskResponses(taskId)
                 _selectedTask.value = taskRepository.getTaskById(taskId) ?: _selectedTask.value
@@ -403,7 +616,6 @@ class TasksViewModel(
         }
     }
 
-    // Phase 3 Operations
     fun acknowledgeAlarm(taskId: String) {
         viewModelScope.launch {
             val current = _selectedTask.value
@@ -459,10 +671,15 @@ class TasksViewModel(
                 _actionEvent.emit("Task confirmation is locked until the scheduled task time.")
                 return@launch
             }
+            val effectiveResponseType = if (current?.taskType == TaskType.PROGRESS) {
+                ResponseType.PERCENTAGE
+            } else {
+                responseType
+            }
             _isLoading.value = true
             val res = taskRepository.submitTaskResponse(
                 taskId = taskId,
-                responseType = responseType,
+                responseType = effectiveResponseType,
                 responseValue = responseValue,
                 percentage = percentage,
                 numeric1 = numeric1,
@@ -474,7 +691,7 @@ class TasksViewModel(
                 onSuccess = { item ->
                     val reminderMins = (current?.overdueReminderIntervalMinutes ?: current?.repeatIntervalMinutes ?: 10).coerceAtLeast(1)
                     val msg = when {
-                        responseType == ResponseType.YES_NO && responseValue.equals("NO", ignoreCase = true) -> {
+                        effectiveResponseType == ResponseType.YES_NO && responseValue.equals("NO", ignoreCase = true) -> {
                             if (item.isPendingSync) {
                                 "Response 'NO' saved offline. Reminder scheduled in ${reminderMins}m."
                             } else {
@@ -650,10 +867,18 @@ class TasksViewModel(
     fun searchScopedMembers(
         query: String,
         roleCode: String? = null,
-        centreId: String? = null
+        centreId: String? = null,
+        stateId: String? = null,
+        cityId: String? = null
     ) {
         viewModelScope.launch {
-            val rpcRes = adminRepository.searchScopedMembers(query = query, roleCode = roleCode, centreId = centreId)
+            val rpcRes = adminRepository.searchScopedMembers(
+                query = query,
+                roleCode = roleCode,
+                centreId = centreId,
+                stateId = stateId,
+                cityId = cityId
+            )
             val scopedList = rpcRes.getOrNull()
             if (scopedList != null) {
                 _scopedMembers.value = scopedList

@@ -86,6 +86,7 @@ import com.example.TaskzApplication
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.TaskzRole
+import com.example.ui.common.OrderedCascadingFilterBar
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -107,13 +108,14 @@ fun IncidentHistoryScreen(
     val filterCity by viewModel.filterCity.collectAsStateWithLifecycle()
     val filterState by viewModel.filterSelectedState.collectAsStateWithLifecycle()
     val filterZone by viewModel.filterZone.collectAsStateWithLifecycle()
+    val filterShift by viewModel.filterShift.collectAsStateWithLifecycle()
     val filterDateRange by viewModel.filterDateRange.collectAsStateWithLifecycle()
     val availableLans by viewModel.availableLans.collectAsStateWithLifecycle()
     val availableCentres by viewModel.availableCentreNames.collectAsStateWithLifecycle()
     val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
     val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
+    val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
 
-    val availableZones = viewModel.availableZones
     val selectedIncident by viewModel.selectedIncident.collectAsStateWithLifecycle()
     val selectedAudits by viewModel.incidentAudits.collectAsStateWithLifecycle()
     var incidentToDelete by remember { mutableStateOf<SystemIncident?>(null) }
@@ -124,7 +126,7 @@ fun IncidentHistoryScreen(
 
     val hasActiveFilter = myReportsOnly || filterShiftedOnly || filterLan != null ||
         filterCentre != null || filterCity != null || filterState != null || filterZone != null ||
-        (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
+        filterShift != null || (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(
@@ -176,90 +178,45 @@ fun IncidentHistoryScreen(
             }
         }
 
-        val allFilterLans = remember(availableLans) {
-            val presets = (1..25).map { "LAN $it" }
-            (availableLans + presets).distinct().sortedWith(compareBy({
-                it.removePrefix("LAN ").trim().toIntOrNull() ?: Int.MAX_VALUE
-            }, { it }))
+        val selectedDateLabel = when (filterDateRange?.lowercase(Locale.ROOT)) {
+            "today" -> "Today"
+            "yesterday" -> "Yesterday"
+            "last_7_days", "last 7 days" -> "Last 7 Days"
+            else -> null
         }
 
-        // Dropdown Filters Row 1: LAN, Centre, Date
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterDropdownButton(
-                label = "LAN",
-                selectedValue = filterLan,
-                options = allFilterLans,
-                onSelect = { viewModel.setFilterLan(it) },
-                icon = Icons.Filled.Lan,
-                modifier = Modifier.weight(1f).testTag("filter_dropdown_lan")
-            )
-
-            FilterDropdownButton(
-                label = "Centre",
-                selectedValue = filterCentre,
-                options = availableCentres,
-                onSelect = { viewModel.setFilterCentre(it) },
-                icon = Icons.Filled.Business,
-                modifier = Modifier.weight(1.2f).testTag("filter_dropdown_centre")
-            )
-
-            FilterDropdownButton(
-                label = "Date",
-                selectedValue = when (filterDateRange) {
-                    "today" -> "Today"
-                    "yesterday" -> "Yesterday"
-                    else -> null
-                },
-                options = listOf("Today", "Yesterday"),
-                onSelect = { selected ->
-                    viewModel.setFilterDateRange(
-                        when (selected) {
-                            "Today" -> "today"
-                            "Yesterday" -> "yesterday"
-                            else -> "all"
-                        }
-                    )
-                },
-                icon = Icons.Filled.CalendarMonth,
-                modifier = Modifier.weight(0.9f).testTag("filter_dropdown_date")
-            )
-        }
-
-        // Dropdown Filters Row 2: City, State, Zone
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterDropdownButton(
-                label = "City",
-                selectedValue = filterCity,
-                options = (availableCities + listOf("Jaipur")).distinct().sorted(),
-                onSelect = { viewModel.setFilterCity(it) },
-                icon = Icons.Filled.Place,
-                modifier = Modifier.weight(1f).testTag("filter_dropdown_city")
-            )
-
-            FilterDropdownButton(
-                label = "State",
-                selectedValue = filterState,
-                options = (availableStates + listOf("Rajasthan")).distinct().sorted(),
-                onSelect = { viewModel.setFilterState(it) },
-                icon = Icons.Filled.Place,
-                modifier = Modifier.weight(1f).testTag("filter_dropdown_state")
-            )
-
-            FilterDropdownButton(
-                label = "Zone",
-                selectedValue = filterZone,
-                options = availableZones,
-                onSelect = { viewModel.setFilterZone(it) },
-                icon = Icons.Filled.FilterList,
-                modifier = Modifier.weight(1f).testTag("filter_dropdown_zone")
-            )
-        }
+        OrderedCascadingFilterBar(
+            selectedState = filterState,
+            stateOptions = availableStates,
+            onStateSelected = { viewModel.setFilterState(it) },
+            selectedCity = filterCity,
+            cityOptions = availableCities,
+            onCitySelected = { viewModel.setFilterCity(it) },
+            selectedCentre = filterCentre,
+            centreOptions = availableCentres,
+            onCentreSelected = { viewModel.setFilterCentre(it) },
+            selectedLan = filterLan,
+            lanOptions = availableLans,
+            onLanSelected = { viewModel.setFilterLan(it) },
+            selectedShift = filterShift,
+            shiftOptions = availableShifts,
+            onShiftSelected = { viewModel.setFilterShift(it) },
+            selectedDate = selectedDateLabel,
+            dateOptions = listOf("Today", "Yesterday", "Last 7 Days"),
+            onDateSelected = { selected ->
+                viewModel.setFilterDateRange(
+                    when (selected) {
+                        "Today" -> "today"
+                        "Yesterday" -> "yesterday"
+                        "Last 7 Days" -> "last_7_days"
+                        else -> "all"
+                    }
+                )
+            },
+            onClearAll = { viewModel.clearAllFilters() },
+            tagPrefix = "filter_dropdown",
+            initiallyExpanded = true
+        )
 
         // Quick Toggles: My Reports, Shifted Only, Clear
         val primaryChipScroll = rememberScrollState()

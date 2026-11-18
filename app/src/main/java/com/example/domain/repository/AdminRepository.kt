@@ -50,11 +50,20 @@ class AdminRepository(
     suspend fun searchScopedMembers(
         query: String = "",
         roleCode: String? = null,
-        centreId: String? = null
+        centreId: String? = null,
+        stateId: String? = null,
+        cityId: String? = null
     ): Result<List<ScopedMemberSearchResult>> {
         return try {
             val token = getActiveToken()
-            supabaseClient.searchScopedMembers(token, query = query, roleCode = roleCode, centreId = centreId)
+            supabaseClient.searchScopedMembers(
+                accessToken = token,
+                query = query,
+                roleCode = roleCode,
+                centreId = centreId,
+                stateId = stateId,
+                cityId = cityId
+            )
         } catch (e: Exception) {
             Result.failure(e)
         }

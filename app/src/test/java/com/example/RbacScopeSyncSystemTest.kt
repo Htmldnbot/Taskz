@@ -87,9 +87,10 @@ class RbacScopeSyncSystemTest {
     // ---- Section 66: Role Tests ----
 
     @Test
-    fun onboardingRolesRestrictedStrictlyToItManagerAndVco() {
-        assertEquals(listOf(TaskzRole.IT_MANAGER, TaskzRole.VCO), TaskzRole.onboardingRoles)
+    fun onboardingRolesRestrictedStrictlyToItManagerSoAndVco() {
+        assertEquals(listOf(TaskzRole.IT_MANAGER, TaskzRole.SO, TaskzRole.VCO), TaskzRole.onboardingRoles)
         assertTrue(TaskzRole.IT_MANAGER.isOnboardingAllowed)
+        assertTrue(TaskzRole.SO.isOnboardingAllowed)
         assertTrue(TaskzRole.VCO.isOnboardingAllowed)
         assertFalse(TaskzRole.CITY_HEAD.isOnboardingAllowed)
         assertFalse(TaskzRole.ROM.isOnboardingAllowed)
@@ -136,11 +137,14 @@ class RbacScopeSyncSystemTest {
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.IT_MANAGER))
         assertEquals(listOf(ScopeLevel.CENTRE), pm.allowedTaskScopes())
 
+        pm.updateContext(buildContext(userId = "u1", role = TaskzRole.SO))
+        assertEquals(listOf(ScopeLevel.CENTRE), pm.allowedTaskScopes())
+
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.VCO))
-        assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY), pm.allowedTaskScopes())
+        assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY, ScopeLevel.STATE), pm.allowedTaskScopes())
 
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.CITY_HEAD))
-        assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY), pm.allowedTaskScopes())
+        assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY, ScopeLevel.STATE), pm.allowedTaskScopes())
 
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.ROM))
         assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY, ScopeLevel.STATE), pm.allowedTaskScopes())
@@ -295,6 +299,7 @@ class RbacScopeSyncSystemTest {
         assertEquals(
             listOf(
                 TaskzRole.IT_MANAGER,
+                TaskzRole.SO,
                 TaskzRole.VCO,
                 TaskzRole.CITY_HEAD,
                 TaskzRole.ROM,

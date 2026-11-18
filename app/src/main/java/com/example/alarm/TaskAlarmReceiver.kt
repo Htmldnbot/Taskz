@@ -142,56 +142,130 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val location = intent.getStringExtra(TaskAlarmScheduler.EXTRA_LOCATION) ?: ""
         val taskType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE) ?: "SIMPLE"
         val responseType = intent.getStringExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE) ?: "COMPLETED_NOT_COMPLETED"
+        val targetPercentage = intent.getIntExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, 100)
         val reminderInterval = intent.getIntExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, 10)
 
         createNotificationChannels(context)
 
-        // Mark this alarm as fired in local database
+        val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                TaskzDatabase.getInstance(context).scheduledAlarmDao().markAlarmFired(alarmId)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error marking alarm fired: ${e.message}")
+                val db = TaskzDatabase.getInstance(context)
+                val taskEntity = db.taskDao().getTaskById(taskId)
+                val domainTask = taskEntity?.toDomain()
+                val responses = db.taskResponseDao().getResponsesForTask(taskId)
+                val alarmRecord = db.scheduledAlarmDao().getAlarmsForTask(taskId).firstOrNull { it.alarmId == alarmId }
+
+                val alreadyCompleted = domainTask == null ||
+                    domainTask.status.lowercase() in setOf("completed", "cancelled", "pending_confirmation") ||
+                    (alarmRecord != null && alarmRecord.isCancelled) ||
+                    TaskAlarmScheduler.isTaskExpired24h(
+                        domainTask.createdAt,
+                        domainTask.startsAt,
+                        domainTask.executionTime,
+                        domainTask.dueAt
+                    ) ||
+                    (domainTask.lanTargetList.isEmpty() && responses.any {
+                        it.syncStatus != "FAILED" && (
+                            it.responseValue.equals("YES", ignoreCase = true) ||
+                                it.responseValue.equals("COMPLETED", ignoreCase = true) ||
+                                ((domainTask.taskType == com.example.core.model.TaskType.PROGRESS ||
+                                    domainTask.responseType == com.example.core.model.ResponseType.PERCENTAGE) &&
+                                    (it.percentageValue ?: 0) >= (domainTask.targetPercentage ?: 100))
+                            )
+                    })
+
+                if (alreadyCompleted) {
+                    Log.i(TAG, "Skipping alarm trigger $alarmId for already-resolved/expired task $taskId")
+                    TaskAlarmScheduler(context).cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+                    return@launch
+                }
+
+                runCatching { db.scheduledAlarmDao().markAlarmFired(alarmId) }
+
+                val alarmType = runCatching { AlarmType.valueOf(alarmTypeStr) }.getOrDefault(AlarmType.SOUND_ALERT)
+                val importance = runCatching { TaskImportance.valueOf(importanceStr) }.getOrDefault(TaskImportance.NORMAL)
+
+                val shouldFullScreen = alarmType == AlarmType.FULL_SCREEN_ALARM ||
+                    importance == TaskImportance.CRITICAL ||
+                    importance == TaskImportance.HIGH
+                val useForegroundAlarmService = shouldFullScreen || alarmType == AlarmType.SOUND_ALERT
+
+                if (useForegroundAlarmService) {
+                    runCatching {
+                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                        val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Taskz::AlarmReceiverWakeLock")
+                        wl.setReferenceCounted(false)
+                        wl.acquire(10_000L)
+                    }
+                    val serviceIntent = Intent(context, TaskAlarmService::class.java).apply {
+                        action = TaskAlarmService.ACTION_START_ALARM
+                        putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)
+                        putExtra(TaskAlarmScheduler.EXTRA_TASK_TITLE, title)
+                        putExtra(TaskAlarmScheduler.EXTRA_IMPORTANCE, importanceStr)
+                        putExtra(TaskAlarmScheduler.EXTRA_ALARM_TYPE, alarmTypeStr)
+                        putExtra(TaskAlarmScheduler.EXTRA_REMINDER_LABEL, reminderLabel)
+                        putExtra(TaskAlarmScheduler.EXTRA_SCHEDULED_TIME, scheduledTime)
+                        putExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION, description)
+                        putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
+                        putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
+                        putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseType)
+                        putExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, targetPercentage)
+                        putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
+                        putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
+                    }
+                    val startedFgs = try {
+                        ContextCompat.startForegroundService(context, serviceIntent)
+                        true
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Foreground service start failed, falling back to notification + overlay launch: ${e.message}")
+                        false
+                    }
+                    if (startedFgs) return@launch
+                }
+
+                showFallbackAlarmNotification(
+                    context = context,
+                    taskId = taskId,
+                    alarmId = alarmId,
+                    title = title,
+                    importanceStr = importanceStr,
+                    alarmTypeStr = alarmTypeStr,
+                    reminderLabel = reminderLabel,
+                    scheduledTime = scheduledTime,
+                    description = description,
+                    location = location,
+                    taskType = taskType,
+                    responseType = responseType,
+                    targetPercentage = targetPercentage,
+                    reminderInterval = reminderInterval,
+                    alarmType = alarmType,
+                    shouldFullScreen = shouldFullScreen
+                )
+            } finally {
+                pendingResult.finish()
             }
         }
+    }
 
-        val alarmType = runCatching { AlarmType.valueOf(alarmTypeStr) }.getOrDefault(AlarmType.SOUND_ALERT)
-        val importance = runCatching { TaskImportance.valueOf(importanceStr) }.getOrDefault(TaskImportance.NORMAL)
-
-        val shouldFullScreen = alarmType == AlarmType.FULL_SCREEN_ALARM ||
-            importance == TaskImportance.CRITICAL ||
-            importance == TaskImportance.HIGH
-        val useForegroundAlarmService = shouldFullScreen || alarmType == AlarmType.SOUND_ALERT
-
-        if (useForegroundAlarmService) {
-            runCatching {
-                val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Taskz::AlarmReceiverWakeLock")
-                wl.setReferenceCounted(false)
-                wl.acquire(10_000L)
-            }
-            val serviceIntent = Intent(context, TaskAlarmService::class.java).apply {
-                action = TaskAlarmService.ACTION_START_ALARM
-                putExtra(TaskAlarmScheduler.EXTRA_TASK_ID, taskId)
-                putExtra(TaskAlarmScheduler.EXTRA_TASK_TITLE, title)
-                putExtra(TaskAlarmScheduler.EXTRA_IMPORTANCE, importanceStr)
-                putExtra(TaskAlarmScheduler.EXTRA_ALARM_TYPE, alarmTypeStr)
-                putExtra(TaskAlarmScheduler.EXTRA_REMINDER_LABEL, reminderLabel)
-                putExtra(TaskAlarmScheduler.EXTRA_SCHEDULED_TIME, scheduledTime)
-                putExtra(TaskAlarmScheduler.EXTRA_DESCRIPTION, description)
-                putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
-                putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
-                putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseType)
-                putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
-                putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
-            }
-            try {
-                ContextCompat.startForegroundService(context, serviceIntent)
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "Foreground service start failed, falling back to notification + overlay launch: ${e.message}")
-            }
-        }
+    private fun showFallbackAlarmNotification(
+        context: Context,
+        taskId: String,
+        alarmId: Int,
+        title: String,
+        importanceStr: String,
+        alarmTypeStr: String,
+        reminderLabel: String,
+        scheduledTime: String,
+        description: String,
+        location: String,
+        taskType: String,
+        responseType: String,
+        targetPercentage: Int,
+        reminderInterval: Int,
+        alarmType: AlarmType,
+        shouldFullScreen: Boolean
+    ) {
 
         val channelId = when {
             alarmType == AlarmType.SILENT -> CHANNEL_ID_SILENT
@@ -280,6 +354,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 putExtra(TaskAlarmScheduler.EXTRA_LOCATION, location)
                 putExtra(TaskAlarmScheduler.EXTRA_TASK_TYPE, taskType)
                 putExtra(TaskAlarmScheduler.EXTRA_RESPONSE_TYPE, responseType)
+                putExtra(TaskAlarmScheduler.EXTRA_TARGET_PERCENTAGE, targetPercentage)
                 putExtra(TaskAlarmScheduler.EXTRA_REMINDER_INTERVAL, reminderInterval)
                 putExtra(TaskAlarmScheduler.EXTRA_ALARM_ID, alarmId)
             }

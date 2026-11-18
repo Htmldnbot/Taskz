@@ -84,7 +84,7 @@ class SystemIncidentRepository(
                 ?: return@withContext Result.failure(Exception("Authentication required"))
             var res = supabaseClient.fetchSystemIncidents(token)
             if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                 if (!refreshed.isNullOrBlank()) {
                     token = refreshed
                     res = supabaseClient.fetchSystemIncidents(token)
@@ -640,7 +640,7 @@ class SystemIncidentRepository(
             if (networkMonitor.isCurrentlyConnected() && !token.isNullOrBlank()) {
                 var res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
                 if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         token = refreshed
                         res = supabaseClient.escalateSystemIncident(token, incidentId, cleanLevel, reason, clientOpId)
@@ -710,7 +710,7 @@ class SystemIncidentRepository(
                 val domain = item.toDomain()
                 var res = supabaseClient.submitSystemIncident(activeToken, domain)
                 if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
-                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken().getOrNull()
+                    val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(activeToken).getOrNull()
                     if (!refreshed.isNullOrBlank()) {
                         activeToken = refreshed
                         res = supabaseClient.submitSystemIncident(activeToken, domain)
