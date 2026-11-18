@@ -1748,6 +1748,193 @@ $$;
 revoke all on function public.delta_sync_pull(timestamptz, bigint) from public;
 grant execute on function public.delta_sync_pull(timestamptz, bigint) to authenticated;
 
+-- ----------------------------------------------------------------------------
+-- 14. ADMIN UPDATE USER ACCESS (SUPPORTS SO ROLE ALONGSIDE ALL HIERARCHY ROLES)
+-- ----------------------------------------------------------------------------
+create or replace function public.admin_update_user_access(
+    p_target_user_id uuid,
+    p_role_codes text[],
+    p_active_role_code text default null,
+    p_zone_id uuid default null,
+    p_state_id uuid default null,
+    p_city_id uuid default null,
+    p_centre_id uuid default null,
+    p_is_active boolean default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+    v_caller uuid := (select auth.uid());
+    v_role_code text;
+    v_role_id uuid;
+    v_clean_roles text[] := array[]::text[];
+    v_primary_role text;
+    v_active_role text;
+    v_zone_id uuid := p_zone_id;
+    v_state_id uuid := p_state_id;
+    v_city_id uuid := p_city_id;
+    v_centre_id uuid := p_centre_id;
+    v_centre_code text;
+    v_city_name text;
+    v_state_name text;
+    v_zone_name text;
+    v_is_super boolean := false;
+    v_needs_review boolean := false;
+begin
+    if not public.is_super_admin() then
+        raise exception 'Forbidden: only Super Admin can manage user roles and scope';
+    end if;
+
+    if not exists (select 1 from public.profiles where id = p_target_user_id) then
+        raise exception 'Target user profile % not found', p_target_user_id;
+    end if;
+
+    if p_role_codes is null or array_length(p_role_codes, 1) is null then
+        raise exception 'At least one valid role code is required';
+    end if;
+
+    foreach v_role_code in array p_role_codes
+    loop
+        v_role_code := upper(trim(v_role_code));
+        if v_role_code in ('IT_MANAGER', 'SO', 'VCO', 'CITY_HEAD', 'ROM', 'ZOM', 'COMMAND_CENTER', 'SUPER_ADMIN') then
+            if not (v_role_code = any(v_clean_roles)) then
+                v_clean_roles := array_append(v_clean_roles, v_role_code);
+            end if;
+        end if;
+    end loop;
+
+    if array_length(v_clean_roles, 1) is null then
+        raise exception 'No valid role codes provided';
+    end if;
+
+    v_primary_role := v_clean_roles[1];
+    v_active_role := upper(coalesce(nullif(trim(p_active_role_code), ''), v_primary_role));
+    if not (v_active_role = any(v_clean_roles)) then
+        v_active_role := v_primary_role;
+    end if;
+    v_is_super := ('SUPER_ADMIN' = any(v_clean_roles));
+
+    if v_centre_id is not null then
+        select c.code, ct.id, ct.name, st.id, st.name, zn.id, zn.name
+        into v_centre_code, v_city_id, v_city_name, v_state_id, v_state_name, v_zone_id, v_zone_name
+        from public.org_centres c
+        join public.org_cities ct on ct.id = c.city_id
+        join public.org_states st on st.id = c.state_id
+        join public.org_zones zn on zn.id = c.zone_id
+        where c.id = v_centre_id;
+    elsif v_city_id is not null then
+        select ct.name, st.id, st.name, zn.id, zn.name
+        into v_city_name, v_state_id, v_state_name, v_zone_id, v_zone_name
+        from public.org_cities ct
+        join public.org_states st on st.id = ct.state_id
+        join public.org_zones zn on zn.id = ct.zone_id
+        where ct.id = v_city_id;
+    elsif v_state_id is not null then
+        select st.name, zn.id, zn.name
+        into v_state_name, v_zone_id, v_zone_name
+        from public.org_states st
+        join public.org_zones zn on zn.id = st.zone_id
+        where st.id = v_state_id;
+    elsif v_zone_id is not null then
+        select zn.name into v_zone_name from public.org_zones zn where zn.id = v_zone_id;
+    end if;
+
+    v_needs_review := case
+        when coalesce(p_is_active, true) = false then false
+        when v_active_role in ('SUPER_ADMIN', 'COMMAND_CENTER') then false
+        when v_active_role = 'ZOM' then (v_zone_id is null)
+        when v_active_role = 'ROM' then (v_state_id is null)
+        when v_active_role = 'CITY_HEAD' then (v_city_id is null)
+        when v_active_role = 'VCO' then (v_city_id is null and v_centre_id is null)
+        else (v_centre_id is null)
+    end;
+
+    perform set_config('taskz.bypass_rbac_guard', '1', true);
+
+    delete from public.user_roles
+    where user_id = p_target_user_id
+      and role_code <> all(v_clean_roles);
+
+    foreach v_role_code in array v_clean_roles
+    loop
+        select id into v_role_id from public.work_roles
+        where canonical_code = v_role_code or upper(coalesce(code, '')) = v_role_code
+        order by sort_order asc limit 1;
+
+        if v_role_id is not null then
+            insert into public.user_roles(user_id, role_id, role_code, is_primary, assigned_by)
+            values (p_target_user_id, v_role_id, v_role_code, (v_role_code = v_primary_role), v_caller)
+            on conflict (user_id, role_id) do update
+            set role_code = excluded.role_code,
+                is_primary = excluded.is_primary,
+                assigned_by = excluded.assigned_by,
+                updated_at = now();
+        end if;
+    end loop;
+
+    update public.profiles
+    set app_role = case when v_is_super then 'admin' else 'employee' end,
+        active_role_code = v_active_role,
+        primary_role_code = v_primary_role,
+        zone_id = v_zone_id,
+        zone_name = v_zone_name,
+        state_id = v_state_id,
+        state_name = v_state_name,
+        city_id = v_city_id,
+        city_name = v_city_name,
+        centre_id = v_centre_id,
+        centre_code = case when v_centre_id is not null then v_centre_code else null end,
+        is_active = coalesce(p_is_active, is_active),
+        needs_scope_review = v_needs_review,
+        role_version = coalesce(role_version, 1) + 1,
+        scope_version = coalesce(scope_version, 1) + 1,
+        updated_at = now()
+    where id = p_target_user_id;
+
+    if p_is_active = false then
+        update public.device_tokens set is_active = false where user_id = p_target_user_id;
+    end if;
+
+    insert into public.admin_audit_log(admin_user_id, target_user_id, action, entity_type, entity_id, metadata)
+    values (
+        v_caller, p_target_user_id, 'ADMIN_UPDATE_USER_ACCESS', 'profile', p_target_user_id,
+        jsonb_build_object(
+            'roles', to_jsonb(v_clean_roles),
+            'active_role', v_active_role,
+            'zone_id', v_zone_id,
+            'state_id', v_state_id,
+            'city_id', v_city_id,
+            'centre_id', v_centre_id,
+            'is_active', p_is_active,
+            'needs_scope_review', v_needs_review
+        )
+    );
+
+    perform public.create_scoped_notification(
+        p_target_user_id,
+        'role_changed',
+        'admin_alert',
+        'Your Role or Scope Was Updated',
+        'Active role is now ' || v_active_role || '. Synced permissions applied.',
+        null,
+        null,
+        null,
+        'role_updated:' || p_target_user_id::text || ':' || extract(epoch from now())::bigint::text,
+        'taskz://profile/roles',
+        'CENTRE',
+        jsonb_build_object('active_role', v_active_role, 'roles', to_jsonb(v_clean_roles))
+    );
+
+    return public.get_my_authorization_context();
+end;
+$$;
+
+revoke all on function public.admin_update_user_access(uuid, text[], text, uuid, uuid, uuid, uuid, boolean) from public;
+grant execute on function public.admin_update_user_access(uuid, text[], text, uuid, uuid, uuid, uuid, boolean) to authenticated;
+
 commit;
 
 notify pgrst, 'reload schema';
