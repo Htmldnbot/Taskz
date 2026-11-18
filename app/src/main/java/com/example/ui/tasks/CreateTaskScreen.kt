@@ -263,7 +263,8 @@ fun CreateTaskScreen(
                     authContext.activeRole == TaskzRole.ZOM -> authContext.scope.zoneId != null && c.zoneId == authContext.scope.zoneId
                     authContext.activeRole == TaskzRole.ROM -> authContext.scope.stateId != null && c.stateId == authContext.scope.stateId
                     authContext.activeRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER) ->
-                        (authContext.scope.cityId != null && c.cityId == authContext.scope.cityId) ||
+                        (authContext.scope.cityId == null && authContext.scope.centreId == null) ||
+                            (authContext.scope.cityId != null && c.cityId == authContext.scope.cityId) ||
                             (authContext.scope.centreId != null && c.id == authContext.scope.centreId)
                     else -> authContext.scope.centreId != null && c.id == authContext.scope.centreId
                 }
@@ -337,9 +338,9 @@ fun CreateTaskScreen(
     // Auto-assign personnel checked in today at the chosen Centre / LAN
     LaunchedEffect(selectedGroup, selectedCentre, selectedScope, lanText) {
         val centreCode = selectedCentre?.code
-            ?: selectedGroup?.code?.takeIf { it.isNotBlank() }
+            ?: selectedGroup?.code?.takeIf { it.isNotBlank() && !it.equals("GEN-OPS", ignoreCase = true) }
             ?: authContext.scope.centreCode
-            ?: "141"
+        if (centreCode.isNullOrBlank()) return@LaunchedEffect
         try {
             val checkins = com.example.TaskzApplication.instance.systemIncidentRepository.getTodayCheckinsForCentre(centreCode)
             if (checkins.isNotEmpty()) {

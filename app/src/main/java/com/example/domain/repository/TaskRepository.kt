@@ -2386,26 +2386,83 @@ class TaskRepository(
                 return@withContext Result.failure(IOException("Self-join is not permitted for this task"))
             }
 
-            // Verify role capacity
+            // Verify role capacity (auto-select first available role if caller used quick-join)
             val reqs = getTaskRoleRequirements(taskId)
-            val req = reqs.find { it.roleId == roleId }
+            val resolvedRoleId = roleId.ifBlank {
+                reqs.firstOrNull { !it.isFull }?.roleId ?: reqs.firstOrNull()?.roleId ?: ""
+            }
+            val req = reqs.find { it.roleId == resolvedRoleId }
             if (req != null && req.isFull) {
                 return@withContext Result.failure(IOException("This role (${req.roleName}) is already full"))
             }
 
-            val roleName = req?.roleName ?: workRoleDao.getWorkRoleById(roleId)?.name ?: "Role"
+            val roleName = req?.roleName ?: resolvedRoleId.takeIf { it.isNotBlank() }?.let { workRoleDao.getWorkRoleById(it)?.name } ?: "Role"
 
             val token = getActiveAccessToken()
-            if (!token.isNullOrBlank()) {
-                val remoteRes = supabaseClient.requestTaskJoin(token, taskId, roleId, message)
+            if (!token.isNullOrBlank() && com.example.core.network.SupabaseConfig.isConfigured) {
+                val remoteRes = supabaseClient.requestTaskJoin(token, taskId, resolvedRoleId.ifBlank { null }, message)
                 if (remoteRes.isSuccess) {
                     val serverObj = remoteRes.getOrNull()
-                    val status = serverObj?.optString("status", if (task.joinRequiresApproval) "pending" else "active")
-                    if (status == "active") {
-                        syncTasksFromServer(token)
-                        return@withContext Result.success("Joined Task Successfully")
+                    val status = serverObj?.optString("status", if (task.joinRequiresApproval) "pending_approval" else "joined")
+                        ?.lowercase() ?: "joined"
+                    if (status in setOf("active", "joined", "already_joined")) {
+                        val list = participantsStore.getOrPut(taskId) { mutableListOf() }
+                        if (list.none { it.userId == userId && it.status == "active" }) {
+                            list.add(
+                                TaskParticipant(
+                                    id = UUID.randomUUID().toString(),
+                                    taskId = taskId,
+                                    userId = userId,
+                                    roleId = resolvedRoleId.ifBlank { null },
+                                    roleName = roleName,
+                                    source = "self_join",
+                                    status = "active",
+                                    userName = userName,
+                                    userEmployeeId = userEmpId,
+                                    joinedAt = nowIso()
+                                )
+                            )
+                        }
+                        taskDao.getTaskById(taskId)?.let { entity ->
+                            taskDao.insertTask(entity.copy(updatedAt = nowIso()))
+                        }
+                        runCatching { syncTasksFromServer(token) }
+                        return@withContext Result.success(
+                            if (status == "already_joined") "Already Joined This Task" else "Joined Task Successfully"
+                        )
                     } else {
+                        val reqList = taskJoinRequestsStore.getOrPut(taskId) { mutableListOf() }
+                        if (reqList.none { it.userId == userId && it.status == "pending" }) {
+                            reqList.add(
+                                TaskJoinRequest(
+                                    id = serverObj?.optString("request_id")?.takeIf { it.isNotBlank() }
+                                        ?: UUID.randomUUID().toString(),
+                                    taskId = taskId,
+                                    taskTitle = task.title,
+                                    userId = userId,
+                                    roleId = resolvedRoleId,
+                                    roleName = roleName,
+                                    message = message?.trim()?.takeIf { it.isNotBlank() },
+                                    status = "pending",
+                                    userName = userName,
+                                    userEmployeeId = userEmpId,
+                                    createdAt = nowIso()
+                                )
+                            )
+                        }
+                        taskDao.getTaskById(taskId)?.let { entity ->
+                            taskDao.insertTask(entity.copy(updatedAt = nowIso()))
+                        }
+                        runCatching { syncTasksFromServer(token) }
                         return@withContext Result.success("Approval Pending")
+                    }
+                } else {
+                    val err = remoteRes.exceptionOrNull()
+                    val isNetworkOffline = err is java.net.UnknownHostException ||
+                        err is java.net.ConnectException ||
+                        err is java.net.SocketTimeoutException
+                    if (!isNetworkOffline && err != null) {
+                        return@withContext Result.failure(err)
                     }
                 }
             }

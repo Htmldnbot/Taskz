@@ -166,6 +166,49 @@ begin
             end if;
         end loop;
     end if;
+
+    -- Backfill existing profiles with canonical org IDs if they already have centre_code or city_name
+    perform set_config('taskz.bypass_rbac_guard', '1', true);
+
+    update public.profiles p
+    set centre_id = coalesce(p.centre_id, oc.id),
+        centre_code = coalesce(nullif(trim(p.centre_code), ''), oc.code),
+        city_id = coalesce(p.city_id, oc.city_id),
+        city_name = coalesce(nullif(trim(p.city_name), ''), ct.name),
+        state_id = coalesce(p.state_id, oc.state_id, ct.state_id),
+        state_name = coalesce(nullif(trim(p.state_name), ''), st.name),
+        zone_id = coalesce(p.zone_id, oc.zone_id, ct.zone_id, st.zone_id),
+        zone_name = coalesce(nullif(trim(p.zone_name), ''), zn.name)
+    from public.org_centres oc
+    join public.org_cities ct on ct.id = oc.city_id
+    join public.org_states st on st.id = oc.state_id
+    join public.org_zones zn on zn.id = oc.zone_id
+    where (
+        p.centre_id = oc.id
+        or (
+            p.centre_id is null
+            and nullif(trim(coalesce(p.centre_code, '')), '') is not null
+            and (
+                upper(oc.code) = upper(trim(p.centre_code))
+                or upper(coalesce(oc.external_code, '')) = upper(trim(p.centre_code))
+            )
+        )
+    )
+      and (p.centre_id is null or p.city_id is null or p.state_id is null or p.zone_id is null);
+
+    update public.profiles p
+    set city_id = coalesce(p.city_id, ct.id),
+        city_name = coalesce(nullif(trim(p.city_name), ''), ct.name),
+        state_id = coalesce(p.state_id, ct.state_id),
+        state_name = coalesce(nullif(trim(p.state_name), ''), st.name),
+        zone_id = coalesce(p.zone_id, ct.zone_id, st.zone_id),
+        zone_name = coalesce(nullif(trim(p.zone_name), ''), zn.name)
+    from public.org_cities ct
+    join public.org_states st on st.id = ct.state_id
+    join public.org_zones zn on zn.id = ct.zone_id
+    where p.city_id is null
+      and nullif(trim(coalesce(p.city_name, '')), '') is not null
+      and (lower(trim(p.city_name)) = lower(ct.name) or upper(trim(p.city_name)) = upper(ct.code));
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -981,7 +1024,14 @@ begin
         p.is_active
     from public.profiles p
     left join auth.users u on u.id = p.id
-    left join public.org_centres poc on poc.id = p.centre_id
+    left join public.org_centres poc on poc.id = p.centre_id or (
+        p.centre_id is null
+        and nullif(trim(coalesce(p.centre_code, '')), '') is not null
+        and (
+            upper(poc.code) = upper(trim(p.centre_code))
+            or upper(coalesce(poc.external_code, '')) = upper(trim(p.centre_code))
+        )
+    )
     left join public.org_cities pct on pct.id = coalesce(p.city_id, poc.city_id)
     left join public.org_states pst on pst.id = coalesce(p.state_id, poc.state_id, pct.state_id)
     left join public.org_zones pzn on pzn.id = coalesce(p.zone_id, poc.zone_id, pct.zone_id, pst.zone_id)
@@ -994,6 +1044,7 @@ begin
               v_caller_role in ('CITY_HEAD', 'VCO', 'IT_MANAGER') and (
                   (v_me_city is not null and coalesce(p.city_id, poc.city_id) = v_me_city)
                   or (v_me_city is null and v_me.centre_id is not null and p.centre_id = v_me.centre_id)
+                  or (coalesce(p.city_id, poc.city_id) is null and p.centre_id is null)
                   or p.id = v_caller
               )
           )
