@@ -47,9 +47,18 @@ begin
         ) returning id into v_itm_id;
     else
         update public.work_roles
+        set canonical_code = null
+        where canonical_code = 'IT_MANAGER'
+          and id <> v_itm_id;
+
+        update public.work_roles
         set canonical_code = 'IT_MANAGER',
             code = 'ITM',
-            name = 'IT Manager',
+            name = case
+                when exists (select 1 from public.work_roles w2 where lower(w2.name) = 'it manager' and w2.id <> v_itm_id)
+                then name
+                else 'IT Manager'
+            end,
             is_active = true,
             is_self_assignable = true
         where id = v_itm_id;
@@ -108,8 +117,8 @@ begin
         where role_id = v_so_id;
 
         update public.task_join_requests
-        set requested_role_id = v_itm_id
-        where requested_role_id = v_so_id;
+        set role_id = v_itm_id
+        where role_id = v_so_id;
 
         update public.work_roles
         set canonical_code = null,
