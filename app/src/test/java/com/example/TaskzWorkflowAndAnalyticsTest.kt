@@ -486,4 +486,71 @@ class TaskzWorkflowAndAnalyticsTest {
         composeRule.onNodeWithText("LAN 2").assertIsDisplayed()
         composeRule.onNodeWithText("LAN 25").assertDoesNotExist()
     }
+
+    @Test
+    fun examShiftChecklistAndSelectiveCopy_preservesGapsAndMarksShift1OnlyTasks() {
+        assertEquals(11, com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.size)
+        val byKey = com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.associateBy { it.key }
+        assertEquals(20, byKey["drive_download"]?.offsetMinutes)
+        assertEquals(25, byKey["backup_configured"]?.offsetMinutes)
+        assertEquals(45, byKey["launching_10"]?.offsetMinutes)
+        assertEquals(60, byKey["rd_login_100"]?.offsetMinutes)
+        assertEquals(75, byKey["launching_100"]?.offsetMinutes)
+        assertEquals(100, byKey["candidate_reg"]?.offsetMinutes)
+        assertEquals(120, byKey["qp_download"]?.offsetMinutes)
+        assertEquals(151, byKey["process_bundle"]?.offsetMinutes)
+        assertEquals(170, byKey["allow_candidate"]?.offsetMinutes)
+        assertEquals(181, byKey["exam_started"]?.offsetMinutes)
+        assertEquals(230, byKey["paper_verification"]?.offsetMinutes)
+
+        // Anchor Shift 1 at 06:00 AM UTC, Shift 2 at 09:45 AM UTC (+3h 45m = +225m)
+        val t0Millis = Instant.parse("2026-11-20T06:00:00Z").toEpochMilli()
+        val shift1StartIso = Instant.ofEpochMilli(t0Millis).toString()
+        val shift2StartIso = Instant.parse("2026-11-20T09:45:00Z").toString()
+
+        assertEquals("+3h 45m", com.example.ui.shifts.ShiftsViewModel.computeOffsetSummary(shift1StartIso, shift2StartIso))
+
+        val sourceTasks = com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.map { tpl ->
+            val execIso = Instant.ofEpochMilli(t0Millis + tpl.offsetMinutes * 60_000L).toString()
+            TaskItem(
+                id = "task-${tpl.key}",
+                shiftId = "shift-1",
+                title = tpl.title,
+                taskType = TaskType.TIME_SPECIFIC,
+                responseType = ResponseType.YES_NO,
+                executionTime = execIso,
+                dueAt = execIso
+            )
+        }
+
+        val previews = com.example.ui.shifts.ShiftsViewModel.buildCopyPreview(
+            sourceShiftStartsAt = shift1StartIso,
+            sourceTasks = sourceTasks,
+            newStartsAt = shift2StartIso
+        )
+        assertEquals(11, previews.size)
+
+        // Shift-1-only tasks default unchecked, recurring tasks default checked
+        val byTitle = previews.associateBy { it.title }
+        assertTrue(byTitle["Backup Configured?"]?.isShift1Only == true)
+        assertFalse(byTitle["Backup Configured?"]?.defaultSelected ?: true)
+        assertTrue(byTitle["10% Launching Done?"]?.isShift1Only == true)
+        assertFalse(byTitle["10% Launching Done?"]?.defaultSelected ?: true)
+        assertTrue(byTitle["100% RD Login Done?"]?.isShift1Only == true)
+        assertFalse(byTitle["100% RD Login Done?"]?.defaultSelected ?: true)
+        assertTrue(byTitle["100% Launching Done?"]?.isShift1Only == true)
+        assertFalse(byTitle["100% Launching Done?"]?.defaultSelected ?: true)
+
+        assertFalse(byTitle["Drive Downloaded?"]?.isShift1Only ?: true)
+        assertTrue(byTitle["Drive Downloaded?"]?.defaultSelected == true)
+        assertTrue(byTitle["Question Paper Downloaded?"]?.defaultSelected == true)
+        assertTrue(byTitle["Exam Started?"]?.defaultSelected == true)
+        assertTrue(byTitle["Paper Verification Done?"]?.defaultSelected == true)
+
+        // Question Paper Download gap (+2h from T0): Shift 1 08:00 -> Shift 2 11:45 in device timezone
+        val qpSrcExpected = com.example.ui.shifts.ShiftsViewModel.formatTimeOnly(Instant.parse("2026-11-20T08:00:00Z").toEpochMilli())
+        val qpDstExpected = com.example.ui.shifts.ShiftsViewModel.formatTimeOnly(Instant.parse("2026-11-20T11:45:00Z").toEpochMilli())
+        assertEquals(qpSrcExpected, byTitle["Question Paper Downloaded?"]?.sourceTime)
+        assertEquals(qpDstExpected, byTitle["Question Paper Downloaded?"]?.newTime)
+    }
 }

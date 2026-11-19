@@ -1,11 +1,14 @@
 package com.example.ui.shifts
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,25 +25,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notes
-import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PlaylistAddCheck
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Task
 import androidx.compose.material.icons.filled.Work
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,9 +53,12 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,9 +66,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.Shift
@@ -74,7 +80,76 @@ import com.example.ui.tasks.TasksViewModel
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
 import com.example.ui.theme.TaskzWarning
-import kotlinx.coroutines.flow.collectLatest
+import java.text.SimpleDateFormat
+import java.time.Instant
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+
+private fun formatShiftRange(startsAt: String, endsAt: String): String {
+    val startMs = TaskItem.parseIsoToMillis(startsAt)
+    val endMs = TaskItem.parseIsoToMillis(endsAt)
+    if (startMs == null || endMs == null) return "$startsAt  →  $endsAt"
+    val dateFmt = SimpleDateFormat("dd MMM", Locale.getDefault())
+    val timeFmt = SimpleDateFormat("hh:mm a", Locale.getDefault())
+    return "${dateFmt.format(Date(startMs))} · ${timeFmt.format(Date(startMs))} → ${timeFmt.format(Date(endMs))}"
+}
+
+private fun formatPickerDate(millis: Long): String =
+    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(millis))
+
+private fun formatPickerTime(millis: Long): String =
+    SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(millis))
+
+private fun defaultLocalTimeMillis(hour: Int, minute: Int): Long {
+    return Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
+
+private fun showDatePicker(
+    context: android.content.Context,
+    initialMillis: Long,
+    onPicked: (Long) -> Unit
+) {
+    val cal = Calendar.getInstance().apply { timeInMillis = initialMillis }
+    DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            cal.set(Calendar.YEAR, year)
+            cal.set(Calendar.MONTH, month)
+            cal.set(Calendar.DAY_OF_MONTH, dayOfMonth)
+            onPicked(cal.timeInMillis)
+        },
+        cal.get(Calendar.YEAR),
+        cal.get(Calendar.MONTH),
+        cal.get(Calendar.DAY_OF_MONTH)
+    ).show()
+}
+
+private fun showTimePicker(
+    context: android.content.Context,
+    initialMillis: Long,
+    onPicked: (Long) -> Unit
+) {
+    val cal = Calendar.getInstance().apply { timeInMillis = initialMillis }
+    TimePickerDialog(
+        context,
+        { _, hourOfDay, minute ->
+            cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+            cal.set(Calendar.MINUTE, minute)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            onPicked(cal.timeInMillis)
+        },
+        cal.get(Calendar.HOUR_OF_DAY),
+        cal.get(Calendar.MINUTE),
+        false
+    ).show()
+}
 
 @Composable
 fun ShiftCard(
@@ -138,7 +213,6 @@ fun ShiftCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Time Row
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.AccessTime,
@@ -148,7 +222,7 @@ fun ShiftCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "${shift.startsAt}  →  ${shift.endsAt}",
+                    text = formatShiftRange(shift.startsAt, shift.endsAt),
                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -160,13 +234,13 @@ fun ShiftCard(
                     text = shift.notes,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Manpower Breakdown Bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -247,6 +321,7 @@ fun ShiftCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CreateShiftScreen(
     groupId: String,
@@ -255,14 +330,25 @@ fun CreateShiftScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val defaultDate = remember { java.time.LocalDate.now().toString() }
+    val context = LocalContext.current
     var name by rememberSaveable { mutableStateOf("") }
     var shiftNumberStr by rememberSaveable { mutableStateOf("1") }
-    var startsAt by rememberSaveable { mutableStateOf("${defaultDate}T08:00") }
-    var endsAt by rememberSaveable { mutableStateOf("${defaultDate}T16:00") }
+    var startMillis by rememberSaveable { mutableLongStateOf(defaultLocalTimeMillis(6, 0)) }
+    var endMillis by rememberSaveable { mutableLongStateOf(defaultLocalTimeMillis(10, 30)) }
     var notes by rememberSaveable { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+    val selectedLans = remember { mutableStateListOf<String>() }
+
+    var loadStandardChecklist by rememberSaveable { mutableStateOf(false) }
+    var checklistAnchorMillis by rememberSaveable { mutableLongStateOf(startMillis) }
+    val selectedChecklistKeys = remember {
+        mutableStateListOf<String>().apply {
+            addAll(STANDARD_EXAM_CHECKLIST.map { it.key })
+        }
+    }
+
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     BackHandler(onBack = onBackClick)
 
@@ -297,7 +383,7 @@ fun CreateShiftScreen(
                     errorMessage = null
                 },
                 label = "Shift Name *",
-                placeholder = "e.g., Morning Shift - Hall A",
+                placeholder = "e.g., Shift 1",
                 leadingIcon = Icons.Default.Schedule,
                 testTag = "input_shift_name"
             )
@@ -315,43 +401,226 @@ fun CreateShiftScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            TaskzTextField(
-                value = startsAt,
-                onValueChange = {
-                    startsAt = it
-                    errorMessage = null
+            // Native Start & End Date/Time Pickers
+            ShiftDateTimePickerRow(
+                label = "Start Time *",
+                millis = startMillis,
+                onPickDate = {
+                    showDatePicker(context, startMillis) { picked ->
+                        val diff = picked - startMillis
+                        startMillis = picked
+                        endMillis += diff
+                        checklistAnchorMillis = picked
+                        errorMessage = null
+                    }
                 },
-                label = "Start Date/Time (ISO format) *",
-                placeholder = "YYYY-MM-DDTHH:MM",
-                leadingIcon = Icons.Default.DateRange,
-                testTag = "input_shift_starts"
+                onPickTime = {
+                    showTimePicker(context, startMillis) { picked ->
+                        startMillis = picked
+                        if (endMillis <= startMillis) {
+                            endMillis = startMillis + (4L * 3_600_000L) + (30L * 60_000L)
+                        }
+                        checklistAnchorMillis = picked
+                        errorMessage = null
+                    }
+                },
+                dateButtonTag = "btn_create_shift_start_date",
+                timeButtonTag = "btn_create_shift_start_time"
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ShiftDateTimePickerRow(
+                label = "End Time *",
+                millis = endMillis,
+                onPickDate = {
+                    showDatePicker(context, endMillis) { picked ->
+                        endMillis = picked
+                        errorMessage = null
+                    }
+                },
+                onPickTime = {
+                    showTimePicker(context, endMillis) { picked ->
+                        endMillis = picked
+                        errorMessage = null
+                    }
+                },
+                dateButtonTag = "btn_create_shift_end_date",
+                timeButtonTag = "btn_create_shift_end_time"
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            TaskzTextField(
-                value = endsAt,
-                onValueChange = {
-                    endsAt = it
-                    errorMessage = null
-                },
-                label = "End Date/Time (ISO format) *",
-                placeholder = "YYYY-MM-DDTHH:MM",
-                leadingIcon = Icons.Default.DateRange,
-                testTag = "input_shift_ends"
+            Text(
+                text = "LANs (Optional)",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                quickLans.forEach { lan ->
+                    val checked = lan in selectedLans
+                    FilterChip(
+                        selected = checked,
+                        onClick = {
+                            if (checked) selectedLans.remove(lan) else selectedLans.add(lan)
+                        },
+                        label = { Text(lan) },
+                        modifier = Modifier.testTag("chip_shift_${lan.lowercase().replace(" ", "_")}")
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
             TaskzTextField(
                 value = notes,
                 onValueChange = { notes = it },
-                label = "Shift Notes",
-                placeholder = "Operational guidelines, dress code, instructions...",
+                label = "Notes (Optional)",
+                placeholder = "Instructions or floor notes...",
                 leadingIcon = Icons.Default.Notes,
                 singleLine = false,
                 testTag = "input_shift_notes"
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Optional 11-Milestone Standard Exam Checklist
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Exam Shift Checklist", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Auto-create 11 exam tasks from T0",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = loadStandardChecklist,
+                            onCheckedChange = { enabled ->
+                                loadStandardChecklist = enabled
+                                if (enabled) {
+                                    val isShift1 = (shiftNumberStr.toIntOrNull() == 1) || name.contains("1")
+                                    selectedChecklistKeys.clear()
+                                    selectedChecklistKeys.addAll(
+                                        STANDARD_EXAM_CHECKLIST
+                                            .filter { isShift1 || !it.shift1Only }
+                                            .map { it.key }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("switch_load_exam_checklist")
+                        )
+                    }
+
+                    if (loadStandardChecklist) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Drive Download Anchor (T0)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = formatPickerTime(checklistAnchorMillis),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showTimePicker(context, checklistAnchorMillis) { picked ->
+                                        checklistAnchorMillis = picked
+                                    }
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Set T0")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                selectedChecklistKeys.clear()
+                                selectedChecklistKeys.addAll(STANDARD_EXAM_CHECKLIST.map { it.key })
+                            }) { Text("All (11)") }
+                            TextButton(onClick = {
+                                selectedChecklistKeys.clear()
+                                selectedChecklistKeys.addAll(STANDARD_EXAM_CHECKLIST.filter { !it.shift1Only }.map { it.key })
+                            }) { Text("Shift 2+ (7)") }
+                            TextButton(onClick = { selectedChecklistKeys.clear() }) { Text("Clear") }
+                        }
+
+                        STANDARD_EXAM_CHECKLIST.forEach { item ->
+                            val isChecked = item.key in selectedChecklistKeys
+                            val itemTime = ShiftsViewModel.formatTimeOnly(checklistAnchorMillis + item.offsetMinutes * 60_000L)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        if (isChecked) selectedChecklistKeys.remove(item.key)
+                                        else selectedChecklistKeys.add(item.key)
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        if (checked && !isChecked) selectedChecklistKeys.add(item.key)
+                                        else if (!checked) selectedChecklistKeys.remove(item.key)
+                                    }
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    if (item.shift1Only) {
+                                        Text(
+                                            text = "Shift 1 only",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TaskzWarning
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = itemTime,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             if (errorMessage != null) {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -370,18 +639,41 @@ fun CreateShiftScreen(
                         errorMessage = "Shift name is required."
                         return@Button
                     }
-                    if (endsAt <= startsAt) {
-                        errorMessage = "Validation Error: End date/time must be strictly after start date/time."
+                    if (endMillis <= startMillis) {
+                        errorMessage = "End time must be after start time."
                         return@Button
                     }
+                    val combinedNotes = buildList {
+                        if (selectedLans.isNotEmpty()) add("LAN: ${selectedLans.joinToString(", ")}")
+                        if (notes.isNotBlank()) add(notes.trim())
+                    }.joinToString(" • ").takeIf { it.isNotBlank() }
+
+                    val startsIso = Instant.ofEpochMilli(startMillis).toString()
+                    val endsIso = Instant.ofEpochMilli(endMillis).toString()
+
                     viewModel.createShift(
                         groupId = groupId,
                         name = name,
                         shiftNumber = shiftNumberStr.toIntOrNull(),
-                        startsAt = startsAt,
-                        endsAt = endsAt,
-                        notes = notes,
-                        onSuccess = onSuccess
+                        startsAt = startsIso,
+                        endsAt = endsIso,
+                        notes = combinedNotes,
+                        onSuccess = { createdShift ->
+                            val templates = STANDARD_EXAM_CHECKLIST.filter { it.key in selectedChecklistKeys }
+                            if (loadStandardChecklist && templates.isNotEmpty()) {
+                                viewModel.createChecklistTasksForShift(
+                                    groupId = groupId,
+                                    shiftId = createdShift.id,
+                                    anchorTimeMillis = checklistAnchorMillis,
+                                    lanTags = selectedLans.toList(),
+                                    selectedTemplates = templates
+                                ) { _, _ ->
+                                    onSuccess(createdShift)
+                                }
+                            } else {
+                                onSuccess(createdShift)
+                            }
+                        }
                     )
                 },
                 enabled = !isLoading,
@@ -393,7 +685,13 @@ fun CreateShiftScreen(
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Create Shift")
+                    Text(
+                        if (loadStandardChecklist && selectedChecklistKeys.isNotEmpty()) {
+                            "Create Shift & ${selectedChecklistKeys.size} Tasks"
+                        } else {
+                            "Create Shift"
+                        }
+                    )
                 }
             }
         }
@@ -408,10 +706,15 @@ fun EditShiftScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var name by rememberSaveable { mutableStateOf(shift.name) }
     var shiftNumberStr by rememberSaveable { mutableStateOf(shift.shiftNumber?.toString() ?: "") }
-    var startsAt by rememberSaveable { mutableStateOf(shift.startsAt) }
-    var endsAt by rememberSaveable { mutableStateOf(shift.endsAt) }
+    var startMillis by rememberSaveable {
+        mutableLongStateOf(TaskItem.parseIsoToMillis(shift.startsAt) ?: defaultLocalTimeMillis(6, 0))
+    }
+    var endMillis by rememberSaveable {
+        mutableLongStateOf(TaskItem.parseIsoToMillis(shift.endsAt) ?: defaultLocalTimeMillis(10, 30))
+    }
     var notes by rememberSaveable { mutableStateOf(shift.notes.orEmpty()) }
     var status by rememberSaveable { mutableStateOf(shift.status) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -463,22 +766,44 @@ fun EditShiftScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            TaskzTextField(
-                value = startsAt,
-                onValueChange = { startsAt = it; errorMessage = null },
-                label = "Start Date/Time *",
-                placeholder = "YYYY-MM-DDTHH:MM",
-                leadingIcon = Icons.Default.DateRange
+            ShiftDateTimePickerRow(
+                label = "Start Time *",
+                millis = startMillis,
+                onPickDate = {
+                    showDatePicker(context, startMillis) { picked ->
+                        startMillis = picked
+                        errorMessage = null
+                    }
+                },
+                onPickTime = {
+                    showTimePicker(context, startMillis) { picked ->
+                        startMillis = picked
+                        errorMessage = null
+                    }
+                },
+                dateButtonTag = "btn_edit_shift_start_date",
+                timeButtonTag = "btn_edit_shift_start_time"
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            TaskzTextField(
-                value = endsAt,
-                onValueChange = { endsAt = it; errorMessage = null },
-                label = "End Date/Time *",
-                placeholder = "YYYY-MM-DDTHH:MM",
-                leadingIcon = Icons.Default.DateRange
+            ShiftDateTimePickerRow(
+                label = "End Time *",
+                millis = endMillis,
+                onPickDate = {
+                    showDatePicker(context, endMillis) { picked ->
+                        endMillis = picked
+                        errorMessage = null
+                    }
+                },
+                onPickTime = {
+                    showTimePicker(context, endMillis) { picked ->
+                        endMillis = picked
+                        errorMessage = null
+                    }
+                },
+                dateButtonTag = "btn_edit_shift_end_date",
+                timeButtonTag = "btn_edit_shift_end_time"
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -519,16 +844,16 @@ fun EditShiftScreen(
                         errorMessage = "Shift name is required."
                         return@Button
                     }
-                    if (endsAt <= startsAt) {
-                        errorMessage = "Validation Error: End date/time must be after start date/time."
+                    if (endMillis <= startMillis) {
+                        errorMessage = "End time must be after start time."
                         return@Button
                     }
                     viewModel.updateShift(
                         shiftId = shift.id,
                         name = name,
                         shiftNumber = shiftNumberStr.toIntOrNull(),
-                        startsAt = startsAt,
-                        endsAt = endsAt,
+                        startsAt = Instant.ofEpochMilli(startMillis).toString(),
+                        endsAt = Instant.ofEpochMilli(endMillis).toString(),
                         notes = notes,
                         status = status,
                         onSuccess = onSuccess
@@ -542,13 +867,14 @@ fun EditShiftScreen(
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Save Shift Changes")
+                    Text("Save Changes")
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ShiftDetailScreen(
     shift: Shift,
@@ -556,13 +882,15 @@ fun ShiftDetailScreen(
     tasksViewModel: TasksViewModel,
     onEditShiftClick: (Shift) -> Unit,
     onCopyShiftClick: (Shift) -> Unit,
-    onAddTaskClick: (String, String) -> Unit, // (groupId, shiftId)
+    onAddTaskClick: (String, String) -> Unit,
     onTaskClick: (TaskItem) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val selectedShift by shiftsViewModel.selectedShift.collectAsStateWithLifecycle()
     val authContext by shiftsViewModel.authContextFlow.collectAsStateWithLifecycle()
+    val isLoading by shiftsViewModel.isLoading.collectAsStateWithLifecycle()
     val activeShift = selectedShift ?: shift
     val canManage = shiftsViewModel.canManageShifts()
     val canSelfJoin = shiftsViewModel.canSelfJoinShifts()
@@ -572,6 +900,7 @@ fun ShiftDetailScreen(
         allTasks.filter { it.shiftId == activeShift.id }
     }
     val snackbarHostState = remember { SnackbarHostState() }
+    var showChecklistDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeShift.id) {
         shiftsViewModel.loadShiftDetails(activeShift.id)
@@ -611,20 +940,17 @@ fun ShiftDetailScreen(
                 }
 
                 if (canManage) {
-                    Row {
-                        IconButton(
-                            onClick = { onEditShiftClick(activeShift) },
-                            modifier = Modifier.testTag("btn_edit_shift")
-                        ) {
-                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
-                        }
+                    IconButton(
+                        onClick = { onEditShiftClick(activeShift) },
+                        modifier = Modifier.testTag("btn_edit_shift")
+                    ) {
+                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Shift Card Overview
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
@@ -665,7 +991,7 @@ fun ShiftDetailScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "${activeShift.startsAt}  →  ${activeShift.endsAt}",
+                            text = formatShiftRange(activeShift.startsAt, activeShift.endsAt),
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                     }
@@ -681,7 +1007,6 @@ fun ShiftDetailScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Manpower Overview Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceAround
@@ -744,7 +1069,6 @@ fun ShiftDetailScreen(
             }
 
             if (canManage) {
-                // Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -774,14 +1098,25 @@ fun ShiftDetailScreen(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = { showChecklistDialog = true },
+                    enabled = !isLoading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_load_exam_checklist")
+                ) {
+                    Icon(imageVector = Icons.Default.Checklist, contentDescription = "Exam Checklist", modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Load Standard Exam Checklist")
+                }
+
                 if (activeShift.shiftNumber == 1 || activeShift.name.contains("1")) {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = {
-                            shiftsViewModel.repeatShift1ToShift2(activeShift.id) { newShift ->
-                                shiftsViewModel.selectShift(newShift)
-                            }
-                        },
+                        onClick = { onCopyShiftClick(activeShift) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
@@ -809,8 +1144,8 @@ fun ShiftDetailScreen(
                         Text(text = "No tasks in this shift yet", style = MaterialTheme.typography.bodyMedium)
                         if (canManage) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) }) {
-                                Text("Create Shift Task")
+                            Button(onClick = { showChecklistDialog = true }) {
+                                Text("Load 11 Exam Tasks")
                             }
                         }
                     }
@@ -827,6 +1162,140 @@ fun ShiftDetailScreen(
             }
         }
     }
+
+    if (showChecklistDialog) {
+        val defaultAnchor = remember(activeShift.startsAt) {
+            TaskItem.parseIsoToMillis(activeShift.startsAt) ?: defaultLocalTimeMillis(6, 0)
+        }
+        var anchorMillis by remember { mutableLongStateOf(defaultAnchor) }
+        val isShift1 = activeShift.shiftNumber == 1 || activeShift.name.contains("1")
+        val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+        val selectedLans = remember {
+            mutableStateListOf<String>().apply {
+                quickLans.filter { activeShift.notes?.contains(it, ignoreCase = true) == true }
+                    .forEach { add(it) }
+            }
+        }
+        val selectedKeys = remember {
+            mutableStateListOf<String>().apply {
+                addAll(STANDARD_EXAM_CHECKLIST.filter { isShift1 || !it.shift1Only }.map { it.key })
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showChecklistDialog = false },
+            title = { Text("Exam Shift Checklist", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Drive Download (T0)", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = formatPickerTime(anchorMillis),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        OutlinedButton(onClick = {
+                            showTimePicker(context, anchorMillis) { picked -> anchorMillis = picked }
+                        }) {
+                            Text("Change")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        quickLans.forEach { lan ->
+                            val selected = lan in selectedLans
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    if (selected) selectedLans.remove(lan) else selectedLans.add(lan)
+                                },
+                                label = { Text(lan) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = {
+                            selectedKeys.clear()
+                            selectedKeys.addAll(STANDARD_EXAM_CHECKLIST.map { it.key })
+                        }) { Text("All") }
+                        TextButton(onClick = {
+                            selectedKeys.clear()
+                            selectedKeys.addAll(STANDARD_EXAM_CHECKLIST.filter { !it.shift1Only }.map { it.key })
+                        }) { Text("Shift 2+") }
+                        TextButton(onClick = { selectedKeys.clear() }) { Text("Clear") }
+                    }
+
+                    STANDARD_EXAM_CHECKLIST.forEach { item ->
+                        val checked = item.key in selectedKeys
+                        val timeText = ShiftsViewModel.formatTimeOnly(anchorMillis + item.offsetMinutes * 60_000L)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (checked) selectedKeys.remove(item.key) else selectedKeys.add(item.key)
+                                }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { isChecked ->
+                                    if (isChecked && !checked) selectedKeys.add(item.key)
+                                    else if (!isChecked) selectedKeys.remove(item.key)
+                                }
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(item.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                if (item.shift1Only) {
+                                    Text("Shift 1 only", style = MaterialTheme.typography.labelSmall, color = TaskzWarning)
+                                }
+                            }
+                            Text(
+                                text = timeText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = selectedKeys.isNotEmpty() && !isLoading,
+                    onClick = {
+                        val templates = STANDARD_EXAM_CHECKLIST.filter { it.key in selectedKeys }
+                        showChecklistDialog = false
+                        shiftsViewModel.createChecklistTasksForShift(
+                            groupId = activeShift.groupId,
+                            shiftId = activeShift.id,
+                            anchorTimeMillis = anchorMillis,
+                            lanTags = selectedLans.toList(),
+                            selectedTemplates = templates
+                        )
+                    },
+                    modifier = Modifier.testTag("confirm_load_exam_checklist")
+                ) {
+                    Text("Add ${selectedKeys.size} Tasks")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChecklistDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -838,12 +1307,33 @@ fun CopyShiftScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val todayStr = remember { java.time.LocalDate.now().toString() }
-    var newShiftName by rememberSaveable { mutableStateOf("${sourceShift.name} (Copy)") }
-    var newStartsAt by rememberSaveable { mutableStateOf("${todayStr}T14:00") }
+    val context = LocalContext.current
+    val defaultNewName = remember(sourceShift.name) {
+        when {
+            sourceShift.name.contains("1") -> sourceShift.name.replace("1", "2")
+            else -> "${sourceShift.name} - Shift 2"
+        }
+    }
+    val defaultNewStartMillis = remember(sourceShift.startsAt) {
+        val srcMs = TaskItem.parseIsoToMillis(sourceShift.startsAt) ?: defaultLocalTimeMillis(6, 0)
+        val cal = Calendar.getInstance().apply { timeInMillis = srcMs }
+        if (cal.get(Calendar.HOUR_OF_DAY) < 10) {
+            cal.set(Calendar.HOUR_OF_DAY, 9)
+            cal.set(Calendar.MINUTE, 45)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            cal.timeInMillis
+        } else {
+            srcMs + (4L * 3_600_000L)
+        }
+    }
 
-    var copyRequirements by rememberSaveable { mutableStateOf(true) } // Default ON
-    var copyAssignments by rememberSaveable { mutableStateOf(false) } // Default OFF
+    var newShiftName by rememberSaveable { mutableStateOf(defaultNewName) }
+    var newStartMillis by rememberSaveable { mutableLongStateOf(defaultNewStartMillis) }
+    val newStartsAtIso = remember(newStartMillis) { Instant.ofEpochMilli(newStartMillis).toString() }
+
+    var copyRequirements by rememberSaveable { mutableStateOf(true) }
+    var copyAssignments by rememberSaveable { mutableStateOf(false) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isLoading by shiftsViewModel.isLoading.collectAsStateWithLifecycle()
@@ -853,8 +1343,22 @@ fun CopyShiftScreen(
         allTasks.filter { it.shiftId == sourceShift.id }
     }
 
-    val previewList = remember(sourceShift, sourceTasks, newStartsAt) {
-        shiftsViewModel.generateCopyPreview(sourceShift, sourceTasks, newStartsAt)
+    val previewList = remember(sourceShift.startsAt, sourceTasks, newStartsAtIso) {
+        shiftsViewModel.generateCopyPreview(sourceShift, sourceTasks, newStartsAtIso)
+    }
+
+    val selectedTaskIds = remember { mutableStateListOf<String>() }
+    var selectionInitialized by remember { mutableStateOf(false) }
+    LaunchedEffect(previewList.map { it.taskId }) {
+        if (!selectionInitialized && previewList.isNotEmpty()) {
+            selectedTaskIds.clear()
+            selectedTaskIds.addAll(previewList.filter { it.defaultSelected }.map { it.taskId })
+            selectionInitialized = true
+        }
+    }
+
+    val offsetLabel = remember(sourceShift.startsAt, newStartsAtIso) {
+        ShiftsViewModel.computeOffsetSummary(sourceShift.startsAt, newStartsAtIso)
     }
 
     BackHandler(onBack = onBackClick)
@@ -876,23 +1380,29 @@ fun CopyShiftScreen(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Copy Shift",
+                    text = "Copy Shift & Tasks",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Source Details
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Source Shift: ${sourceShift.name}", fontWeight = FontWeight.Bold)
+                    Text("Source: ${sourceShift.name}", fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Starts At: ${sourceShift.startsAt}", style = MaterialTheme.typography.bodySmall)
-                    Text("Contains: ${sourceTasks.size} tasks with manpower rules", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        text = formatShiftRange(sourceShift.startsAt, sourceShift.endsAt),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "${sourceTasks.size} tasks available",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -902,26 +1412,36 @@ fun CopyShiftScreen(
                 value = newShiftName,
                 onValueChange = { newShiftName = it; errorMessage = null },
                 label = "New Shift Name *",
-                placeholder = "e.g., Afternoon Shift - Hall A",
+                placeholder = "e.g., Shift 2",
                 leadingIcon = Icons.Default.Schedule,
                 testTag = "input_copy_shift_name"
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            TaskzTextField(
-                value = newStartsAt,
-                onValueChange = { newStartsAt = it; errorMessage = null },
-                label = "New Start Date/Time (ISO) *",
-                placeholder = "YYYY-MM-DDTHH:MM",
-                leadingIcon = Icons.Default.DateRange,
-                testTag = "input_copy_shift_start"
+            ShiftDateTimePickerRow(
+                label = "New Shift Start Time *",
+                millis = newStartMillis,
+                badgeText = offsetLabel.takeIf { it.isNotBlank() },
+                onPickDate = {
+                    showDatePicker(context, newStartMillis) { picked ->
+                        newStartMillis = picked
+                        errorMessage = null
+                    }
+                },
+                onPickTime = {
+                    showTimePicker(context, newStartMillis) { picked ->
+                        newStartMillis = picked
+                        errorMessage = null
+                    }
+                },
+                dateButtonTag = "btn_copy_shift_pick_date",
+                timeButtonTag = "btn_copy_shift_pick_time"
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Text("Copy Options", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
-
             Spacer(modifier = Modifier.height(8.dp))
 
             Card(
@@ -934,24 +1454,18 @@ fun CopyShiftScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Copy Manpower Requirements", fontWeight = FontWeight.SemiBold)
-                            Text("Clone role quotas and required headcounts (Default: ON)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        Text("Copy Manpower Quotas", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         Switch(checked = copyRequirements, onCheckedChange = { copyRequirements = it })
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Copy Assigned Employees", fontWeight = FontWeight.SemiBold)
-                            Text("Clone already-assigned staff into new shift (Default: OFF)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        Text("Copy Assigned Staff", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         Switch(checked = copyAssignments, onCheckedChange = { copyAssignments = it })
                     }
                 }
@@ -959,49 +1473,94 @@ fun CopyShiftScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Relative Time Offset Preview
-            Text(
-                text = "Task Timing Preview",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-            )
-            Text(
-                text = "Relative time gaps are preserved automatically",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Select Tasks to Copy (${selectedTaskIds.size}/${previewList.size})",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            if (previewList.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        selectedTaskIds.clear()
+                        selectedTaskIds.addAll(previewList.map { it.taskId })
+                    }) { Text("All") }
+                    TextButton(onClick = {
+                        selectedTaskIds.clear()
+                        selectedTaskIds.addAll(previewList.filter { it.defaultSelected }.map { it.taskId })
+                    }) { Text("Shift 2 Default") }
+                    TextButton(onClick = { selectedTaskIds.clear() }) { Text("Clear") }
+                }
+            }
 
             Card(
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(modifier = Modifier.padding(12.dp)) {
                     if (previewList.isEmpty()) {
                         Text(
-                            text = "Source shift contains no tasks. A new empty shift will be created.",
+                            text = "No tasks in source shift. An empty shift will be created.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        previewList.forEach { preview ->
+                        previewList.forEachIndexed { idx, preview ->
+                            val isChecked = preview.taskId in selectedTaskIds
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        if (isChecked) selectedTaskIds.remove(preview.taskId)
+                                        else selectedTaskIds.add(preview.taskId)
+                                    }
+                                    .padding(vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = preview.title,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                    modifier = Modifier.weight(1f)
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        if (checked && !isChecked) selectedTaskIds.add(preview.taskId)
+                                        else if (!checked) selectedTaskIds.remove(preview.taskId)
+                                    },
+                                    modifier = Modifier.testTag("checkbox_copy_task_${preview.taskId}")
                                 )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = preview.title,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                        color = if (isChecked) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (preview.isShift1Only) {
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = TaskzWarning.copy(alpha = 0.16f),
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "Shift 1 only",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TaskzWarning,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "${preview.sourceTime} → ${preview.newTime}",
                                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = if (isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                            if (idx < previewList.lastIndex) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                             }
                         }
                     }
@@ -1024,9 +1583,10 @@ fun CopyShiftScreen(
                     shiftsViewModel.copyShift(
                         sourceShiftId = sourceShift.id,
                         newShiftName = newShiftName,
-                        newStartsAt = newStartsAt,
+                        newStartsAt = newStartsAtIso,
                         copyRequirements = copyRequirements,
                         copyAssignments = copyAssignments,
+                        selectedTaskIds = selectedTaskIds.toList(),
                         onSuccess = onSuccess
                     )
                 },
@@ -1039,8 +1599,78 @@ fun CopyShiftScreen(
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Confirm Copy Shift")
+                    Text(
+                        if (previewList.isEmpty()) "Create Shift"
+                        else "Copy ${selectedTaskIds.size} Task(s)"
+                    )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftDateTimePickerRow(
+    label: String,
+    millis: Long,
+    onPickDate: () -> Unit,
+    onPickTime: () -> Unit,
+    dateButtonTag: String,
+    timeButtonTag: String,
+    badgeText: String? = null
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+            )
+            if (!badgeText.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onPickDate,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .testTag(dateButtonTag)
+            ) {
+                Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(formatPickerDate(millis), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            OutlinedButton(
+                onClick = onPickTime,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .testTag(timeButtonTag)
+            ) {
+                Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(formatPickerTime(millis), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

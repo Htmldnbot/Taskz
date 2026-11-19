@@ -1,8 +1,11 @@
 package com.example.ui.groups
 
+import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,13 +42,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.TaskGroup
 import com.example.ui.common.TaskzTextField
+import java.time.LocalDate
+import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditGroupScreen(
     group: TaskGroup,
@@ -54,6 +61,7 @@ fun EditGroupScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var title by rememberSaveable { mutableStateOf(group.title) }
     var code by rememberSaveable { mutableStateOf(group.code.orEmpty()) }
     var description by rememberSaveable { mutableStateOf(group.description.orEmpty()) }
@@ -68,6 +76,20 @@ fun EditGroupScreen(
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+
+    fun pickDate(current: String, onPicked: (String) -> Unit) {
+        val parsed = runCatching { LocalDate.parse(current.trim()) }.getOrElse { LocalDate.now() }
+        DatePickerDialog(
+            context,
+            { _, y, m, d ->
+                onPicked(String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d))
+            },
+            parsed.year,
+            parsed.monthValue - 1,
+            parsed.dayOfMonth
+        ).show()
+    }
 
     BackHandler(onBack = onBackClick)
 
@@ -112,11 +134,27 @@ fun EditGroupScreen(
             TaskzTextField(
                 value = code,
                 onValueChange = { code = it },
-                label = "Group Code",
-                placeholder = "Code",
+                label = "Exam / LAN Tag",
+                placeholder = "e.g., RRB · LAN 1",
                 leadingIcon = Icons.Default.Code,
                 testTag = "edit_group_code"
             )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                quickLans.forEach { lan ->
+                    val isSelected = code.contains(lan, ignoreCase = true)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { code = toggleLanTagInCode(code, lan) },
+                        label = { Text(lan) }
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -132,7 +170,11 @@ fun EditGroupScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TaskzTextField(
                     value = startDate,
                     onValueChange = { startDate = it },
@@ -141,6 +183,21 @@ fun EditGroupScreen(
                     leadingIcon = Icons.Default.DateRange,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = { pickDate(startDate) { startDate = it } },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.DateRange, contentDescription = "Pick Start Date")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TaskzTextField(
                     value = endDate,
                     onValueChange = { endDate = it },
@@ -149,6 +206,12 @@ fun EditGroupScreen(
                     leadingIcon = Icons.Default.DateRange,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = { pickDate(endDate) { endDate = it } },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.DateRange, contentDescription = "Pick End Date")
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

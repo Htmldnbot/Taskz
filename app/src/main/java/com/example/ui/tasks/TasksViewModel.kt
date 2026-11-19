@@ -14,6 +14,7 @@ import com.example.core.model.OrgState
 import com.example.core.model.ResponseType
 import com.example.core.model.ScopeLevel
 import com.example.core.model.ScopedMemberSearchResult
+import com.example.core.model.Shift
 import com.example.core.model.TaskActivityLog
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskImportance
@@ -83,8 +84,22 @@ class TasksViewModel(
     val taskGroupsFlow: StateFlow<List<TaskGroup>> = taskRepository.getGroupsFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allShiftsFlow: StateFlow<List<Shift>> = taskRepository.getAllShiftsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val activeWorkRolesFlow: StateFlow<List<WorkRole>> = taskRepository.getActiveWorkRolesFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun findShift1Candidates(shifts: List<Shift> = allShiftsFlow.value): List<Shift> {
+        val shift1Matches = shifts.filter {
+            it.shiftNumber == 1 ||
+                it.name.contains("shift 1", ignoreCase = true) ||
+                it.name.contains("shift-1", ignoreCase = true) ||
+                it.name.trim().endsWith("1")
+        }
+        return (if (shift1Matches.isNotEmpty()) shift1Matches else shifts)
+            .sortedByDescending { TaskItem.parseIsoToMillis(it.startsAt) ?: 0L }
+    }
 
     private val _selectedTab = MutableStateFlow(TaskTabFilter.MY_TASKS)
     val selectedTab: StateFlow<TaskTabFilter> = _selectedTab.asStateFlow()

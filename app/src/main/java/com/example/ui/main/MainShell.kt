@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -58,6 +59,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -218,11 +220,14 @@ fun MainShell(
     val isSyncing by syncManager.isSyncing.collectAsStateWithLifecycle()
     val notifications by syncManager.notificationsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val unreadCount by syncManager.unreadNotificationCount.collectAsStateWithLifecycle(initialValue = 0)
+    val allShifts by tasksViewModel.allShiftsFlow.collectAsStateWithLifecycle()
+    val allGroups by tasksViewModel.taskGroupsFlow.collectAsStateWithLifecycle()
     val isOnline by app.networkMonitor.isOnlineFlow.collectAsStateWithLifecycle(initialValue = app.networkMonitor.isCurrentlyConnected())
     val pendingDeepLink by NotificationDeepLinkRouter.pendingTarget.collectAsStateWithLifecycle()
 
     var showRoleMenu by remember { mutableStateOf(false) }
     var showNotificationsSheet by remember { mutableStateOf(false) }
+    var pendingShift1Candidates by remember { mutableStateOf<List<Shift>?>(null) }
 
     // If active role switches away from SUPER_ADMIN while on Admin tab, redirect to HOME cleanly
     LaunchedEffect(authContext.activeRole, authContext.assignedRoles) {
@@ -653,7 +658,23 @@ fun MainShell(
                             viewModel = tasksViewModel,
                             onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
                             onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
-                            onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) }
+                            onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) },
+                            onRepeatShiftClick = {
+                                val candidates = tasksViewModel.findShift1Candidates(allShifts)
+                                when {
+                                    candidates.isEmpty() -> {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Create an Exam Group & Shift 1 first")
+                                        }
+                                    }
+                                    candidates.size == 1 -> {
+                                        subRouteStack.add(SubRoute.CopyShift(candidates.first()))
+                                    }
+                                    else -> {
+                                        pendingShift1Candidates = candidates
+                                    }
+                                }
+                            }
                         )
                         MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
                             viewModel = systemIncidentViewModel
@@ -858,6 +879,66 @@ fun MainShell(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
+        }
+
+        if (!pendingShift1Candidates.isNullOrEmpty()) {
+            val candidates = pendingShift1Candidates.orEmpty()
+            AlertDialog(
+                onDismissRequest = { pendingShift1Candidates = null },
+                title = { Text("Select Exam Shift 1", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Choose which exam's Shift 1 to copy:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        candidates.forEach { shiftCandidate ->
+                            val group = allGroups.firstOrNull { it.id == shiftCandidate.groupId }
+                            val groupLabel = listOfNotNull(
+                                group?.title,
+                                group?.code?.takeIf { it.isNotBlank() }
+                            ).joinToString(" · ")
+                            val timeLabel = TaskItem.formatForDisplay(shiftCandidate.startsAt) ?: shiftCandidate.startsAt
+                            OutlinedButton(
+                                onClick = {
+                                    pendingShift1Candidates = null
+                                    subRouteStack.add(SubRoute.CopyShift(shiftCandidate))
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("pick_shift1_candidate_${shiftCandidate.id}")
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    Text(
+                                        text = if (groupLabel.isNotBlank()) "$groupLabel · ${shiftCandidate.name}" else shiftCandidate.name,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "$timeLabel (${shiftCandidate.taskCount} tasks)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { pendingShift1Candidates = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }

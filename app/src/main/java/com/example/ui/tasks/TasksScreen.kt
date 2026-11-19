@@ -82,6 +82,7 @@ fun TasksScreen(
     onCreateTaskClick: () -> Unit,
     onTaskClick: (TaskItem) -> Unit,
     onManageGroupsClick: () -> Unit,
+    onRepeatShiftClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tasks by viewModel.filteredTasks.collectAsStateWithLifecycle()
@@ -185,7 +186,7 @@ fun TasksScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
-                    onClick = { viewModel.repeatShift1ToShift2() },
+                    onClick = onRepeatShiftClick,
                     enabled = !isLoading,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier

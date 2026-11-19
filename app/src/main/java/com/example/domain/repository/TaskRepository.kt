@@ -716,6 +716,13 @@ class TaskRepository(
     // SHIFTS
     // ============================================================
 
+    fun getAllShiftsFlow(): Flow<List<Shift>> =
+        shiftDao.getAllShiftsFlow().map { list ->
+            list.map { entity ->
+                enrichShiftWithManpower(entity.toDomain())
+            }
+        }
+
     fun getShiftsForGroupFlow(groupId: String): Flow<List<Shift>> =
         shiftDao.getShiftsForGroupFlow(groupId).map { list ->
             list.map { entity ->
@@ -759,10 +766,16 @@ class TaskRepository(
         status: String = "scheduled"
     ): Result<Shift> = withContext(Dispatchers.IO) {
         try {
-            // Validate: end > start
-            if (endsAt <= startsAt) {
+            // Validate: end > start using timezone-aware parsing
+            val parsedStartMs = TaskItem.parseIsoToMillis(startsAt)
+                ?: return@withContext Result.failure(IOException("Invalid shift start time format"))
+            val parsedEndMs = TaskItem.parseIsoToMillis(endsAt)
+                ?: return@withContext Result.failure(IOException("Invalid shift end time format"))
+            if (parsedEndMs <= parsedStartMs) {
                 return@withContext Result.failure(IOException("Shift end time must be after start time"))
             }
+            val isoStartsAt = java.time.Instant.ofEpochMilli(parsedStartMs).toString()
+            val isoEndsAt = java.time.Instant.ofEpochMilli(parsedEndMs).toString()
 
             val userId = getActiveUserId()
             if (userId.isNullOrBlank()) {
@@ -791,8 +804,8 @@ class TaskRepository(
                 put("group_id", validGroupId)
                 put("name", name.trim())
                 if (shiftNumber != null) put("shift_number", shiftNumber)
-                put("starts_at", startsAt)
-                put("ends_at", endsAt)
+                put("starts_at", isoStartsAt)
+                put("ends_at", isoEndsAt)
                 if (!notes.isNullOrBlank()) put("notes", notes.trim())
                 put("status", status)
                 put("created_by", userId)
@@ -844,8 +857,8 @@ class TaskRepository(
                 groupId = groupId,
                 name = name.trim(),
                 shiftNumber = shiftNumber,
-                startsAt = startsAt,
-                endsAt = endsAt,
+                startsAt = isoStartsAt,
+                endsAt = isoEndsAt,
                 notes = notes?.trim()?.takeIf { it.isNotBlank() },
                 status = finalStatus,
                 createdBy = userId
@@ -869,16 +882,23 @@ class TaskRepository(
         status: String
     ): Result<Shift> = withContext(Dispatchers.IO) {
         try {
-            if (endsAt <= startsAt) {
+            val parsedStartMs = TaskItem.parseIsoToMillis(startsAt)
+                ?: return@withContext Result.failure(IOException("Invalid shift start time format"))
+            val parsedEndMs = TaskItem.parseIsoToMillis(endsAt)
+                ?: return@withContext Result.failure(IOException("Invalid shift end time format"))
+            if (parsedEndMs <= parsedStartMs) {
                 return@withContext Result.failure(IOException("Shift end time must be after start time"))
             }
+            val isoStartsAt = java.time.Instant.ofEpochMilli(parsedStartMs).toString()
+            val isoEndsAt = java.time.Instant.ofEpochMilli(parsedEndMs).toString()
+
             val existing = shiftDao.getShiftById(shiftId)?.toDomain()
                 ?: return@withContext Result.failure(IOException("Shift not found"))
             val updated = existing.copy(
                 name = name.trim(),
                 shiftNumber = shiftNumber,
-                startsAt = startsAt,
-                endsAt = endsAt,
+                startsAt = isoStartsAt,
+                endsAt = isoEndsAt,
                 notes = notes?.trim()?.takeIf { it.isNotBlank() },
                 status = status
             )
@@ -889,8 +909,8 @@ class TaskRepository(
                 val shiftPayload = JSONObject().apply {
                     put("name", name.trim())
                     if (shiftNumber != null) put("shift_number", shiftNumber)
-                    put("starts_at", startsAt)
-                    put("ends_at", endsAt)
+                    put("starts_at", isoStartsAt)
+                    put("ends_at", isoEndsAt)
                     if (!notes.isNullOrBlank()) put("notes", notes.trim())
                     put("status", status)
                 }
@@ -914,7 +934,8 @@ class TaskRepository(
         newShiftName: String,
         newStartsAt: String,
         copyManpowerRequirements: Boolean = true,
-        copyAssignedEmployees: Boolean = false
+        copyAssignedEmployees: Boolean = false,
+        selectedTaskIds: List<String>? = null
     ): Result<Shift> = withContext(Dispatchers.IO) {
         try {
             val sourceShift = getShiftById(sourceShiftId)
@@ -940,23 +961,24 @@ class TaskRepository(
                 groupId = sourceShift.groupId,
                 name = newShiftName.trim(),
                 shiftNumber = (sourceShift.shiftNumber ?: 0) + 1,
-                startsAt = newStartsAt,
+                startsAt = formatMillisToDateTime(newStartMillis),
                 endsAt = newEndsAt,
-                notes = "Copied from ${sourceShift.name}",
+                notes = sourceShift.notes ?: "Copied from ${sourceShift.name}",
                 status = "scheduled",
                 createdBy = userId
             )
 
             val token = getActiveAccessToken()
             if (!token.isNullOrBlank()) {
-                val offsetMinutes = (timeOffsetMillis / 60000L).toInt()
+                val offsetMinutes = kotlin.math.round(timeOffsetMillis / 60000.0).toInt()
                 val remoteRes = supabaseClient.copyShift(
                     accessToken = token,
                     sourceShiftId = sourceShiftId,
                     newShiftName = newShiftName.trim(),
                     offsetMinutes = offsetMinutes,
                     copyManpower = copyManpowerRequirements,
-                    copyAssignments = copyAssignedEmployees
+                    copyAssignments = copyAssignedEmployees,
+                    selectedTaskIds = selectedTaskIds
                 )
                 if (remoteRes.isSuccess) {
                     val createdShiftId = remoteRes.getOrThrow().takeIf { it.isNotBlank() } ?: newShiftId
@@ -983,8 +1005,10 @@ class TaskRepository(
 
             shiftDao.insertShift(ShiftEntity.fromDomain(newShift))
 
-            // Fetch and copy tasks belonging to source shift
-            val sourceTasks = taskDao.getTasksForShiftFlow(sourceShiftId).firstOrNull() ?: emptyList()
+            // Fetch and copy only selected tasks belonging to source shift
+            val selectedIdSet = selectedTaskIds?.toSet()
+            val sourceTasks = (taskDao.getTasksForShiftFlow(sourceShiftId).firstOrNull() ?: emptyList())
+                .filter { entity -> selectedIdSet == null || entity.id in selectedIdSet }
             for (sourceTaskEntity in sourceTasks) {
                 val st = sourceTaskEntity.toDomain()
                 val newTaskStart = st.startsAt?.let { formatMillisToDateTime(parseDateTimeToMillis(it) + timeOffsetMillis) }
@@ -3776,19 +3800,10 @@ class TaskRepository(
     }
 
     private fun parseDateTimeToMillis(isoString: String): Long {
-        return try {
-            val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US)
-            format.parse(isoString)?.time ?: System.currentTimeMillis()
-        } catch (e: Exception) {
-            try {
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).parse(isoString)?.time ?: System.currentTimeMillis()
-            } catch (e2: Exception) {
-                System.currentTimeMillis()
-            }
-        }
+        return TaskItem.parseIsoToMillis(isoString) ?: System.currentTimeMillis()
     }
 
     private fun formatMillisToDateTime(millis: Long): String {
-        return SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).format(Date(millis))
+        return java.time.Instant.ofEpochMilli(millis).toString()
     }
 }

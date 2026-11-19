@@ -1902,12 +1902,16 @@ revoke all on function public.create_task_atomic(jsonb) from public;
 grant execute on function public.create_task_atomic(jsonb) to authenticated;
 
 -- Exclude on-leave users in copy_shift and group/task sync triggers
+drop function if exists public.copy_shift(uuid, text, integer, boolean, boolean);
+drop function if exists public.copy_shift(uuid, text, integer, boolean, boolean, uuid[]);
+
 create or replace function public.copy_shift(
     p_source_shift uuid,
     p_new_name text,
     p_offset_minutes integer,
     p_copy_manpower boolean default true,
-    p_copy_assignments boolean default false
+    p_copy_assignments boolean default false,
+    p_task_ids uuid[] default null
 )
 returns uuid
 language plpgsql
@@ -1939,7 +1943,11 @@ begin
         coalesce(v_source.shift_number, 0) + 1,
         v_source.starts_at + make_interval(mins => p_offset_minutes),
         v_source.ends_at + make_interval(mins => p_offset_minutes),
-        'Copied from ' || v_source.name,
+        case
+            when nullif(trim(coalesce(v_source.notes, '')), '') is not null
+            then trim(v_source.notes)
+            else 'Copied from ' || v_source.name
+        end,
         'scheduled',
         v_source.id,
         v_caller
@@ -1949,7 +1957,8 @@ begin
         select * from public.tasks
         where shift_id = p_source_shift
           and deleted_at is null
-        order by starts_at nulls last, created_at
+          and (p_task_ids is null or id = any(p_task_ids))
+        order by coalesce(execution_time, starts_at, due_at) nulls last, created_at
     loop
         insert into public.tasks(
             group_id, shift_id, title, description, location, starts_at, due_at,
@@ -2055,8 +2064,8 @@ begin
 end;
 $$;
 
-revoke all on function public.copy_shift(uuid, text, integer, boolean, boolean) from public;
-grant execute on function public.copy_shift(uuid, text, integer, boolean, boolean) to authenticated;
+revoke all on function public.copy_shift(uuid, text, integer, boolean, boolean, uuid[]) from public;
+grant execute on function public.copy_shift(uuid, text, integer, boolean, boolean, uuid[]) to authenticated;
 
 create or replace function public.sync_group_member_to_active_tasks()
 returns trigger

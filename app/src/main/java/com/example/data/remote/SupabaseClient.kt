@@ -2356,7 +2356,8 @@ class SupabaseClient(
         newShiftName: String,
         offsetMinutes: Int,
         copyManpower: Boolean = true,
-        copyAssignments: Boolean = false
+        copyAssignments: Boolean = false,
+        selectedTaskIds: List<String>? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             checkConfig()
@@ -2366,6 +2367,10 @@ class SupabaseClient(
                 put("p_offset_minutes", offsetMinutes)
                 put("p_copy_manpower", copyManpower)
                 put("p_copy_assignments", copyAssignments)
+                if (selectedTaskIds != null) {
+                    val cleanIds = selectedTaskIds.filter { SupabaseConfig.isValidUuid(it) }
+                    put("p_task_ids", org.json.JSONArray(cleanIds))
+                }
             }
 
             val request = Request.Builder()

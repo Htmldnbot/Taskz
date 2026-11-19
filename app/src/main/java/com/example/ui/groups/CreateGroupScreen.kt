@@ -1,9 +1,11 @@
 package com.example.ui.groups
 
+import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,7 +31,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -41,13 +42,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.TaskGroup
 import com.example.ui.common.TaskzTextField
+import java.time.LocalDate
+import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CreateGroupScreen(
     viewModel: GroupsViewModel,
@@ -55,11 +60,12 @@ fun CreateGroupScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var title by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
-    var startDate by rememberSaveable { mutableStateOf("") }
-    var endDate by rememberSaveable { mutableStateOf("") }
+    var startDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
+    var endDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
 
     var visibility by rememberSaveable { mutableStateOf("everyone") } // "everyone" or "restricted"
     var allowSelfJoin by rememberSaveable { mutableStateOf(true) }
@@ -68,6 +74,21 @@ fun CreateGroupScreen(
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+
+    val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+
+    fun pickDate(current: String, onPicked: (String) -> Unit) {
+        val parsed = runCatching { LocalDate.parse(current.trim()) }.getOrElse { LocalDate.now() }
+        DatePickerDialog(
+            context,
+            { _, y, m, d ->
+                onPicked(String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d))
+            },
+            parsed.year,
+            parsed.monthValue - 1,
+            parsed.dayOfMonth
+        ).show()
+    }
 
     BackHandler(onBack = onBackClick)
 
@@ -102,7 +123,7 @@ fun CreateGroupScreen(
                     errorMessage = null
                 },
                 label = "Exam Name *",
-                placeholder = "e.g., SSC CGL 2026",
+                placeholder = "e.g., Railway RRB / Banking IBPS",
                 leadingIcon = Icons.Default.Title,
                 testTag = "input_group_title"
             )
@@ -112,11 +133,30 @@ fun CreateGroupScreen(
             TaskzTextField(
                 value = code,
                 onValueChange = { code = it },
-                label = "Exam Code (Optional)",
-                placeholder = "e.g., EXAM-2026",
+                label = "Exam / LAN Tag (Optional)",
+                placeholder = "e.g., RRB · LAN 1",
                 leadingIcon = Icons.Default.Code,
                 testTag = "input_group_code"
             )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                quickLans.forEach { lan ->
+                    val isSelected = code.contains(lan, ignoreCase = true)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = {
+                            code = toggleLanTagInCode(code, lan)
+                        },
+                        label = { Text(lan) },
+                        modifier = Modifier.testTag("chip_group_${lan.lowercase().replace(" ", "_")}")
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -124,7 +164,7 @@ fun CreateGroupScreen(
                 value = description,
                 onValueChange = { description = it },
                 label = "Notes (Optional)",
-                placeholder = "Brief exam details...",
+                placeholder = "Exam notes or centre LAN allocation...",
                 leadingIcon = Icons.Default.Description,
                 singleLine = false,
                 testTag = "input_group_description"
@@ -132,7 +172,11 @@ fun CreateGroupScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TaskzTextField(
                     value = startDate,
                     onValueChange = { startDate = it },
@@ -142,6 +186,21 @@ fun CreateGroupScreen(
                     modifier = Modifier.weight(1f),
                     testTag = "input_group_start_date"
                 )
+                IconButton(
+                    onClick = { pickDate(startDate) { startDate = it } },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.DateRange, contentDescription = "Pick Start Date")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TaskzTextField(
                     value = endDate,
                     onValueChange = { endDate = it },
@@ -151,6 +210,12 @@ fun CreateGroupScreen(
                     modifier = Modifier.weight(1f),
                     testTag = "input_group_end_date"
                 )
+                IconButton(
+                    onClick = { pickDate(endDate) { endDate = it } },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.DateRange, contentDescription = "Pick End Date")
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -290,4 +355,18 @@ fun CreateGroupScreen(
             }
         }
     }
+}
+
+internal fun toggleLanTagInCode(currentCode: String, lan: String): String {
+    val parts = currentCode.split("·", ",")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toMutableList()
+    val existingIdx = parts.indexOfFirst { it.equals(lan, ignoreCase = true) }
+    if (existingIdx >= 0) {
+        parts.removeAt(existingIdx)
+    } else {
+        parts.add(lan)
+    }
+    return parts.joinToString(" · ")
 }
