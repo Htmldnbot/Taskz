@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Groups
@@ -40,6 +41,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
@@ -135,6 +138,7 @@ fun TaskDetailScreen(
     var showLeaveDialog by remember { mutableStateOf(false) }
     var showAssignDialog by remember { mutableStateOf(false) }
     var showCompleteDialog by remember { mutableStateOf(false) }
+    var showEditTaskDialog by remember { mutableStateOf(false) }
 
     // Join Task Inputs
     var selectedRoleIdToJoin by remember { mutableStateOf("") }
@@ -146,7 +150,10 @@ fun TaskDetailScreen(
     var completionNote by remember { mutableStateOf("") }
 
     // Phase 3 Response Inputs
-    var responsePercentage by remember { mutableFloatStateOf(currentTask.currentProgress.toFloat()) }
+    var responsePercentage by remember(currentTask.id, currentTask.currentProgress) {
+        mutableFloatStateOf(currentTask.currentProgress.toFloat())
+    }
+    var selectedNextReminderMinutes by remember { mutableIntStateOf(10) }
     var responseNumeric1 by remember { mutableStateOf("") }
     var responseNumeric2 by remember { mutableStateOf("") }
     var responseText by remember { mutableStateOf("") }
@@ -175,6 +182,7 @@ fun TaskDetailScreen(
     val unlockTimeText = scheduledMillis?.let {
         TaskItem.formatForDisplay(java.time.Instant.ofEpochMilli(it).toString())
     } ?: (currentTask.executionTime ?: currentTask.dueAt ?: "")
+    val canEdit = viewModel.canEditTask(currentTask)
     val canAssign = viewModel.canAssignTask(currentTask)
     val canAcknowledge = viewModel.canAcknowledgeTask(currentTask)
     val canComplete = viewModel.canCompleteTask(currentTask)
@@ -196,16 +204,30 @@ fun TaskDetailScreen(
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = onBackClick) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    IconButton(onClick = onBackClick) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Task Details",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
                 }
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Task Operations",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                )
+                if (canEdit && currentTask.status !in setOf("completed", "cancelled")) {
+                    OutlinedButton(
+                        onClick = { showEditTaskDialog = true },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("btn_edit_task")
+                    ) {
+                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Task", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Edit")
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -678,14 +700,18 @@ fun TaskDetailScreen(
                     }
                     when (effectiveDetailResponseType) {
                         ResponseType.PERCENTAGE -> {
+                            val targetPct = (currentTask.targetPercentage ?: 100).coerceAtLeast(1)
+                            val pctInt = responsePercentage.toInt()
+                            val needsNextReminder = pctInt < targetPct
+
                             Text(
-                                text = "Current Progress: ${responsePercentage.toInt()}% / ${currentTask.targetPercentage ?: 100}%",
+                                text = "Progress: $pctInt% / $targetPct%",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             LinearProgressIndicator(
-                                progress = { (responsePercentage / (currentTask.targetPercentage ?: 100)).coerceIn(0f, 1f) },
+                                progress = { (responsePercentage / targetPct).coerceIn(0f, 1f) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(8.dp)
@@ -708,12 +734,42 @@ fun TaskDetailScreen(
                             ) {
                                 listOf(25f, 50f, 75f, 100f).forEach { p ->
                                     FilterChip(
-                                        selected = responsePercentage.toInt() == p.toInt(),
+                                        selected = pctInt == p.toInt(),
                                         onClick = { responsePercentage = p },
                                         enabled = canComplete && !isLockedBeforeTime,
                                         label = { Text("${p.toInt()}%") },
-                                        modifier = Modifier.testTag("task_detail_pct_chip_${p.toInt()}")
+                                        modifier = Modifier.weight(1f).testTag("task_detail_pct_chip_${p.toInt()}")
                                     )
+                                }
+                            }
+
+                            AnimatedVisibility(visible = needsNextReminder && canComplete && !isLockedBeforeTime) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "Next reminder in:",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        listOf(5, 10, 15, 30).forEach { mins ->
+                                            FilterChip(
+                                                selected = selectedNextReminderMinutes == mins,
+                                                onClick = { selectedNextReminderMinutes = mins },
+                                                label = { Text("${mins}m") },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("task_detail_next_reminder_${mins}m")
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
@@ -723,7 +779,8 @@ fun TaskDetailScreen(
                                     viewModel.submitTaskResponse(
                                         taskId = currentTask.id,
                                         responseType = ResponseType.PERCENTAGE,
-                                        percentage = responsePercentage.toInt()
+                                        percentage = pctInt,
+                                        nextReminderMinutes = if (needsNextReminder) selectedNextReminderMinutes else null
                                     )
                                 },
                                 enabled = canComplete && !isLockedBeforeTime,
@@ -733,7 +790,13 @@ fun TaskDetailScreen(
                             ) {
                                 Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Update Progress to ${responsePercentage.toInt()}%")
+                                Text(
+                                    if (needsNextReminder) {
+                                        "Save $pctInt% & Remind in ${selectedNextReminderMinutes}m"
+                                    } else {
+                                        "Complete ($pctInt%)"
+                                    }
+                                )
                             }
                         }
 
@@ -1342,9 +1405,10 @@ fun TaskDetailScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             items(directoryEmployees) { emp ->
+                                val onLeave = emp.isOnLeave
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    color = if (onLeave) TaskzWarning.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Row(
@@ -1355,17 +1419,33 @@ fun TaskDetailScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = emp.fullName,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                )
+                                                if (onLeave) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.EventBusy,
+                                                        contentDescription = "On Leave",
+                                                        tint = TaskzWarning,
+                                                        modifier = Modifier.size(15.dp)
+                                                    )
+                                                    Text(
+                                                        text = "On Leave",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = TaskzWarning
+                                                    )
+                                                }
+                                            }
                                             Text(
-                                                text = emp.fullName,
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                            )
-                                            Text(
-                                                text = "ID: ${emp.employeeId} • ${emp.mobile}",
+                                                text = "ID: ${emp.employeeId} • ${emp.resolvedActiveRole.displayName}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                         Button(
+                                            enabled = !onLeave,
                                             onClick = {
                                                 viewModel.assignUserToTask(
                                                     taskId = currentTask.id,
@@ -1375,7 +1455,7 @@ fun TaskDetailScreen(
                                             },
                                             shape = RoundedCornerShape(6.dp)
                                         ) {
-                                            Text("Add")
+                                            Text(if (onLeave) "Leave" else "Add")
                                         }
                                     }
                                 }
@@ -1392,4 +1472,242 @@ fun TaskDetailScreen(
             }
         )
     }
+
+    if (showEditTaskDialog) {
+        EditTaskDialog(
+            task = currentTask,
+            onDismiss = { showEditTaskDialog = false },
+            onSave = { title, desc, loc, execIso, dueIso, priority, importance, alarmType, reminderMins, targetPct ->
+                viewModel.updateTaskDetails(
+                    taskId = currentTask.id,
+                    title = title,
+                    description = desc,
+                    location = loc,
+                    executionTime = execIso,
+                    dueAt = dueIso,
+                    priority = priority,
+                    importance = importance,
+                    alarmType = alarmType,
+                    overdueReminderIntervalMinutes = reminderMins,
+                    targetPercentage = targetPct,
+                    onSuccess = { showEditTaskDialog = false }
+                )
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EditTaskDialog(
+    task: TaskItem,
+    onDismiss: () -> Unit,
+    onSave: (
+        title: String,
+        description: String?,
+        location: String?,
+        executionTime: String?,
+        dueAt: String?,
+        priority: String,
+        importance: TaskImportance,
+        alarmType: com.example.core.model.AlarmType,
+        reminderMins: Int,
+        targetPct: Int
+    ) -> Unit
+) {
+    val initialMillis = remember(task.id, task.executionTime, task.dueAt) {
+        task.scheduledExecutionMillis() ?: System.currentTimeMillis()
+    }
+    val initialLocalDateTime = remember(initialMillis) {
+        java.time.Instant.ofEpochMilli(initialMillis)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDateTime()
+    }
+
+    var title by remember(task.id) { mutableStateOf(task.title) }
+    var description by remember(task.id) { mutableStateOf(task.description.orEmpty()) }
+    var location by remember(task.id) { mutableStateOf(task.location.orEmpty()) }
+    var execDate by remember(task.id) { mutableStateOf(initialLocalDateTime.toLocalDate().toString()) }
+    var execHour by remember(task.id) { mutableIntStateOf(initialLocalDateTime.hour) }
+    var execMinute by remember(task.id) { mutableIntStateOf(initialLocalDateTime.minute) }
+    var priority by remember(task.id) { mutableStateOf(task.priority) }
+    var importance by remember(task.id) { mutableStateOf(task.importance) }
+    var alarmType by remember(task.id) { mutableStateOf(task.alarmType) }
+    var reminderMins by remember(task.id) { mutableIntStateOf((task.overdueReminderIntervalMinutes ?: 10).coerceAtLeast(1)) }
+    var targetPctText by remember(task.id) { mutableStateOf((task.targetPercentage ?: 100).toString()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Task", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_task_title_input")
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth().testTag("edit_task_desc_input")
+                )
+                OutlinedTextField(
+                    value = location,
+                    onValueChange = { location = it },
+                    label = { Text("Location") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text(
+                    text = "Date (YYYY-MM-DD) & Time",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                )
+                OutlinedTextField(
+                    value = execDate,
+                    onValueChange = { execDate = it },
+                    label = { Text("Date") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_task_date_input")
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = execHour.toString().padStart(2, '0'),
+                        onValueChange = { raw ->
+                            raw.filter { it.isDigit() }.toIntOrNull()?.let { h ->
+                                execHour = h.coerceIn(0, 23)
+                            }
+                        },
+                        label = { Text("Hour (0-23)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("edit_task_hour_input")
+                    )
+                    OutlinedTextField(
+                        value = execMinute.toString().padStart(2, '0'),
+                        onValueChange = { raw ->
+                            raw.filter { it.isDigit() }.toIntOrNull()?.let { m ->
+                                execMinute = m.coerceIn(0, 59)
+                            }
+                        },
+                        label = { Text("Min (0-59)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("edit_task_min_input")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    listOf(15, 30, 60).forEach { addMins ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                val next = java.time.LocalTime.now().plusMinutes(addMins.toLong())
+                                execDate = java.time.LocalDate.now().toString()
+                                execHour = next.hour
+                                execMinute = next.minute
+                            },
+                            label = { Text("+${addMins}m") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Text("Importance", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TaskImportance.entries.forEach { imp ->
+                        FilterChip(
+                            selected = importance == imp,
+                            onClick = {
+                                importance = imp
+                                priority = imp.name.lowercase()
+                            },
+                            label = { Text(imp.label) }
+                        )
+                    }
+                }
+
+                Text("Alarm Type", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.example.core.model.AlarmType.entries.forEach { at ->
+                        FilterChip(
+                            selected = alarmType == at,
+                            onClick = { alarmType = at },
+                            label = { Text(at.label) }
+                        )
+                    }
+                }
+
+                Text("Reminder Interval", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    listOf(5, 10, 15, 30).forEach { mins ->
+                        FilterChip(
+                            selected = reminderMins == mins,
+                            onClick = { reminderMins = mins },
+                            label = { Text("${mins}m") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                if (task.responseType == ResponseType.PERCENTAGE || task.taskType == TaskType.PROGRESS) {
+                    OutlinedTextField(
+                        value = targetPctText,
+                        onValueChange = { targetPctText = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Target %") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = title.trim().isNotBlank(),
+                onClick = {
+                    val parsedDate = runCatching { java.time.LocalDate.parse(execDate.trim()) }
+                        .getOrElse { initialLocalDateTime.toLocalDate() }
+                    val zdt = java.time.ZonedDateTime.of(
+                        parsedDate,
+                        java.time.LocalTime.of(execHour.coerceIn(0, 23), execMinute.coerceIn(0, 59)),
+                        java.time.ZoneId.systemDefault()
+                    )
+                    val iso = zdt.toInstant().toString()
+                    onSave(
+                        title.trim(),
+                        description.trim().takeIf { it.isNotBlank() },
+                        location.trim().takeIf { it.isNotBlank() },
+                        iso,
+                        iso,
+                        priority,
+                        importance,
+                        alarmType,
+                        reminderMins,
+                        (targetPctText.toIntOrNull() ?: 100).coerceIn(1, 100)
+                    )
+                },
+                modifier = Modifier.testTag("confirm_edit_task_btn")
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

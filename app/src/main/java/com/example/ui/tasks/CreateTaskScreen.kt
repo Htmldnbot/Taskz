@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AssistChip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
@@ -1318,13 +1319,8 @@ fun CreateTaskScreen(
                     }
 
                     Text(
-                        text = "Target Roles in Scope (Optional)",
+                        text = "Target Roles (Optional)",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Text(
-                        text = "Creates ONE canonical task visible to all selected roles inside this scope — zero duplicate rows.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     FlowRow(
@@ -1333,7 +1329,6 @@ fun CreateTaskScreen(
                     ) {
                         val selectableTargetRoles = listOf(
                             TaskzRole.IT_MANAGER,
-                            TaskzRole.SO,
                             TaskzRole.VCO,
                             TaskzRole.CITY_HEAD,
                             TaskzRole.ROM,
@@ -1357,7 +1352,7 @@ fun CreateTaskScreen(
 
                     if (selectedScope == TaskScopeLevel.STATE) {
                         Text(
-                            text = "State-Wide Mode: Visible & assignable to all VCO, SO, and IT Managers across ${selectedState?.name ?: stateName.ifBlank { "selected State" }}.",
+                            text = "State-Wide: All VCO & IT Managers in ${selectedState?.name ?: stateName.ifBlank { "selected State" }}.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -1450,10 +1445,11 @@ fun CreateTaskScreen(
                         shape = RoundedCornerShape(10.dp)
                     )
 
-                    if (scopedSearchResults.isNotEmpty()) {
+                    val availableScopedMembers = scopedSearchResults.filter { !it.isOnLeave }
+                    if (availableScopedMembers.isNotEmpty()) {
                         OutlinedButton(
                             onClick = {
-                                scopedSearchResults.forEach { member ->
+                                availableScopedMembers.forEach { member ->
                                     val asProfile = UserProfile(
                                         id = member.id,
                                         employeeId = member.employeeId,
@@ -1467,7 +1463,8 @@ fun CreateTaskScreen(
                                         cityName = member.cityName,
                                         stateId = member.stateId,
                                         stateName = member.stateName,
-                                        isActive = member.isActive
+                                        isActive = member.isActive,
+                                        isOnLeave = member.isOnLeave
                                     )
                                     if (selectedInvitees.none { it.id == member.id || (member.employeeId.isNotBlank() && it.employeeId == member.employeeId) }) {
                                         selectedInvitees.add(asProfile)
@@ -1482,7 +1479,7 @@ fun CreateTaskScreen(
                         ) {
                             Icon(Icons.Default.People, contentDescription = "Add all members in scope", modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Add All in Scope (${scopedSearchResults.size})", fontWeight = FontWeight.SemiBold)
+                            Text("Add All Available (${availableScopedMembers.size})", fontWeight = FontWeight.SemiBold)
                         }
                     }
 
@@ -1533,13 +1530,15 @@ fun CreateTaskScreen(
                                             centreId = member.centreId,
                                             centreCode = member.centreCode,
                                             cityName = member.cityName,
-                                            isActive = member.isActive
+                                            isActive = member.isActive,
+                                            isOnLeave = member.isOnLeave
                                         )
+                                        val onLeave = member.isOnLeave
                                         val isAdded = selectedInvitees.any { it.id == member.id || it.employeeId == member.employeeId }
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable {
+                                                .clickable(enabled = !onLeave) {
                                                     if (!isAdded) selectedInvitees.add(asProfile)
                                                     else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
                                                 }
@@ -1552,21 +1551,42 @@ fun CreateTaskScreen(
                                                     modifier = Modifier
                                                         .size(34.dp)
                                                         .clip(CircleShape)
-                                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                                        .background(
+                                                            if (onLeave) com.example.ui.theme.TaskzWarning.copy(alpha = 0.2f)
+                                                            else MaterialTheme.colorScheme.primaryContainer
+                                                        ),
                                                     contentAlignment = Alignment.Center
                                                 ) {
-                                                    Text(
-                                                        text = member.fullName.take(2).uppercase(),
-                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                    )
+                                                    if (onLeave) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.EventBusy,
+                                                            contentDescription = "On Leave",
+                                                            tint = com.example.ui.theme.TaskzWarning,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    } else {
+                                                        Text(
+                                                            text = member.fullName.take(2).uppercase(),
+                                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        )
+                                                    }
                                                 }
                                                 Spacer(modifier = Modifier.width(10.dp))
                                                 Column {
-                                                    Text(
-                                                        text = "${member.fullName} • ${TaskzRole.fromCode(member.activeRoleCode).displayName}",
-                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                                    )
+                                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        Text(
+                                                            text = "${member.fullName} • ${TaskzRole.fromCode(member.activeRoleCode).displayName}",
+                                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                        )
+                                                        if (onLeave) {
+                                                            Text(
+                                                                text = "On Leave",
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                                color = com.example.ui.theme.TaskzWarning
+                                                            )
+                                                        }
+                                                    }
                                                     Text(
                                                         text = listOfNotNull(
                                                             "ID: ${member.employeeId}",
@@ -1580,6 +1600,7 @@ fun CreateTaskScreen(
                                                 }
                                             }
                                             Button(
+                                                enabled = !onLeave,
                                                 onClick = {
                                                     if (!isAdded) selectedInvitees.add(asProfile)
                                                     else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
@@ -1590,17 +1611,25 @@ fun CreateTaskScreen(
                                                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                                 ) else androidx.compose.material3.ButtonDefaults.buttonColors()
                                             ) {
-                                                Text(if (isAdded) "Added ✓" else "+ Add", style = MaterialTheme.typography.labelMedium)
+                                                Text(
+                                                    when {
+                                                        onLeave -> "Leave"
+                                                        isAdded -> "Added ✓"
+                                                        else -> "+ Add"
+                                                    },
+                                                    style = MaterialTheme.typography.labelMedium
+                                                )
                                             }
                                         }
                                     }
                                 } else {
                                     searchResults.take(4).forEach { candidate ->
+                                        val onLeave = candidate.isOnLeave
                                         val isAdded = selectedInvitees.any { it.id == candidate.id || it.employeeId == candidate.employeeId }
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable {
+                                                .clickable(enabled = !onLeave) {
                                                     if (!isAdded) selectedInvitees.add(candidate)
                                                     else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
                                                 }
@@ -1609,10 +1638,25 @@ fun CreateTaskScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "${candidate.fullName} • ${candidate.resolvedActiveRole.displayName}",
-                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                                )
+                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Text(
+                                                        text = "${candidate.fullName} • ${candidate.resolvedActiveRole.displayName}",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                    )
+                                                    if (onLeave) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.EventBusy,
+                                                            contentDescription = "On Leave",
+                                                            tint = com.example.ui.theme.TaskzWarning,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                        Text(
+                                                            text = "On Leave",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                            color = com.example.ui.theme.TaskzWarning
+                                                        )
+                                                    }
+                                                }
                                                 Text(
                                                     text = "${candidate.employeeId} • ${candidate.mobile}",
                                                     style = MaterialTheme.typography.bodySmall,
@@ -1620,13 +1664,21 @@ fun CreateTaskScreen(
                                                 )
                                             }
                                             Button(
+                                                enabled = !onLeave,
                                                 onClick = {
                                                     if (!isAdded) selectedInvitees.add(candidate)
                                                     else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
                                                 },
                                                 shape = RoundedCornerShape(8.dp)
                                             ) {
-                                                Text(if (isAdded) "Added ✓" else "+ Add", style = MaterialTheme.typography.labelMedium)
+                                                Text(
+                                                    when {
+                                                        onLeave -> "Leave"
+                                                        isAdded -> "Added ✓"
+                                                        else -> "+ Add"
+                                                    },
+                                                    style = MaterialTheme.typography.labelMedium
+                                                )
                                             }
                                         }
                                     }

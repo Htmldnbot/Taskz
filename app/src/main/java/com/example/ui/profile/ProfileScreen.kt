@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationCity
@@ -51,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -97,6 +99,7 @@ fun ProfileScreen(
     val isSwitchingRole by viewModel.isSwitchingRole.collectAsStateWithLifecycle()
     val isSavingLocation by viewModel.isSavingLocation.collectAsStateWithLifecycle()
     val locationSaveError by viewModel.locationSaveError.collectAsStateWithLifecycle()
+    val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
     var showLocationDialog by remember { mutableStateOf(false) }
 
@@ -192,17 +195,16 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Badges: Status and Role
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = if (profile?.isActive == true) TaskzSuccess.copy(alpha = 0.15f) else TaskzError.copy(alpha = 0.15f)
             ) {
                 Text(
-                    text = if (profile?.isActive == true) "Account: Active" else "Account: Inactive",
+                    text = if (profile?.isActive == true) "Active" else "Inactive",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold,
                         color = if (profile?.isActive == true) TaskzSuccess else TaskzError
@@ -211,14 +213,12 @@ fun ProfileScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
-
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.secondaryContainer
             ) {
                 Text(
-                    text = "Active Role: ${authContext.activeRole.displayName}",
+                    text = authContext.activeRole.displayName,
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -226,9 +226,81 @@ fun ProfileScreen(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
+
+            if (authContext.isOnLeave) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = com.example.ui.theme.TaskzWarning.copy(alpha = 0.18f),
+                    modifier = Modifier.testTag("profile_on_leave_badge")
+                ) {
+                    Text(
+                        text = "On Leave",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = com.example.ui.theme.TaskzWarning
+                        ),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // On Leave Status Card
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (authContext.isOnLeave) {
+                    com.example.ui.theme.TaskzWarning.copy(alpha = 0.15f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                }
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("profile_on_leave_card")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.EventBusy,
+                        contentDescription = null,
+                        tint = if (authContext.isOnLeave) com.example.ui.theme.TaskzWarning else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (authContext.isOnLeave) "On Leave" else "On Duty",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = if (authContext.isOnLeave) "No new tasks or alarms assigned" else "Available for task assignment",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = authContext.isOnLeave,
+                    enabled = !isTogglingLeave,
+                    onCheckedChange = { viewModel.toggleLeaveStatus(it) },
+                    modifier = Modifier.testTag("profile_on_leave_switch")
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Assigned Roles & Active Role Selector Card
         Card(
@@ -261,7 +333,7 @@ fun ProfileScreen(
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                 val rolesList = authContext.assignedRoles.ifEmpty {
                     listOf(
                         com.example.core.model.AssignedRoleInfo(
@@ -287,7 +359,7 @@ fun ProfileScreen(
                             },
                             enabled = !isSwitchingRole,
                             label = {
-                                Text(if (isActive) "${role.roleName} (Active)" else role.roleName)
+                                Text(com.example.core.model.TaskzRole.fromCode(role.roleCode).displayName)
                             },
                             leadingIcon = if (isActive) {
                                 {
@@ -302,16 +374,6 @@ fun ProfileScreen(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = if (rolesList.size > 1) {
-                        "Tap an assigned role to switch your active scope and dashboard view immediately."
-                    } else {
-                        "Roles are provisioned by Super Admin. Self-promotion is restricted."
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 
@@ -335,12 +397,12 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Organizational Scope & Device",
+                        text = "Scope & Device",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
                 }
                 Text(
-                    text = "Effective Scope: ${authContext.scope.summaryLabel()} (${authContext.activeRole.defaultScope.label})",
+                    text = "${authContext.scope.summaryLabel()} (${authContext.activeRole.defaultScope.label})",
                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
                 )
                 val scopeParts = listOfNotNull(
@@ -366,16 +428,27 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Device ID: ${deviceId?.take(14) ?: "Initializing..."} • Multi-device Push Registered",
+                        text = "Device: ${deviceId?.take(14) ?: "..."}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(
-                    onClick = { showLocationDialog = true },
-                    modifier = Modifier.testTag("profile_update_location_btn")
-                ) {
-                    Text("Update State / City / Centre / LAN")
+                val scopeBtnLabel = when (authContext.activeRole) {
+                    com.example.core.model.TaskzRole.ZOM -> "Update Zone"
+                    com.example.core.model.TaskzRole.ROM -> "Update State"
+                    com.example.core.model.TaskzRole.CITY_HEAD -> "Update State & City"
+                    com.example.core.model.TaskzRole.VCO -> "Update Centre"
+                    com.example.core.model.TaskzRole.IT_MANAGER -> "Update Centre & LAN"
+                    com.example.core.model.TaskzRole.COMMAND_CENTER,
+                    com.example.core.model.TaskzRole.SUPER_ADMIN -> null
+                }
+                if (scopeBtnLabel != null) {
+                    TextButton(
+                        onClick = { showLocationDialog = true },
+                        modifier = Modifier.testTag("profile_update_location_btn")
+                    ) {
+                        Text(scopeBtnLabel)
+                    }
                 }
             }
         }
@@ -396,13 +469,12 @@ fun ProfileScreen(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Locked Employee ID field
                 OutlinedTextField(
                     value = profile?.employeeId.orEmpty(),
                     onValueChange = {},
                     readOnly = true,
                     enabled = false,
-                    label = { Text("Employee ID (Locked)") },
+                    label = { Text("Employee ID") },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Badge,
@@ -426,13 +498,6 @@ fun ProfileScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("profile_employee_id_readonly")
-                )
-
-                Text(
-                    text = "Employee ID cannot be altered from self-service.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp, top = 4.dp)
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -583,9 +648,10 @@ fun ProfileScreen(
                 viewModel.clearLocationError()
                 showLocationDialog = false
             },
-            onConfirm = { stateId, cityId, centreId, centreCode, centreName, role, lan ->
+            onConfirm = { zoneId, stateId, cityId, centreId, centreCode, centreName, role, lan ->
                 viewModel.updateOperationalLocation(
                     roleCode = role,
+                    zoneId = zoneId,
                     stateId = stateId,
                     cityId = cityId,
                     centreId = centreId,

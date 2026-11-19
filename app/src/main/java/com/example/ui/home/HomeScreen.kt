@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.EventNote
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -120,16 +122,29 @@ fun HomeScreen(
     var todayDutyCheckin by remember { mutableStateOf<DailyDutyCheckin?>(null) }
     var showDutyCheckinModal by remember { mutableStateOf(false) }
 
-    LaunchedEffect(profile?.id, authContext.scope.cityId, authContext.scope.centreId) {
+    val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
+
+    LaunchedEffect(profile?.id, authContext.activeRole, authContext.scope, authContext.isOnLeave) {
         val uid = profile?.id
         if (!uid.isNullOrBlank()) {
             viewModel.ensureOrgHierarchyLoaded()
             val checkin = incidentRepo.getTodayDutyCheckin(uid)
             todayDutyCheckin = checkin
-            val missingServerLocation = authContext.activeRole.hierarchyRank < com.example.core.model.TaskzRole.ROM.hierarchyRank &&
-                (authContext.scope.cityId.isNullOrBlank() ||
-                    (authContext.activeRole == com.example.core.model.TaskzRole.IT_MANAGER && authContext.scope.centreId.isNullOrBlank()))
-            if (checkin == null || missingServerLocation) {
+            val missingServerLocation = !authContext.isOnLeave && when (authContext.activeRole) {
+                com.example.core.model.TaskzRole.ZOM -> authContext.scope.zoneId.isNullOrBlank()
+                com.example.core.model.TaskzRole.ROM -> authContext.scope.stateId.isNullOrBlank()
+                com.example.core.model.TaskzRole.CITY_HEAD -> authContext.scope.cityId.isNullOrBlank()
+                com.example.core.model.TaskzRole.VCO ->
+                    authContext.scope.centreId.isNullOrBlank() && authContext.scope.cityId.isNullOrBlank()
+                com.example.core.model.TaskzRole.IT_MANAGER ->
+                    authContext.scope.centreId.isNullOrBlank() || authContext.scope.assignedLan.isNullOrBlank()
+                com.example.core.model.TaskzRole.COMMAND_CENTER,
+                com.example.core.model.TaskzRole.SUPER_ADMIN -> false
+            }
+            val needsCheckin = !authContext.isOnLeave &&
+                authContext.activeRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank &&
+                checkin == null
+            if (missingServerLocation || needsCheckin) {
                 showDutyCheckinModal = true
             }
         }
@@ -181,8 +196,70 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        // Today's Examination Duty Station Card
-        if (todayDutyCheckin != null) {
+        // Scope / Duty Station Card
+        val isFieldLevel = authContext.activeRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank
+        if (!isFieldLevel) {
+            if (authContext.activeRole != com.example.core.model.TaskzRole.COMMAND_CENTER &&
+                authContext.activeRole != com.example.core.model.TaskzRole.SUPER_ADMIN
+            ) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .testTag("active_duty_station_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Business,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "${authContext.activeRole.displayName} • ${authContext.scope.summaryLabel()}",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = "${authContext.activeRole.defaultScope.label} Scope",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { showDutyCheckinModal = true },
+                            modifier = Modifier.testTag("btn_change_duty_station")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Scope",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (todayDutyCheckin != null) {
             val duty = todayDutyCheckin!!
             Card(
                 shape = RoundedCornerShape(14.dp),
@@ -205,7 +282,7 @@ fun HomeScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(38.dp)
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.primary),
                             contentAlignment = Alignment.Center
@@ -214,18 +291,18 @@ fun HomeScreen(
                                 imageVector = Icons.Default.Business,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = "Station: ${duty.centreCode} · ${duty.centreName}",
+                                text = "${duty.centreCode} · ${duty.centreName}",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = if (duty.role == "VCO") "Role: VCO (Venue Commanding Officer / Venue Head)" else "Role: IT Manager (${duty.lan ?: "All LANs"})",
+                                text = if (duty.role == "VCO") "VCO" else "IT Manager (${duty.lan ?: "All LANs"})",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                             )
@@ -245,7 +322,6 @@ fun HomeScreen(
                 }
             }
         } else {
-            // Prompt to check in today
             Card(
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)),
@@ -270,17 +346,17 @@ fun HomeScreen(
                             imageVector = Icons.Default.Today,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Daily Duty Station Check-in",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                text = "Select Duty Station",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onTertiaryContainer
                             )
                             Text(
-                                text = "Tap to report your assigned Centre & Role for today",
+                                text = "Set your Centre & LAN",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                             )
@@ -290,9 +366,64 @@ fun HomeScreen(
                         onClick = { showDutyCheckinModal = true },
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Check In")
+                        Text("Set")
                     }
                 }
+            }
+        }
+
+        // On Leave Status Toggle Card
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (authContext.isOnLeave) {
+                    com.example.ui.theme.TaskzWarning.copy(alpha = 0.16f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                }
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("home_on_leave_card")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.EventBusy,
+                        contentDescription = null,
+                        tint = if (authContext.isOnLeave) com.example.ui.theme.TaskzWarning else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (authContext.isOnLeave) "On Leave" else "On Duty",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (authContext.isOnLeave) com.example.ui.theme.TaskzWarning else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (authContext.isOnLeave) "No new tasks or alarms assigned" else "Available for duty tasks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = authContext.isOnLeave,
+                    enabled = !isTogglingLeave,
+                    onCheckedChange = { checked -> viewModel.toggleLeaveStatus(checked) },
+                    modifier = Modifier.testTag("home_on_leave_switch")
+                )
             }
         }
 
@@ -513,14 +644,13 @@ fun HomeScreen(
 
         // Role-Aware Dashboard Summary Statistics
         val overviewHeading = when (authContext.activeRole) {
-            com.example.core.model.TaskzRole.IT_MANAGER -> "Centre & LAN Operations (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.SO -> "Site Operations (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.VCO -> "Venue & City Coordination (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.CITY_HEAD -> "City Operational Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.ROM -> "State / Region Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.ZOM -> "Zone Operational Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.COMMAND_CENTER -> "Command Center Overview"
-            com.example.core.model.TaskzRole.SUPER_ADMIN -> "Global Governance Overview"
+            com.example.core.model.TaskzRole.IT_MANAGER -> "Centre Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.VCO -> "Venue Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.CITY_HEAD -> "City Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.ROM -> "State Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.ZOM -> "Zone Overview (${authContext.scope.summaryLabel()})"
+            com.example.core.model.TaskzRole.COMMAND_CENTER -> "SPOC Overview"
+            com.example.core.model.TaskzRole.SUPER_ADMIN -> "Admin Overview"
         }
         Text(
             text = overviewHeading,
@@ -567,7 +697,7 @@ fun HomeScreen(
                 onClick = onNavigateToTasks
             )
             StatCard(
-                title = if (scopedSummary.escalatedIncidents > 0) "Open / Escalated Incidents" else "Open Incidents",
+                title = if (scopedSummary.escalatedIncidents > 0) "Open / Escalated" else "Open Incidents",
                 value = if (scopedSummary.escalatedIncidents > 0) "${scopedSummary.openIncidents} (${scopedSummary.escalatedIncidents}↑)" else scopedSummary.openIncidents.toString(),
                 icon = Icons.Default.Lan,
                 color = MaterialTheme.colorScheme.tertiary,
@@ -600,10 +730,10 @@ fun HomeScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(22.dp))
 
         Text(
-            text = "Authorized Modules (${authContext.activeRole.displayName})",
+            text = "Modules",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -611,22 +741,22 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         ModuleTile(
-            title = "Task Management",
-            subtitle = "Scoped duties for ${authContext.scope.summaryLabel()} • ${authContext.activeRole.displayName}",
+            title = "Tasks",
+            subtitle = "${authContext.scope.summaryLabel()} • ${authContext.activeRole.displayName}",
             icon = Icons.Default.Assignment,
             tag = "Active",
             onClick = onNavigateToTasks,
             testTag = "home_module_tasks"
         )
 
-        if (viewModel.permissionManager.canManageGroups()) {
+        if (viewModel.permissionManager.canSelfJoinGroups()) {
             Spacer(modifier = Modifier.height(10.dp))
 
             ModuleTile(
-                title = "Groups & Events",
-                subtitle = "Organize workforce by event, shifts, and operational units",
+                title = "Exam Groups & Shifts",
+                subtitle = "Exam groups, shifts & 1-click task join",
                 icon = Icons.Default.Groups,
-                tag = "Scope Mgmt",
+                tag = if (viewModel.permissionManager.canManageGroups()) "Manage" else "Join",
                 onClick = onNavigateToGroups,
                 testTag = "home_module_groups"
             )
@@ -635,8 +765,8 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         ModuleTile(
-            title = "System Incident Register",
-            subtitle = "Scoped technical failures, escalations, and live LAN logs",
+            title = "Incident Register",
+            subtitle = "System failures & LAN logs",
             icon = Icons.Default.DesktopWindows,
             tag = "Technical",
             onClick = onNavigateToIncidents,
@@ -646,8 +776,8 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         ModuleTile(
-            title = "Employee Profile & Active Role",
-            subtitle = "Switch between your assigned roles, view scope & device info",
+            title = "Profile & Role",
+            subtitle = "Roles, scope & leave status",
             icon = Icons.Default.Person,
             tag = "Profile",
             onClick = onNavigateToProfile,
@@ -657,10 +787,10 @@ fun HomeScreen(
         if (viewModel.permissionManager.canManageUsers()) {
             Spacer(modifier = Modifier.height(10.dp))
             ModuleTile(
-                title = "Administrative Console",
-                subtitle = "Manage employees, roles, geographic scope & audit logs",
+                title = "Admin Console",
+                subtitle = "Users, roles & scope controls",
                 icon = Icons.Default.AdminPanelSettings,
-                tag = "Super Admin",
+                tag = "Admin",
                 isHighlighted = true,
                 onClick = onNavigateToAdmin,
                 testTag = "home_module_admin"
@@ -679,10 +809,11 @@ fun HomeScreen(
                     viewModel.clearLocationError()
                     showDutyCheckinModal = false
                 },
-                onConfirm = { stateId, cityId, centreId, centreCode, centreName, role, lan ->
+                onConfirm = { zoneId, stateId, cityId, centreId, centreCode, centreName, role, lan ->
                     val user = profile ?: return@DailyDutyCheckinDialog
                     viewModel.updateOperationalLocation(
                         roleCode = role,
+                        zoneId = zoneId,
                         stateId = stateId,
                         cityId = cityId,
                         centreId = centreId,
@@ -856,6 +987,7 @@ fun DailyDutyCheckinDialog(
     errorMessage: String? = null,
     onDismiss: () -> Unit,
     onConfirm: (
+        zoneId: String?,
         stateId: String?,
         cityId: String?,
         centreId: String?,
@@ -869,10 +1001,32 @@ fun DailyDutyCheckinDialog(
     var fallbackCentres by remember { mutableStateOf<List<TaskGroup>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        if (orgHierarchy.centres.isEmpty()) {
+        if (orgHierarchy.centres.isEmpty() || orgHierarchy.zones.isEmpty()) {
             runCatching { com.example.TaskzApplication.instance.taskzSyncManager.refreshOrgHierarchy() }
         }
         fallbackCentres = incidentRepo.getAvailableCentres()
+    }
+
+    val canSwitchOnboardingRole = currentActiveRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank
+    var selectedRole by remember(currentCheckin, currentActiveRole) {
+        mutableStateOf(
+            if (canSwitchOnboardingRole) {
+                com.example.core.model.TaskzRole.fromCode(currentCheckin?.role ?: currentActiveRole.code).code
+            } else {
+                currentActiveRole.code
+            }
+        )
+    }
+    val effectiveRole = remember(selectedRole, currentActiveRole, canSwitchOnboardingRole) {
+        if (canSwitchOnboardingRole) com.example.core.model.TaskzRole.fromCode(selectedRole) else currentActiveRole
+    }
+
+    val zones = orgHierarchy.zones.sortedBy { it.name }
+    var selectedZoneId by remember(zones, currentScope.zoneId) {
+        mutableStateOf(
+            zones.firstOrNull { it.id == currentScope.zoneId }?.id
+                ?: zones.firstOrNull()?.id
+        )
     }
 
     val states = orgHierarchy.states.sortedBy { it.name }
@@ -933,20 +1087,10 @@ fun DailyDutyCheckinDialog(
         )
     }
 
+    var zoneDropdownExpanded by remember { mutableStateOf(false) }
     var stateDropdownExpanded by remember { mutableStateOf(false) }
     var cityDropdownExpanded by remember { mutableStateOf(false) }
     var centreDropdownExpanded by remember { mutableStateOf(false) }
-
-    val canSwitchOnboardingRole = currentActiveRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank
-    var selectedRole by remember(currentCheckin, currentActiveRole) {
-        mutableStateOf(
-            if (canSwitchOnboardingRole) {
-                currentCheckin?.role ?: currentActiveRole.code
-            } else {
-                currentActiveRole.code
-            }
-        )
-    }
 
     val availableLans = remember { (1..25).map { "LAN $it" } }
     var selectedLan by remember(currentCheckin, currentScope.assignedLan) {
@@ -954,31 +1098,43 @@ fun DailyDutyCheckinDialog(
     }
     var lanDropdownExpanded by remember { mutableStateOf(false) }
 
+    val selectedZone = zones.firstOrNull { it.id == selectedZoneId }
     val selectedState = states.firstOrNull { it.id == selectedStateId }
     val selectedCity = citiesForState.firstOrNull { it.id == selectedCityId }
     val selectedOrgCentre = centresForCity.firstOrNull { it.id == selectedOrgCentreId }
 
+    val showZoneField = effectiveRole == com.example.core.model.TaskzRole.ZOM
+    val showStateField = effectiveRole in setOf(
+        com.example.core.model.TaskzRole.ROM,
+        com.example.core.model.TaskzRole.CITY_HEAD,
+        com.example.core.model.TaskzRole.VCO,
+        com.example.core.model.TaskzRole.IT_MANAGER
+    )
+    val showCityField = effectiveRole in setOf(
+        com.example.core.model.TaskzRole.CITY_HEAD,
+        com.example.core.model.TaskzRole.VCO,
+        com.example.core.model.TaskzRole.IT_MANAGER
+    )
+    val showCentreField = effectiveRole in setOf(
+        com.example.core.model.TaskzRole.VCO,
+        com.example.core.model.TaskzRole.IT_MANAGER
+    )
+    val showLanField = effectiveRole == com.example.core.model.TaskzRole.IT_MANAGER
+
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
         title = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Business,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Duty Station & Scope Setup",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Business,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Select your State, City, Examination Centre & Role.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "${effectiveRole.displayName} Scope",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }
         },
@@ -989,11 +1145,78 @@ fun DailyDutyCheckinDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (states.isNotEmpty()) {
-                    // 1. State Selector
+                if (canSwitchOnboardingRole) {
                     Text(
-                        text = "1. Select State:",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        text = "Role",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedRole == "IT_MANAGER",
+                            onClick = { selectedRole = "IT_MANAGER" },
+                            label = { Text("IT Manager", fontSize = 12.sp) },
+                            leadingIcon = { Icon(Icons.Default.Lan, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            modifier = Modifier.weight(1f).testTag("role_chip_it_manager")
+                        )
+                        FilterChip(
+                            selected = selectedRole == "VCO",
+                            onClick = { selectedRole = "VCO" },
+                            label = { Text("VCO", fontSize = 12.sp) },
+                            leadingIcon = { Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            modifier = Modifier.weight(1f).testTag("role_chip_vco")
+                        )
+                    }
+                }
+
+                if (showZoneField) {
+                    Text(
+                        text = "Zone",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedCard(
+                            onClick = { zoneDropdownExpanded = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("daily_zone_dropdown")
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = selectedZone?.let { "${it.name} (${it.code})" } ?: "Select Zone",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = zoneDropdownExpanded,
+                            onDismissRequest = { zoneDropdownExpanded = false },
+                            modifier = Modifier.heightIn(max = 260.dp)
+                        ) {
+                            zones.forEach { zn ->
+                                DropdownMenuItem(
+                                    text = { Text("${zn.name} (${zn.code})", fontWeight = FontWeight.SemiBold) },
+                                    onClick = {
+                                        selectedZoneId = zn.id
+                                        zoneDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (showStateField && states.isNotEmpty()) {
+                    Text(
+                        text = "State",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Box(modifier = Modifier.fillMaxWidth()) {
                         OutlinedCard(
@@ -1032,11 +1255,10 @@ fun DailyDutyCheckinDialog(
                     }
                 }
 
-                if (citiesForState.isNotEmpty()) {
-                    // 2. City Selector (14 Rajasthan Cities)
+                if (showCityField && citiesForState.isNotEmpty()) {
                     Text(
-                        text = "2. Select City:",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        text = "City",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Box(modifier = Modifier.fillMaxWidth()) {
                         OutlinedCard(
@@ -1075,142 +1297,97 @@ fun DailyDutyCheckinDialog(
                     }
                 }
 
-                // 3. Examination Centre Selector
-                Text(
-                    text = "3. Select Examination Centre:",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                )
-
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedCard(
-                        onClick = { centreDropdownExpanded = true },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("daily_centre_dropdown")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                val titleText = selectedOrgCentre?.let { "${it.code} · ${it.name}" }
-                                    ?: fallbackCentre?.title
-                                    ?: "Select Examination Centre"
-                                val subText = selectedCity?.let { "${it.name}, ${selectedState?.name ?: "Rajasthan"}" }
-                                    ?: fallbackCentre?.description
-                                    ?: "Jaipur, Rajasthan"
-                                Text(
-                                    text = titleText,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = subText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
-                        }
-                    }
-
-                    DropdownMenu(
-                        expanded = centreDropdownExpanded,
-                        onDismissRequest = { centreDropdownExpanded = false },
-                        modifier = Modifier.heightIn(max = 300.dp)
-                    ) {
-                        if (centresForCity.isNotEmpty()) {
-                            centresForCity.forEach { centre ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(text = "${centre.code} · ${centre.name}", fontWeight = FontWeight.SemiBold)
-                                            Text(
-                                                text = "${selectedCity?.name ?: centre.districtName.orEmpty()}, ${selectedState?.name ?: "Rajasthan"}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        selectedOrgCentreId = centre.id
-                                        centreDropdownExpanded = false
-                                    }
-                                )
-                            }
-                        } else {
-                            fallbackCentres.forEach { centre ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(text = centre.title, fontWeight = FontWeight.SemiBold)
-                                            Text(text = centre.description ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                    },
-                                    onClick = {
-                                        fallbackCentre = centre
-                                        centreDropdownExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 4. Duty Role Selection
-                Text(
-                    text = "4. Your Duty Role:",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                )
-
-                if (canSwitchOnboardingRole) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = selectedRole == "IT_MANAGER",
-                            onClick = { selectedRole = "IT_MANAGER" },
-                            label = { Text("IT MANAGER\n(LAN & Systems)", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.Lan, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("role_chip_it_manager")
-                        )
-
-                        FilterChip(
-                            selected = selectedRole == "VCO",
-                            onClick = { selectedRole = "VCO" },
-                            label = { Text("VCO\n(Venue Head)", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("role_chip_vco")
-                        )
-                    }
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Security, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = currentActiveRole.displayName,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-                }
-
-                // 5. If IT Manager: Select Assigned LAN
-                if (selectedRole == "IT_MANAGER") {
+                if (showCentreField) {
                     Text(
-                        text = "5. Assigned LAN:",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        text = "Centre",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedCard(
+                            onClick = { centreDropdownExpanded = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("daily_centre_dropdown")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    val titleText = selectedOrgCentre?.let { "${it.code} · ${it.name}" }
+                                        ?: fallbackCentre?.title
+                                        ?: "Select Centre"
+                                    val subText = selectedCity?.let { "${it.name}, ${selectedState?.name ?: ""}" }
+                                        ?: fallbackCentre?.description
+                                        ?: ""
+                                    Text(
+                                        text = titleText,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    if (subText.isNotBlank()) {
+                                        Text(
+                                            text = subText,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = centreDropdownExpanded,
+                            onDismissRequest = { centreDropdownExpanded = false },
+                            modifier = Modifier.heightIn(max = 300.dp)
+                        ) {
+                            if (centresForCity.isNotEmpty()) {
+                                centresForCity.forEach { centre ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(text = "${centre.code} · ${centre.name}", fontWeight = FontWeight.SemiBold)
+                                                Text(
+                                                    text = "${selectedCity?.name ?: centre.districtName.orEmpty()}, ${selectedState?.name ?: ""}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedOrgCentreId = centre.id
+                                            centreDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            } else {
+                                fallbackCentres.forEach { centre ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(text = centre.title, fontWeight = FontWeight.SemiBold)
+                                                Text(text = centre.description ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                        },
+                                        onClick = {
+                                            fallbackCentre = centre
+                                            centreDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (showLanField) {
+                    Text(
+                        text = "Assigned LAN",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
 
                     Box(modifier = Modifier.fillMaxWidth()) {
@@ -1256,6 +1433,14 @@ fun DailyDutyCheckinDialog(
                     }
                 }
 
+                if (!showZoneField && !showStateField && !showCityField && !showCentreField) {
+                    Text(
+                        text = "Global scope active for ${effectiveRole.displayName}.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 if (!errorMessage.isNullOrBlank()) {
                     Text(
                         text = errorMessage,
@@ -1269,21 +1454,43 @@ fun DailyDutyCheckinDialog(
             Button(
                 enabled = !isSaving,
                 onClick = {
-                    val code = selectedOrgCentre?.code
-                        ?: fallbackCentre?.code?.ifBlank { "141" }
-                        ?: "141"
-                    val name = selectedOrgCentre?.name
-                        ?: fallbackCentre?.title?.removePrefix("$code ·")?.removePrefix("$code -")?.trim()
-                        ?: "${selectedCity?.name ?: "Jaipur"} Centre"
-                    val lan = if (selectedRole == "IT_MANAGER") selectedLan else null
+                    val outZoneId = when (effectiveRole) {
+                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.id
+                        else -> selectedState?.zoneId ?: selectedZone?.id
+                    }
+                    val outStateId = if (showStateField) selectedState?.id else null
+                    val outCityId = if (showCityField) selectedCity?.id else null
+                    val outCentreId = if (showCentreField) selectedOrgCentre?.id else null
+                    val outCode = when (effectiveRole) {
+                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.code.orEmpty()
+                        com.example.core.model.TaskzRole.ROM -> selectedState?.code.orEmpty()
+                        com.example.core.model.TaskzRole.CITY_HEAD -> selectedCity?.code.orEmpty()
+                        com.example.core.model.TaskzRole.COMMAND_CENTER,
+                        com.example.core.model.TaskzRole.SUPER_ADMIN -> "GLOBAL"
+                        else -> selectedOrgCentre?.code
+                            ?: fallbackCentre?.code?.ifBlank { "141" }
+                            ?: "141"
+                    }
+                    val outName = when (effectiveRole) {
+                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.name.orEmpty()
+                        com.example.core.model.TaskzRole.ROM -> selectedState?.name.orEmpty()
+                        com.example.core.model.TaskzRole.CITY_HEAD -> selectedCity?.name.orEmpty()
+                        com.example.core.model.TaskzRole.COMMAND_CENTER,
+                        com.example.core.model.TaskzRole.SUPER_ADMIN -> "Global"
+                        else -> selectedOrgCentre?.name
+                            ?: fallbackCentre?.title?.removePrefix("$outCode ·")?.removePrefix("$outCode -")?.trim()
+                            ?: selectedCity?.name.orEmpty()
+                    }
+                    val outLan = if (showLanField) selectedLan else null
                     onConfirm(
-                        selectedState?.id,
-                        selectedCity?.id,
-                        selectedOrgCentre?.id,
-                        code,
-                        name,
-                        selectedRole,
-                        lan
+                        outZoneId,
+                        outStateId,
+                        outCityId,
+                        outCentreId,
+                        outCode,
+                        outName,
+                        effectiveRole.code,
+                        outLan
                     )
                 },
                 shape = RoundedCornerShape(10.dp),
@@ -1299,7 +1506,7 @@ fun DailyDutyCheckinDialog(
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                 }
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(if (isSaving) "Saving..." else "Confirm Station")
+                Text(if (isSaving) "Saving..." else "Save")
             }
         },
         dismissButton = {

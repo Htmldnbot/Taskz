@@ -51,6 +51,7 @@ import com.example.ui.theme.TaskzSuccess
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -64,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import com.example.core.model.ScopedMemberSearchResult
+import com.example.ui.theme.TaskzWarning
 import kotlinx.coroutines.flow.collectLatest
 
 @Composable
@@ -76,6 +78,7 @@ fun GroupMembersScreen(
     val members by viewModel.groupMembers.collectAsStateWithLifecycle()
     val directoryMembers by viewModel.scopedDirectoryMembers.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val canManage = viewModel.canManageGroups()
     val snackbarHostState = remember { SnackbarHostState() }
     var showAddMemberDialog by remember { mutableStateOf(false) }
 
@@ -124,19 +127,21 @@ fun GroupMembersScreen(
                     }
                 }
 
-                Button(
-                    onClick = {
-                        viewModel.loadScopedDirectoryMembers("")
-                        showAddMemberDialog = true
-                    },
-                    enabled = !isLoading,
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .testTag("btn_add_group_members")
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Members", modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add")
+                if (canManage) {
+                    Button(
+                        onClick = {
+                            viewModel.loadScopedDirectoryMembers("")
+                            showAddMemberDialog = true
+                        },
+                        enabled = !isLoading,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_add_group_members")
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add Members", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add")
+                    }
                 }
             }
 
@@ -145,16 +150,18 @@ fun GroupMembersScreen(
             if (members.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "No members in this group yet")
-                        Spacer(modifier = Modifier.height(10.dp))
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.loadScopedDirectoryMembers("")
-                                showAddMemberDialog = true
-                            },
-                            modifier = Modifier.heightIn(min = 48.dp)
-                        ) {
-                            Text("Add Members (+ Sync Group Tasks)")
+                        Text(text = "No members yet")
+                        if (canManage) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.loadScopedDirectoryMembers("")
+                                    showAddMemberDialog = true
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text("Add Members")
+                            }
                         }
                     }
                 }
@@ -186,53 +193,50 @@ fun GroupMembersScreen(
                     (it.centreCode?.contains(search, ignoreCase = true) == true)
             }
         }
+        val eligibleVisibleIds = remember(visibleCandidates) {
+            visibleCandidates.filter { !it.isOnLeave }.map { it.id }.toSet()
+        }
 
         AlertDialog(
             onDismissRequest = { showAddMemberDialog = false },
-            title = { Text("Add Members & Sync Tasks", fontWeight = FontWeight.Bold) },
+            title = { Text("Add Members", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "Selected members will automatically receive all active tasks in this group.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     OutlinedTextField(
                         value = search,
                         onValueChange = {
                             search = it
                             viewModel.loadScopedDirectoryMembers(it)
                         },
-                        placeholder = { Text("Search name, emp ID, centre...") },
+                        placeholder = { Text("Search name, ID, centre...") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search members") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("input_group_member_search")
                     )
-                    if (visibleCandidates.isNotEmpty()) {
+                    if (eligibleVisibleIds.isNotEmpty()) {
                         TextButton(
                             onClick = {
-                                val allVisibleIds = visibleCandidates.map { it.id }.toSet()
-                                selectedIds = if (allVisibleIds.all { it in selectedIds }) {
-                                    selectedIds - allVisibleIds
+                                selectedIds = if (eligibleVisibleIds.all { it in selectedIds }) {
+                                    selectedIds - eligibleVisibleIds
                                 } else {
-                                    selectedIds + allVisibleIds
+                                    selectedIds + eligibleVisibleIds
                                 }
                             },
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .testTag("btn_select_all_group_members")
                         ) {
-                            Text("Select / Deselect All (${visibleCandidates.size})")
+                            Text("Select / Deselect All (${eligibleVisibleIds.size})")
                         }
                     }
                     if (visibleCandidates.isEmpty()) {
                         Text(
-                            text = "No eligible scoped users available to add.",
+                            text = "No members found.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -245,11 +249,12 @@ fun GroupMembersScreen(
                         ) {
                             items(visibleCandidates, key = { it.id }) { candidate ->
                                 val isChecked = candidate.id in selectedIds
+                                val isUnavailable = candidate.isOnLeave
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 48.dp)
-                                        .clickable {
+                                        .clickable(enabled = !isUnavailable) {
                                             selectedIds = if (isChecked) selectedIds - candidate.id else selectedIds + candidate.id
                                         }
                                         .padding(horizontal = 4.dp, vertical = 4.dp),
@@ -257,20 +262,51 @@ fun GroupMembersScreen(
                                 ) {
                                     Checkbox(
                                         checked = isChecked,
+                                        enabled = !isUnavailable,
                                         onCheckedChange = { checked ->
                                             selectedIds = if (checked) selectedIds + candidate.id else selectedIds - candidate.id
                                         }
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = candidate.fullName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                color = if (isUnavailable) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            if (isUnavailable) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = TaskzWarning.copy(alpha = 0.18f),
+                                                    modifier = Modifier.testTag("badge_on_leave_${candidate.employeeId}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.EventBusy,
+                                                            contentDescription = "On Leave",
+                                                            tint = TaskzWarning,
+                                                            modifier = Modifier.size(12.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(3.dp))
+                                                        Text(
+                                                            text = "On Leave",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                            color = TaskzWarning
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Text(
-                                            text = candidate.fullName,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = "${candidate.employeeId} • ${candidate.activeRoleCode}" +
+                                            text = "${candidate.employeeId} • ${com.example.core.model.TaskzRole.fromCode(candidate.activeRoleCode).displayName}" +
                                                 (candidate.centreCode?.let { " • $it" } ?: ""),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,

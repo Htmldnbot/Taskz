@@ -230,9 +230,6 @@ fun MainShell(
             currentTab = MainTab.HOME
             subRouteStack.clear()
         }
-        if (currentSubRoute is SubRoute.GroupsList && !permissionManager.canManageGroups()) {
-            subRouteStack.clear()
-        }
     }
 
     // Server-verified deep link routing from push/system notifications & notification sheet
@@ -323,6 +320,22 @@ fun MainShell(
                         }
                     },
                     actions = {
+                        if (authContext.isOnLeave) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = TaskzWarning.copy(alpha = 0.18f),
+                                modifier = Modifier
+                                    .padding(end = 4.dp)
+                                    .testTag("topbar_on_leave_badge")
+                            ) {
+                                Text(
+                                    text = "On Leave",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TaskzWarning,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
                         // Active Role Selector (shows ONLY server-assigned roles)
                         Box {
                             AssistChip(

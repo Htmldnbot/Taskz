@@ -207,14 +207,21 @@ class TaskAlarmActivity : ComponentActivity() {
                             finish()
                         }
                     },
-                    onPercentageResponse = { pct ->
+                    onStopAudio = {
+                        stopAllAlarmOutputs()
+                    },
+                    onPercentageResponse = { pct, nextReminderMins ->
                         stopAllAlarmOutputs()
                         actionState = AlarmActionState.PROCESSING
                         coroutineScope.launch {
                             handlePercentageAction(
                                 taskId = taskId,
+                                title = title,
+                                importance = importance,
+                                alarmType = alarmType,
                                 targetPercentage = resolvedTargetPercentage,
                                 percentage = pct,
+                                nextReminderMinutes = nextReminderMins,
                                 onStateChange = { newState, msg ->
                                     actionState = newState
                                     statusMessage = msg
@@ -670,8 +677,12 @@ class TaskAlarmActivity : ComponentActivity() {
 
     private suspend fun handlePercentageAction(
         taskId: String,
+        title: String,
+        importance: String,
+        alarmType: String,
         targetPercentage: Int,
         percentage: Int,
+        nextReminderMinutes: Int?,
         onStateChange: (AlarmActionState, String) -> Unit
     ) = withContext(Dispatchers.IO) {
         val db = TaskzDatabase.getInstance(applicationContext)
@@ -697,6 +708,13 @@ class TaskAlarmActivity : ComponentActivity() {
         val requiresConfirmation = task?.completionPolicy == CompletionPolicy.CREATOR_CONFIRMATION ||
             task?.requiresCompletionConfirmation == true
         val reachedTarget = clampedPct >= effectiveTarget
+        val followUpMins = if (!reachedTarget) nextReminderMinutes?.coerceIn(1, 120) else null
+
+        val responseNote = if (followUpMins != null) {
+            "Progress $clampedPct% — next reminder in ${followUpMins}m"
+        } else {
+            "Progress updated to $clampedPct%"
+        }
 
         val localResponse = TaskResponseEntity(
             id = idempotencyKey,
@@ -710,7 +728,7 @@ class TaskAlarmActivity : ComponentActivity() {
             percentageValue = clampedPct,
             numericValue1 = null,
             numericValue2 = null,
-            textValue = "Progress updated to $clampedPct% from alarm",
+            textValue = responseNote,
             dynamicValuesJson = "{}",
             submittedAt = nowIso,
             syncStatus = "PENDING_SYNC"
@@ -721,7 +739,7 @@ class TaskAlarmActivity : ComponentActivity() {
             put("responseType", ResponseType.PERCENTAGE.name)
             put("responseValue", "$clampedPct%")
             put("percentage", clampedPct)
-            put("textValue", localResponse.textValue)
+            put("textValue", responseNote)
             put("deviceTimestamp", nowIso)
         }
         val outboxId = db.outboxDao().enqueueEvent(
@@ -742,8 +760,37 @@ class TaskAlarmActivity : ComponentActivity() {
             else -> "in_progress"
         }
         db.taskDao().markLocalTaskCompletionState(taskId, localStatus, clampedPct, nowIso, syncState = "PENDING_SYNC")
+
+        val scheduler = TaskAlarmScheduler(applicationContext)
         if (reachedTarget) {
-            TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
+            scheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
+        } else if (followUpMins != null) {
+            val baseTask = task ?: com.example.core.model.TaskItem(
+                id = taskId,
+                groupId = "",
+                title = title,
+                priority = importance.lowercase(),
+                status = "in_progress",
+                visibility = "everyone",
+                allowSelfJoin = true,
+                joinRequiresApproval = false,
+                notifyCreatorOnJoin = false,
+                requiresCompletionConfirmation = requiresConfirmation,
+                maxParticipants = null,
+                createdBy = userId,
+                createdAt = nowIso,
+                updatedAt = nowIso,
+                taskType = TaskType.PROGRESS,
+                importance = runCatching { com.example.core.model.TaskImportance.valueOf(importance.uppercase()) }
+                    .getOrDefault(com.example.core.model.TaskImportance.NORMAL),
+                alarmType = runCatching { com.example.core.model.AlarmType.valueOf(alarmType.uppercase()) }
+                    .getOrDefault(com.example.core.model.AlarmType.FULL_SCREEN_ALARM),
+                responseType = ResponseType.PERCENTAGE,
+                targetPercentage = effectiveTarget
+            )
+            scheduler.scheduleNextProgressiveReminder(baseTask, followUpMins, userId)
+        } else {
+            scheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
         }
 
         val authRepo = com.example.TaskzApplication.instance.authRepository
@@ -761,7 +808,7 @@ class TaskAlarmActivity : ComponentActivity() {
                 responseType = ResponseType.PERCENTAGE.name,
                 responseValue = "$clampedPct%",
                 percentage = clampedPct,
-                text = localResponse.textValue,
+                text = responseNote,
                 idempotencyKey = idempotencyKey,
                 deviceTimestamp = nowIso
             )
@@ -777,7 +824,7 @@ class TaskAlarmActivity : ComponentActivity() {
                             responseType = ResponseType.PERCENTAGE.name,
                             responseValue = "$clampedPct%",
                             percentage = clampedPct,
-                            text = localResponse.textValue,
+                            text = responseNote,
                             idempotencyKey = idempotencyKey,
                             deviceTimestamp = nowIso
                         )
@@ -792,7 +839,7 @@ class TaskAlarmActivity : ComponentActivity() {
                 db.taskResponseDao().markResponseSynced(idempotencyKey)
                 db.taskDao().markLocalTaskCompletionState(taskId, srvStatus, clampedPct, nowIso, syncState = "SYNCED")
                 if (srvStatus.equals("completed", true) || srvStatus.equals("pending_confirmation", true) || reachedTarget) {
-                    TaskAlarmScheduler(applicationContext).cancelAlarmsForTask(taskId)
+                    scheduler.cancelAlarmsForTask(taskId, stopActiveAlarm = true)
                 }
                 if (db.outboxDao().getPendingEventsForUser(userId).isEmpty()) {
                     db.syncMetadataDao().updateLastSuccessfulSync(System.currentTimeMillis())
@@ -805,11 +852,12 @@ class TaskAlarmActivity : ComponentActivity() {
             SyncWorker.enqueueSync(applicationContext)
         }
 
+        val reminderSuffix = if (followUpMins != null) "\nNext reminder in ${followUpMins}m" else ""
         withContext(Dispatchers.Main) {
             if (isServerConfirmed) {
-                onStateChange(AlarmActionState.SERVER_CONFIRMED, "PROGRESS $clampedPct% SYNCED")
+                onStateChange(AlarmActionState.SERVER_CONFIRMED, "PROGRESS $clampedPct% SYNCED$reminderSuffix")
             } else {
-                onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "PROGRESS $clampedPct% SAVED\nPENDING SYNC")
+                onStateChange(AlarmActionState.RESPONSE_SAVED_PENDING_SYNC, "PROGRESS $clampedPct% SAVED$reminderSuffix")
             }
         }
     }
@@ -998,7 +1046,8 @@ fun TaskAlarmScreen(
     actionState: AlarmActionState,
     statusMessage: String,
     onAcknowledge: () -> Unit,
-    onPercentageResponse: (Int) -> Unit = {},
+    onStopAudio: () -> Unit = {},
+    onPercentageResponse: (Int, Int?) -> Unit = { _, _ -> },
     onYesNoResponse: (String) -> Unit,
     onSnooze: (Int) -> Unit,
     onOpenTask: () -> Unit,
@@ -1246,8 +1295,15 @@ fun TaskAlarmScreen(
                     }
                     when (effectiveResponseType) {
                         ResponseType.PERCENTAGE -> {
+                            var pendingPartialPct by remember { mutableStateOf<Int?>(null) }
+                            var chosenReminderMins by remember(reminderIntervalMinutes) {
+                                mutableStateOf(
+                                    reminderIntervalMinutes.takeIf { it in listOf(5, 10, 15, 30) } ?: 10
+                                )
+                            }
+
                             Text(
-                                text = "Select Progress Percentage (Target: ${targetPercentage}%)",
+                                text = "Select Progress (Target: ${targetPercentage}%)",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onBackground,
@@ -1260,11 +1316,24 @@ fun TaskAlarmScreen(
                             ) {
                                 listOf(25, 50, 75, 100).forEach { pct ->
                                     val isDoneTarget = pct >= targetPercentage
+                                    val isSelectedPartial = pendingPartialPct == pct
                                     Button(
-                                        onClick = { onPercentageResponse(pct) },
+                                        onClick = {
+                                            if (isDoneTarget) {
+                                                pendingPartialPct = null
+                                                onPercentageResponse(pct, null)
+                                            } else {
+                                                onStopAudio()
+                                                pendingPartialPct = pct
+                                            }
+                                        },
                                         shape = RoundedCornerShape(12.dp),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (isDoneTarget) TaskzSuccess else accentColor
+                                            containerColor = when {
+                                                isDoneTarget -> TaskzSuccess
+                                                isSelectedPartial -> MaterialTheme.colorScheme.primary
+                                                else -> accentColor
+                                            }
                                         ),
                                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
                                         modifier = Modifier
@@ -1281,17 +1350,65 @@ fun TaskAlarmScreen(
                                 }
                             }
 
-                            OutlinedButton(
-                                onClick = onAcknowledge,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("alarm_btn_acknowledge")
-                            ) {
-                                Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "ACKNOWLEDGE ONLY", fontWeight = FontWeight.SemiBold)
+                            AnimatedVisibility(visible = pendingPartialPct != null) {
+                                Card(
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "Progress ${pendingPartialPct ?: 25}% — Next reminder after:",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            listOf(5, 10, 15, 30).forEach { mins ->
+                                                val isChosen = chosenReminderMins == mins
+                                                OutlinedButton(
+                                                    onClick = { chosenReminderMins = mins },
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    colors = ButtonDefaults.outlinedButtonColors(
+                                                        containerColor = if (isChosen) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                                        contentColor = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                                    ),
+                                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .height(48.dp)
+                                                        .testTag("alarm_remind_${mins}m")
+                                                ) {
+                                                    Text("${mins}m", fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val pctToSave = pendingPartialPct ?: return@Button
+                                                onPercentageResponse(pctToSave, chosenReminderMins)
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(50.dp)
+                                                .testTag("alarm_btn_confirm_partial")
+                                        ) {
+                                            Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Save ${pendingPartialPct ?: 25}% & Remind in ${chosenReminderMins}m",
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 

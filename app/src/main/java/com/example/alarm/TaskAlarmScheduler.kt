@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AlarmType
+import com.example.core.model.ResponseType
 import com.example.core.model.TaskImportance
 import com.example.core.model.TaskItem
 import com.example.core.model.TaskType
@@ -75,6 +76,13 @@ class TaskAlarmScheduler(private val context: Context) {
             return@withContext
         }
 
+        if (database.authorizationDao().getAuthContext(targetUserId)?.isOnLeave == true ||
+            database.profileDao().getCachedProfile()?.isOnLeave == true
+        ) {
+            cancelAlarmsForTask(task.id, stopActiveAlarm = true)
+            return@withContext
+        }
+
         if (task.status.equals("completed", ignoreCase = true) ||
             task.status.equals("cancelled", ignoreCase = true) ||
             task.status.equals("pending_confirmation", ignoreCase = true) ||
@@ -99,11 +107,12 @@ class TaskAlarmScheduler(private val context: Context) {
 
         val now = System.currentTimeMillis()
         val alarmsToInsert = mutableListOf<ScheduledAlarmRecordEntity>()
+        val isProgressive = task.taskType == TaskType.PROGRESS || task.responseType == ResponseType.PERCENTAGE
 
         // 1. Advance Reminders (e.g., 30m before, 10m before, 5m before, 0m at task time)
         for (minutesBefore in task.advanceRemindersMinutes) {
             val rawTriggerMillis = mainTimeMillis - (minutesBefore * 60 * 1000L)
-            if (rawTriggerMillis > now - 60_000L) { // Allow immediate or near-future
+            if (rawTriggerMillis > now - 60_000L) {
                 val triggerMillis = maxOf(rawTriggerMillis, now + 1500L)
                 val label = if (minutesBefore == 0) "At task time" else "$minutesBefore minutes before"
                 val alarmId = generateAlarmId(task.id, -minutesBefore)
@@ -122,8 +131,8 @@ class TaskAlarmScheduler(private val context: Context) {
             }
         }
 
-        // 2. Overdue Reminders if remindUntilCompleted = true
-        if (task.remindUntilCompleted && !task.status.equals("completed", ignoreCase = true)) {
+        // 2. Auto Overdue Reminders ONLY for non-progressive tasks (progressive tasks ask user 5/10/15/30m until 100%)
+        if (!isProgressive && task.remindUntilCompleted && !task.status.equals("completed", ignoreCase = true)) {
             val interval = task.overdueReminderIntervalMinutes ?: 5
             val maxCount = task.maxOverdueReminders ?: 3
             for (i in 1..maxCount) {
@@ -154,6 +163,50 @@ class TaskAlarmScheduler(private val context: Context) {
     }
 
     /**
+     * Schedules the next user-chosen reminder (5m, 10m, 15m, or 30m) for a progressive task (< 100%).
+     */
+    suspend fun scheduleNextProgressiveReminder(
+        task: TaskItem,
+        delayMinutes: Int,
+        userId: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val targetUserId = userId ?: userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id ?: ""
+        if (targetUserId.isBlank()) return@withContext
+        if (database.authorizationDao().getAuthContext(targetUserId)?.isOnLeave == true ||
+            database.profileDao().getCachedProfile()?.isOnLeave == true
+        ) {
+            cancelAlarmsForTask(task.id, stopActiveAlarm = true)
+            return@withContext
+        }
+        if (task.status.equals("completed", ignoreCase = true) ||
+            task.status.equals("cancelled", ignoreCase = true) ||
+            task.status.equals("pending_confirmation", ignoreCase = true)
+        ) {
+            cancelAlarmsForTask(task.id, stopActiveAlarm = true)
+            return@withContext
+        }
+
+        cancelAlarmsForTask(task.id, stopActiveAlarm = true)
+
+        val safeDelay = delayMinutes.coerceIn(1, 120)
+        val triggerMillis = System.currentTimeMillis() + (safeDelay * 60 * 1000L)
+        val alarmId = generateAlarmId(task.id, 5000 + safeDelay)
+        val alarmEntity = ScheduledAlarmRecordEntity(
+            alarmId = alarmId,
+            userId = targetUserId,
+            taskId = task.id,
+            taskTitle = task.title,
+            triggerAtMillis = triggerMillis,
+            alarmType = if (task.importance == TaskImportance.CRITICAL) AlarmType.FULL_SCREEN_ALARM.name else task.alarmType.name,
+            importance = task.importance.name,
+            reminderLabel = "Next update reminder (${safeDelay}m)"
+        )
+        database.scheduledAlarmDao().insertAlarm(alarmEntity)
+        setNativeAlarm(alarmEntity, task)
+        Log.d(TAG, "Scheduled next progressive reminder for ${task.id} in ${safeDelay}m")
+    }
+
+    /**
      * Schedules a temporary snooze alarm.
      */
     suspend fun scheduleSnoozeAlarm(
@@ -165,6 +218,11 @@ class TaskAlarmScheduler(private val context: Context) {
         userId: String? = null
     ) = withContext(Dispatchers.IO) {
         val targetUserId = userId ?: userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id ?: ""
+        if (database.authorizationDao().getAuthContext(targetUserId)?.isOnLeave == true ||
+            database.profileDao().getCachedProfile()?.isOnLeave == true
+        ) {
+            return@withContext
+        }
         val triggerMillis = System.currentTimeMillis() + (snoozeMinutes * 60 * 1000L)
         val alarmId = generateAlarmId(taskId, 5000 + snoozeMinutes)
         val alarmEntity = ScheduledAlarmRecordEntity(
@@ -287,6 +345,13 @@ class TaskAlarmScheduler(private val context: Context) {
         val currentUserId = userPrefs.getUserSession().userId ?: database.profileDao().getCachedProfile()?.id
         if (currentUserId.isNullOrBlank()) {
             Log.d(TAG, "No logged in user found after reboot. Skipping alarm restore.")
+            return@withContext
+        }
+
+        if (database.authorizationDao().getAuthContext(currentUserId)?.isOnLeave == true ||
+            database.profileDao().getCachedProfile()?.isOnLeave == true
+        ) {
+            Log.d(TAG, "User is On Leave. Skipping alarm restore after reboot.")
             return@withContext
         }
 

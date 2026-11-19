@@ -2622,6 +2622,7 @@ class SupabaseClient(
             scopeVersion = json.optLong("scope_version", 1L),
             needsScopeReview = json.optBoolean("needs_scope_review", false),
             isActive = json.optBoolean("is_active", true),
+            isOnLeave = json.optBoolean("is_on_leave", false),
             mustChangePassword = json.optBoolean("must_change_password", false),
             lastSeenAt = json.optString("last_seen_at").takeIf { it.isNotBlank() && !it.equals("null", true) },
             createdAt = json.optString("created_at"),
@@ -3229,7 +3230,8 @@ class SupabaseClient(
         cityId: String? = null,
         centreId: String? = null,
         centreCode: String? = null,
-        lanNumber: String? = null
+        lanNumber: String? = null,
+        zoneId: String? = null
     ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
@@ -3239,9 +3241,76 @@ class SupabaseClient(
                 if (SupabaseConfig.isValidUuid(centreId)) put("p_centre_id", centreId) else put("p_centre_id", JSONObject.NULL)
                 if (!centreCode.isNullOrBlank()) put("p_centre_code", centreCode) else put("p_centre_code", JSONObject.NULL)
                 if (!lanNumber.isNullOrBlank()) put("p_lan_number", lanNumber) else put("p_lan_number", JSONObject.NULL)
+                if (SupabaseConfig.isValidUuid(zoneId)) put("p_zone_id", zoneId) else put("p_zone_id", JSONObject.NULL)
             }
             executeRpc(accessToken, "set_my_operational_location", body).map { raw ->
                 parseAuthorizationContext(JSONObject(raw))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setMyLeaveStatus(
+        accessToken: String,
+        isOnLeave: Boolean
+    ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_is_on_leave", isOnLeave)
+            }
+            executeRpc(accessToken, "set_my_leave_status", body).map { raw ->
+                parseAuthorizationContext(JSONObject(raw))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateTaskDetails(
+        accessToken: String,
+        taskId: String,
+        payload: JSONObject
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_task_id", taskId)
+                put("p_payload", payload)
+            }
+            executeRpc(accessToken, "update_task_details", body).map { raw ->
+                runCatching { JSONObject(raw) }.getOrDefault(JSONObject().put("id", taskId))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun joinGroupTasksBulk(
+        accessToken: String,
+        groupId: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_group_id", groupId)
+            }
+            executeRpc(accessToken, "join_group_tasks_bulk", body).map { raw ->
+                runCatching { JSONObject(raw) }.getOrDefault(JSONObject().put("success", true))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun joinShiftTasksBulk(
+        accessToken: String,
+        shiftId: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("p_shift_id", shiftId)
+            }
+            executeRpc(accessToken, "join_shift_tasks_bulk", body).map { raw ->
+                runCatching { JSONObject(raw) }.getOrDefault(JSONObject().put("success", true))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -3329,7 +3398,8 @@ class SupabaseClient(
                         stateName = o.optString("state_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
                         zoneId = o.optString("zone_id").takeIf { it.isNotBlank() && !it.equals("null", true) },
                         zoneName = o.optString("zone_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
-                        isActive = o.optBoolean("is_active", true)
+                        isActive = o.optBoolean("is_active", true),
+                        isOnLeave = o.optBoolean("is_on_leave", false)
                     )
                 }
             }
@@ -3565,6 +3635,7 @@ class SupabaseClient(
             employeeId = obj.optString("employee_id"),
             fullName = obj.optString("full_name"),
             isActive = obj.optBoolean("is_active", true),
+            isOnLeave = obj.optBoolean("is_on_leave", false),
             activeRole = TaskzRole.fromCode(obj.optString("active_role_code")),
             primaryRole = TaskzRole.fromCode(obj.optString("primary_role_code")),
             assignedRoles = assigned,

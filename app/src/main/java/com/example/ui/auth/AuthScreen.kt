@@ -235,7 +235,7 @@ fun AuthScreen(
             )
 
             Text(
-                text = "Workforce Operations & Task Platform",
+                text = "Operations & Shift Tasks",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -662,7 +662,7 @@ private fun GoogleProfileCompletionDialog(
                     }
                 }
                 Text(
-                    text = "Only operational roles (IT Manager or VCO) are permitted at signup. Higher roles require Super Admin assignment.",
+                    text = "Starting role: IT Manager or VCO",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -957,11 +957,6 @@ private fun UnifiedSignUpForm(
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(
-                    text = "Enter your official details to create your Taskz account.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                )
             }
         }
 
@@ -1131,7 +1126,7 @@ private fun UnifiedSignUpForm(
             }
         }
         Text(
-            text = "New staff can join only as IT Manager or VCO. Higher roles are assigned by Super Admin.",
+            text = "Starting role: IT Manager or VCO",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp)

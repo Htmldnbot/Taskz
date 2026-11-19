@@ -11,6 +11,7 @@ import com.example.core.model.Shift
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskItem
 import com.example.core.model.TaskzRole
+import com.example.core.model.AuthorizationContext
 import com.example.domain.repository.AdminRepository
 import com.example.domain.repository.TaskRepository
 import com.example.domain.security.TaskzPermissionManager
@@ -29,6 +30,11 @@ class GroupsViewModel(
     private val adminRepository: AdminRepository = TaskzApplication.instance.adminRepository,
     private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager
 ) : ViewModel() {
+
+    val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
+
+    fun canManageGroups(): Boolean = permissionManager.canManageGroups()
+    fun canSelfJoinGroups(): Boolean = permissionManager.canSelfJoinGroups()
 
     val allTasksFlow: StateFlow<List<TaskItem>> = taskRepository.getAllTasksFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -59,17 +65,6 @@ class GroupsViewModel(
 
     private val _actionEvent = MutableSharedFlow<String>()
     val actionEvent: SharedFlow<String> = _actionEvent.asSharedFlow()
-
-    init {
-        // Seed default group if empty
-        viewModelScope.launch {
-            val list = taskRepository.getGroupsFlow()
-            // We ensure at least one active group is present for testing
-            if (groupsFlow.value.isEmpty()) {
-                val existing = taskRepository.getGroupsFlow()
-            }
-        }
-    }
 
     fun selectGroup(group: TaskGroup) {
         _selectedGroup.value = group
@@ -183,6 +178,29 @@ class GroupsViewModel(
                 },
                 onFailure = { error ->
                     _actionEvent.emit(error.message ?: "Failed to join group")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    fun joinGroupTasksBulk(groupId: String) {
+        viewModelScope.launch {
+            if (permissionManager.isOnLeave()) {
+                _actionEvent.emit("You are On Leave. Turn off On Leave to join tasks.")
+                return@launch
+            }
+            _isLoading.value = true
+            val res = taskRepository.joinGroupTasksBulk(groupId)
+            res.fold(
+                onSuccess = { count ->
+                    _actionEvent.emit(
+                        if (count > 0) "Joined exam group & $count tasks" else "Joined exam group"
+                    )
+                    loadGroupDetails(groupId)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to join exam group tasks")
                 }
             )
             _isLoading.value = false

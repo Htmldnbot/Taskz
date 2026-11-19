@@ -8,19 +8,18 @@ enum class TaskzRole(
     val isOnboardingAllowed: Boolean = false
 ) {
     IT_MANAGER("IT_MANAGER", "IT Manager", 10, ScopeLevel.CENTRE, isOnboardingAllowed = true),
-    SO("SO", "SO (Site Officer)", 15, ScopeLevel.CENTRE, isOnboardingAllowed = true),
-    VCO("VCO", "VCO (Venue Head)", 20, ScopeLevel.CITY, isOnboardingAllowed = true),
-    CITY_HEAD("CITY_HEAD", "City Head / HOM", 30, ScopeLevel.CITY),
-    ROM("ROM", "ROM (Regional Manager)", 40, ScopeLevel.STATE),
-    ZOM("ZOM", "ZOM (Zonal Manager)", 50, ScopeLevel.ZONE),
-    COMMAND_CENTER("COMMAND_CENTER", "Command Center / SPOC", 60, ScopeLevel.GLOBAL),
-    SUPER_ADMIN("SUPER_ADMIN", "Super Admin", 100, ScopeLevel.GLOBAL);
+    VCO("VCO", "VCO", 20, ScopeLevel.CITY, isOnboardingAllowed = true),
+    CITY_HEAD("CITY_HEAD", "City Head", 30, ScopeLevel.CITY),
+    ROM("ROM", "ROM", 40, ScopeLevel.STATE),
+    ZOM("ZOM", "ZOM", 50, ScopeLevel.ZONE),
+    COMMAND_CENTER("COMMAND_CENTER", "SPOC", 60, ScopeLevel.GLOBAL),
+    SUPER_ADMIN("SUPER_ADMIN", "Admin", 100, ScopeLevel.GLOBAL);
 
     companion object {
         fun fromCode(raw: String?): TaskzRole {
             return when (raw?.trim()?.uppercase()) {
-                "IT_MANAGER", "ITM", "EMPLOYEE", "" , null -> IT_MANAGER
-                "SO", "SITE_OFFICER", "SITE OFFICER" -> SO
+                "IT_MANAGER", "ITM", "SO", "SITE_OFFICER", "SITE OFFICER",
+                "SYSTEM_OPERATOR", "SYST_OPERATOR", "EMPLOYEE", "", null -> IT_MANAGER
                 "VCO", "VENUE_HEAD" -> VCO
                 "CITY_HEAD", "HOM" -> CITY_HEAD
                 "ROM" -> ROM
@@ -31,15 +30,15 @@ enum class TaskzRole(
             }
         }
 
-        val onboardingRoles: List<TaskzRole> = listOf(IT_MANAGER, SO, VCO)
-        val escalationChain: List<TaskzRole> = listOf(IT_MANAGER, SO, VCO, CITY_HEAD, ROM, ZOM, SUPER_ADMIN)
+        val onboardingRoles: List<TaskzRole> = listOf(IT_MANAGER, VCO)
+        val escalationChain: List<TaskzRole> = listOf(IT_MANAGER, VCO, CITY_HEAD, ROM, ZOM, SUPER_ADMIN)
     }
 }
 
 enum class ScopeLevel(val code: String, val label: String, val rank: Int) {
     CENTRE("CENTRE", "Centre", 10),
     CITY("CITY", "City", 20),
-    STATE("STATE", "State / Region", 30),
+    STATE("STATE", "State", 30),
     ZONE("ZONE", "Zone", 40),
     GLOBAL("GLOBAL", "Global", 50);
 
@@ -76,9 +75,9 @@ data class OrgScope(
 ) {
     fun summaryLabel(): String {
         return when (effectiveScopeLevel) {
-            ScopeLevel.GLOBAL -> "Global (All Zones)"
+            ScopeLevel.GLOBAL -> "Global"
             ScopeLevel.ZONE -> zoneName ?: "Assigned Zone"
-            ScopeLevel.STATE -> stateName ?: "Assigned State / Region"
+            ScopeLevel.STATE -> stateName ?: "Assigned State"
             ScopeLevel.CITY -> listOfNotNull(cityName, centreCode).joinToString(" • ").ifBlank { "Assigned City" }
             ScopeLevel.CENTRE -> listOfNotNull(centreCode, cityName, assignedLan?.takeIf { it.isNotBlank() }).joinToString(" • ").ifBlank { "Assigned Centre" }
         }
@@ -90,6 +89,7 @@ data class AuthorizationContext(
     val employeeId: String = "",
     val fullName: String = "",
     val isActive: Boolean = true,
+    val isOnLeave: Boolean = false,
     val activeRole: TaskzRole = TaskzRole.IT_MANAGER,
     val primaryRole: TaskzRole = TaskzRole.IT_MANAGER,
     val assignedRoles: List<AssignedRoleInfo> = emptyList(),
@@ -138,7 +138,8 @@ data class ScopedMemberSearchResult(
     val stateName: String? = null,
     val zoneId: String? = null,
     val zoneName: String? = null,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    val isOnLeave: Boolean = false
 )
 
 data class ScopedDashboardSummary(

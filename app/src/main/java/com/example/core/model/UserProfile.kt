@@ -24,6 +24,7 @@ data class UserProfile(
     val scopeVersion: Long = 1L,
     val needsScopeReview: Boolean = false,
     val isActive: Boolean = true,
+    val isOnLeave: Boolean = false,
     val mustChangePassword: Boolean = false,
     val lastSeenAt: String? = null,
     val createdAt: String = "",

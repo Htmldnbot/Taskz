@@ -77,7 +77,7 @@ class TaskzPermissionManager(
                     ScopeLevel.GLOBAL -> false
                 }
             }
-            TaskzRole.IT_MANAGER, TaskzRole.SO -> {
+            TaskzRole.IT_MANAGER -> {
                 when (targetScope) {
                     ScopeLevel.ZONE -> scope.zoneId != null && zoneId != null && scope.zoneId == zoneId
                     ScopeLevel.STATE -> scope.stateId != null && stateId != null && scope.stateId == stateId
@@ -145,14 +145,14 @@ class TaskzPermissionManager(
             return task.currentUserParticipantStatus == "active"
         }
         if (task.targetRoleCodes.isNotEmpty()) {
-            return task.targetRoleCodes.any { it.equals(role.code, ignoreCase = true) }
+            return task.targetRoleCodes.any { TaskzRole.fromCode(it) == role }
         }
         return when (task.scopeLevel) {
             ScopeLevel.GLOBAL -> true
             ScopeLevel.ZONE -> role == TaskzRole.ZOM
-            ScopeLevel.STATE -> role in setOf(TaskzRole.VCO, TaskzRole.CITY_HEAD, TaskzRole.ROM, TaskzRole.ZOM, TaskzRole.SO, TaskzRole.IT_MANAGER)
-            ScopeLevel.CITY -> role in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.SO, TaskzRole.IT_MANAGER)
-            ScopeLevel.CENTRE -> role in setOf(TaskzRole.IT_MANAGER, TaskzRole.SO, TaskzRole.VCO)
+            ScopeLevel.STATE -> role in setOf(TaskzRole.VCO, TaskzRole.CITY_HEAD, TaskzRole.ROM, TaskzRole.ZOM, TaskzRole.IT_MANAGER)
+            ScopeLevel.CITY -> role in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER)
+            ScopeLevel.CENTRE -> role in setOf(TaskzRole.IT_MANAGER, TaskzRole.VCO)
         }
     }
 
@@ -237,8 +237,10 @@ class TaskzPermissionManager(
 
     // ---- USER / ROLE / GROUP GOVERNANCE ----
 
+    fun isOnLeave(): Boolean = _context.value.isOnLeave
     fun canSearchUser(): Boolean = isActiveAccount()
     fun canManageUsers(): Boolean = isActiveAccount() && isSuperAdmin()
     fun canManageRoles(): Boolean = isActiveAccount() && isSuperAdmin()
     fun canManageGroups(): Boolean = isActiveAccount() && getActiveRole().hierarchyRank >= TaskzRole.CITY_HEAD.hierarchyRank
+    fun canSelfJoinGroups(): Boolean = isActiveAccount() && !isOnLeave()
 }

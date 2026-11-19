@@ -88,7 +88,7 @@ fun CreateGroupScreen(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Create Group / Event",
+                    text = "Create Exam Group",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }
@@ -101,8 +101,8 @@ fun CreateGroupScreen(
                     title = it
                     errorMessage = null
                 },
-                label = "Group Title *",
-                placeholder = "e.g., Annual Board Examination 2026",
+                label = "Exam Name *",
+                placeholder = "e.g., SSC CGL 2026",
                 leadingIcon = Icons.Default.Title,
                 testTag = "input_group_title"
             )
@@ -112,7 +112,7 @@ fun CreateGroupScreen(
             TaskzTextField(
                 value = code,
                 onValueChange = { code = it },
-                label = "Group Code (Optional)",
+                label = "Exam Code (Optional)",
                 placeholder = "e.g., EXAM-2026",
                 leadingIcon = Icons.Default.Code,
                 testTag = "input_group_code"
@@ -123,8 +123,8 @@ fun CreateGroupScreen(
             TaskzTextField(
                 value = description,
                 onValueChange = { description = it },
-                label = "Description (Optional)",
-                placeholder = "Event or department scope details...",
+                label = "Notes (Optional)",
+                placeholder = "Brief exam details...",
                 leadingIcon = Icons.Default.Description,
                 singleLine = false,
                 testTag = "input_group_description"
@@ -156,7 +156,7 @@ fun CreateGroupScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "Visibility & Permissions",
+                text = "Visibility & Join Settings",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
             )
 
@@ -168,7 +168,7 @@ fun CreateGroupScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Who can see this group?",
+                        text = "Visibility",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -181,7 +181,7 @@ fun CreateGroupScreen(
                         FilterChip(
                             selected = visibility == "restricted",
                             onClick = { visibility = "restricted" },
-                            label = { Text("Selected Employees Only") }
+                            label = { Text("Members Only") }
                         )
                     }
 
@@ -194,13 +194,8 @@ fun CreateGroupScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Can employees join themselves?",
+                                text = "Allow 1-Click Self Join",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                            Text(
-                                text = "Allow active employees to join this group",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -218,13 +213,8 @@ fun CreateGroupScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Require approval before joining?",
+                                    text = "Require Approval",
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                )
-                                Text(
-                                    text = "Creator must approve join requests",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Switch(
@@ -243,13 +233,8 @@ fun CreateGroupScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Notify creator when somebody joins?",
+                                text = "Notify on Join",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                            Text(
-                                text = "Send alert on join or request",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -274,7 +259,7 @@ fun CreateGroupScreen(
             Button(
                 onClick = {
                     if (title.isBlank()) {
-                        errorMessage = "Group title is required."
+                        errorMessage = "Exam name is required."
                         return@Button
                     }
                     viewModel.createGroup(
@@ -300,7 +285,7 @@ fun CreateGroupScreen(
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Create Group / Event")
+                    Text("Create Exam Group")
                 }
             }
         }

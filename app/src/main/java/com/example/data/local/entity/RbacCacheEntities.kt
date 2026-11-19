@@ -9,6 +9,7 @@ data class CachedAuthContextEntity(
     val employeeId: String,
     val fullName: String,
     val isActive: Boolean,
+    val isOnLeave: Boolean = false,
     val activeRoleCode: String,
     val primaryRoleCode: String,
     val assignedRolesJson: String,

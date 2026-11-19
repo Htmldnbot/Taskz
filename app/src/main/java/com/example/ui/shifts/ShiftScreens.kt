@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PlaylistAddCheck
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Task
 import androidx.compose.material.icons.filled.Work
@@ -79,7 +80,9 @@ import kotlinx.coroutines.flow.collectLatest
 fun ShiftCard(
     shift: Shift,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onJoinAllTasksClick: (() -> Unit)? = null,
+    isOnLeave: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -214,6 +217,30 @@ fun ShiftCard(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                         )
                     }
+                }
+            }
+
+            if (onJoinAllTasksClick != null && shift.taskCount > 0) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onJoinAllTasksClick,
+                    enabled = !isOnLeave,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_join_all_shift_tasks_${shift.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlaylistAddCheck,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isOnLeave) "On Leave" else "Join All Shift Tasks (${shift.taskCount})",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
                 }
             }
         }
@@ -535,7 +562,10 @@ fun ShiftDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val selectedShift by shiftsViewModel.selectedShift.collectAsStateWithLifecycle()
+    val authContext by shiftsViewModel.authContextFlow.collectAsStateWithLifecycle()
     val activeShift = selectedShift ?: shift
+    val canManage = shiftsViewModel.canManageShifts()
+    val canSelfJoin = shiftsViewModel.canSelfJoinShifts()
 
     val allTasks by tasksViewModel.allTasksFlow.collectAsStateWithLifecycle()
     val shiftTasks = remember(allTasks, activeShift.id) {
@@ -580,9 +610,14 @@ fun ShiftDetailScreen(
                     )
                 }
 
-                Row {
-                    IconButton(onClick = { onEditShiftClick(activeShift) }) {
-                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
+                if (canManage) {
+                    Row {
+                        IconButton(
+                            onClick = { onEditShiftClick(activeShift) },
+                            modifier = Modifier.testTag("btn_edit_shift")
+                        ) {
+                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
+                        }
                     }
                 }
             }
@@ -688,52 +723,74 @@ fun ShiftDetailScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Action Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = { onCopyShiftClick(activeShift) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .testTag("btn_copy_shift")
-                ) {
-                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy Shift", modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Copy Shift")
-                }
-
+            if ((canSelfJoin || authContext.isOnLeave) && shiftTasks.isNotEmpty()) {
                 Button(
-                    onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .testTag("btn_add_shift_task")
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Task", modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Task")
-                }
-            }
-
-            if (activeShift.shiftNumber == 1 || activeShift.name.contains("1")) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = {
-                        shiftsViewModel.repeatShift1ToShift2(activeShift.id) { newShift ->
-                            shiftsViewModel.selectShift(newShift)
-                        }
-                    },
+                    onClick = { shiftsViewModel.joinShiftTasksBulk(activeShift.id) },
+                    enabled = !authContext.isOnLeave,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .testTag("btn_shift_repeat_to_2")
+                        .testTag("btn_join_all_shift_tasks")
                 ) {
-                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Repeat Shift 1 to Shift 2", modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.Default.PlaylistAddCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Repeat Shift 1 Tasks → Shift 2")
+                    Text(
+                        text = if (authContext.isOnLeave) "On Leave — Joining Disabled" else "Join All Shift Tasks (${shiftTasks.size})",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            if (canManage) {
+                // Action Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { onCopyShiftClick(activeShift) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_copy_shift")
+                    ) {
+                        Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy Shift", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Copy Shift")
+                    }
+
+                    Button(
+                        onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_add_shift_task")
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add Task", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add Task")
+                    }
+                }
+
+                if (activeShift.shiftNumber == 1 || activeShift.name.contains("1")) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            shiftsViewModel.repeatShift1ToShift2(activeShift.id) { newShift ->
+                                shiftsViewModel.selectShift(newShift)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_shift_repeat_to_2")
+                    ) {
+                        Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Repeat Shift 1 to Shift 2", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Repeat Shift 1 → Shift 2")
+                    }
                 }
             }
 
@@ -749,10 +806,12 @@ fun ShiftDetailScreen(
             if (shiftTasks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "No tasks assigned to this shift yet", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) }) {
-                            Text("Create Shift Task")
+                        Text(text = "No tasks in this shift yet", style = MaterialTheme.typography.bodyMedium)
+                        if (canManage) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) }) {
+                                Text("Create Shift Task")
+                            }
                         }
                     }
                 }
@@ -816,17 +875,10 @@ fun CopyShiftScreen(
                     Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "Copy Shift",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Text(
-                        text = "Clone shift structure with relative task time offsets",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = "Copy Shift",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

@@ -91,7 +91,10 @@ fun GroupDetailScreen(
 ) {
     val selectedGroup by groupsViewModel.selectedGroup.collectAsStateWithLifecycle()
     val groupJoinRequests by groupsViewModel.groupJoinRequests.collectAsStateWithLifecycle()
+    val authContext by groupsViewModel.authContextFlow.collectAsStateWithLifecycle()
     val activeGroup = selectedGroup ?: group
+    val canManage = groupsViewModel.canManageGroups()
+    val canSelfJoin = groupsViewModel.canSelfJoinGroups()
 
     val groupShifts by shiftsViewModel.getShiftsForGroup(activeGroup.id).collectAsStateWithLifecycle()
     val allTasks by tasksViewModel.allTasksFlow.collectAsStateWithLifecycle()
@@ -111,7 +114,16 @@ fun GroupDetailScreen(
 
     LaunchedEffect(activeGroup.id) {
         groupsViewModel.loadGroupDetails(activeGroup.id)
+    }
+
+    LaunchedEffect(Unit) {
         groupsViewModel.actionEvent.collectLatest { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        shiftsViewModel.actionEvent.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg)
         }
     }
@@ -139,14 +151,19 @@ fun GroupDetailScreen(
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Group Details",
+                        text = "Exam Group",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                     )
                 }
 
-                Row {
-                    IconButton(onClick = { onEditGroupClick(activeGroup) }) {
-                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Group")
+                if (canManage) {
+                    Row {
+                        IconButton(
+                            onClick = { onEditGroupClick(activeGroup) },
+                            modifier = Modifier.testTag("btn_edit_group")
+                        ) {
+                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Exam Group")
+                        }
                     }
                 }
             }
@@ -246,6 +263,30 @@ fun GroupDetailScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            if ((canSelfJoin || authContext.isOnLeave) && activeGroup.allowSelfJoin && !activeGroup.isCurrentUserPending) {
+                Button(
+                    onClick = { groupsViewModel.joinGroupTasksBulk(activeGroup.id) },
+                    enabled = !authContext.isOnLeave,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_join_all_group_tasks")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlaylistAddCheck,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (authContext.isOnLeave) "On Leave — Joining Disabled" else "Join All Tasks (${groupTasks.size})",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // Action Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -253,65 +294,77 @@ fun GroupDetailScreen(
             ) {
                 OutlinedButton(
                     onClick = { onViewMembersClick(activeGroup.id) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
                 ) {
                     Icon(imageVector = Icons.Default.Group, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Members", maxLines = 1)
                 }
 
+                if (canManage) {
+                    OutlinedButton(
+                        onClick = { onViewJoinRequestsClick(activeGroup.id) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.HourglassTop, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Requests (${groupJoinRequests.size})", maxLines = 1)
+                    }
+                }
+            }
+
+            if (canManage) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { onAddShiftClick(activeGroup.id) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Shift", maxLines = 1)
+                    }
+
+                    Button(
+                        onClick = { onCreateTaskClick(activeGroup.id) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Task", maxLines = 1)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 OutlinedButton(
-                    onClick = { onViewJoinRequestsClick(activeGroup.id) },
-                    modifier = Modifier.weight(1f)
+                    onClick = { showBatchAssignDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_assign_tasks_to_group")
                 ) {
-                    Icon(imageVector = Icons.Default.HourglassTop, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Requests (${groupJoinRequests.size})", maxLines = 1)
+                    Icon(
+                        imageVector = Icons.Default.PlaylistAddCheck,
+                        contentDescription = "Batch Assign Tasks",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Assign Multiple Tasks")
                 }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onAddShiftClick(activeGroup.id) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Shift", maxLines = 1)
-                }
-
-                Button(
-                    onClick = { onCreateTaskClick(activeGroup.id) },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("New Task", maxLines = 1)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = { showBatchAssignDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .testTag("btn_assign_tasks_to_group")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlaylistAddCheck,
-                    contentDescription = "Batch Assign Tasks",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Assign Multiple Tasks to All Group Members")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -336,10 +389,12 @@ fun GroupDetailScreen(
                 if (groupShifts.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = "No shifts created in this group yet", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = { onAddShiftClick(activeGroup.id) }) {
-                                Text("Add First Shift")
+                            Text(text = "No shifts yet", style = MaterialTheme.typography.bodyMedium)
+                            if (canManage) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(onClick = { onAddShiftClick(activeGroup.id) }) {
+                                    Text("Add First Shift")
+                                }
                             }
                         }
                     }
@@ -351,7 +406,11 @@ fun GroupDetailScreen(
                         items(groupShifts, key = { it.id }) { shift ->
                             ShiftCard(
                                 shift = shift,
-                                onClick = { onShiftClick(shift) }
+                                onClick = { onShiftClick(shift) },
+                                onJoinAllTasksClick = if (canSelfJoin && activeGroup.allowSelfJoin) {
+                                    { shiftsViewModel.joinShiftTasksBulk(shift.id) }
+                                } else null,
+                                isOnLeave = authContext.isOnLeave
                             )
                         }
                     }
@@ -360,10 +419,12 @@ fun GroupDetailScreen(
                 if (groupTasks.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = "No tasks in this group yet", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = { onCreateTaskClick(activeGroup.id) }) {
-                                Text("Create First Task")
+                            Text(text = "No tasks yet", style = MaterialTheme.typography.bodyMedium)
+                            if (canManage) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(onClick = { onCreateTaskClick(activeGroup.id) }) {
+                                    Text("Create First Task")
+                                }
                             }
                         }
                     }

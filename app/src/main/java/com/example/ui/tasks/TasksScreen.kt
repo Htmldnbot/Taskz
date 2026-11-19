@@ -95,6 +95,7 @@ fun TasksScreen(
     val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
     val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var taskToDelete by remember { mutableStateOf<TaskItem?>(null) }
@@ -214,7 +215,7 @@ fun TasksScreen(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Groups", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Exam Groups", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -350,6 +351,7 @@ fun TasksScreen(
                                 { taskToDelete = task }
                             } else null,
                             onJoinClick = if (
+                                !authContext.isOnLeave &&
                                 selectedTab == TaskTabFilter.AVAILABLE &&
                                 task.allowSelfJoin &&
                                 !task.isAssignedToMe &&

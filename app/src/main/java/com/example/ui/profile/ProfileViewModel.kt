@@ -65,6 +65,9 @@ class ProfileViewModel(
     private val _locationSaveError = MutableStateFlow<String?>(null)
     val locationSaveError: StateFlow<String?> = _locationSaveError.asStateFlow()
 
+    private val _isTogglingLeave = MutableStateFlow(false)
+    val isTogglingLeave: StateFlow<Boolean> = _isTogglingLeave.asStateFlow()
+
     private val _deviceId = MutableStateFlow<String?>(null)
     val deviceId: StateFlow<String?> = _deviceId.asStateFlow()
 
@@ -94,8 +97,21 @@ class ProfileViewModel(
         }
     }
 
+    fun toggleLeaveStatus(isOnLeave: Boolean) {
+        if (_isTogglingLeave.value) return
+        viewModelScope.launch {
+            _isTogglingLeave.value = true
+            val res = taskzSyncManager.updateLeaveStatus(isOnLeave)
+            _isTogglingLeave.value = false
+            res.onFailure { err ->
+                _updateState.value = ProfileUpdateState.Error(err.message ?: "Failed to update leave status")
+            }
+        }
+    }
+
     fun updateOperationalLocation(
         roleCode: String?,
+        zoneId: String? = null,
         stateId: String?,
         cityId: String?,
         centreId: String?,
@@ -113,7 +129,8 @@ class ProfileViewModel(
                 cityId = cityId,
                 centreId = centreId,
                 centreCode = centreCode,
-                lanNumber = lanNumber
+                lanNumber = lanNumber,
+                zoneId = zoneId
             )
             _isSavingLocation.value = false
             res.fold(

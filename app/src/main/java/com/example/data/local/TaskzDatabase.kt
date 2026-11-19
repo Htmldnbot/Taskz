@@ -55,7 +55,7 @@ import com.example.data.local.entity.WorkRoleEntity
         CachedOrgNodeEntity::class,
         DispatchedNotificationKeyEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class TaskzDatabase : RoomDatabase() {
@@ -348,6 +348,13 @@ abstract class TaskzDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_profile ADD COLUMN isOnLeave INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cached_auth_context ADD COLUMN isOnLeave INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): TaskzDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -355,7 +362,7 @@ abstract class TaskzDatabase : RoomDatabase() {
                     TaskzDatabase::class.java,
                     "taskz_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigration(dropAllTables = false)
                     .build()
                 INSTANCE = instance

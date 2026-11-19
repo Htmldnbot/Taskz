@@ -61,10 +61,10 @@ class TaskzViewModelFactory(
                 ) as T
             }
             modelClass.isAssignableFrom(GroupsViewModel::class.java) -> {
-                GroupsViewModel(app.taskRepository) as T
+                GroupsViewModel(app.taskRepository, app.adminRepository, app.permissionManager) as T
             }
             modelClass.isAssignableFrom(ShiftsViewModel::class.java) -> {
-                ShiftsViewModel(app.taskRepository) as T
+                ShiftsViewModel(app.taskRepository, app.permissionManager) as T
             }
             modelClass.isAssignableFrom(WorkRolesViewModel::class.java) -> {
                 WorkRolesViewModel(app.taskRepository) as T

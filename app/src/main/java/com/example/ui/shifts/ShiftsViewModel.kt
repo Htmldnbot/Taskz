@@ -2,9 +2,12 @@ package com.example.ui.shifts
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.TaskzApplication
+import com.example.core.model.AuthorizationContext
 import com.example.core.model.Shift
 import com.example.core.model.TaskItem
 import com.example.domain.repository.TaskRepository
+import com.example.domain.security.TaskzPermissionManager
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,8 +28,14 @@ data class TaskCopyPreview(
 )
 
 class ShiftsViewModel(
-    private val taskRepository: TaskRepository
+    private val taskRepository: TaskRepository,
+    private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager
 ) : ViewModel() {
+
+    val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
+
+    fun canManageShifts(): Boolean = permissionManager.canManageGroups()
+    fun canSelfJoinShifts(): Boolean = permissionManager.canSelfJoinGroups()
 
     private val _currentGroupId = MutableStateFlow<String>("")
 
@@ -199,6 +208,29 @@ class ShiftsViewModel(
                 },
                 onFailure = { error ->
                     _actionEvent.emit(error.message ?: "Failed to repeat Shift 1 to Shift 2")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    fun joinShiftTasksBulk(shiftId: String) {
+        viewModelScope.launch {
+            if (permissionManager.isOnLeave()) {
+                _actionEvent.emit("You are On Leave. Turn off On Leave to join tasks.")
+                return@launch
+            }
+            _isLoading.value = true
+            val res = taskRepository.joinShiftTasksBulk(shiftId)
+            res.fold(
+                onSuccess = { count ->
+                    _actionEvent.emit(
+                        if (count > 0) "Joined $count shift task(s)" else "All shift tasks already joined"
+                    )
+                    loadShiftDetails(shiftId)
+                },
+                onFailure = { error ->
+                    _actionEvent.emit(error.message ?: "Failed to join shift tasks")
                 }
             )
             _isLoading.value = false

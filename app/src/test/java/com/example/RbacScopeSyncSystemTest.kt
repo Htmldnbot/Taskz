@@ -87,11 +87,19 @@ class RbacScopeSyncSystemTest {
     // ---- Section 66: Role Tests ----
 
     @Test
-    fun onboardingRolesRestrictedStrictlyToItManagerSoAndVco() {
-        assertEquals(listOf(TaskzRole.IT_MANAGER, TaskzRole.SO, TaskzRole.VCO), TaskzRole.onboardingRoles)
+    fun onboardingRolesRestrictedStrictlyToItManagerAndVco() {
+        assertEquals(listOf(TaskzRole.IT_MANAGER, TaskzRole.VCO), TaskzRole.onboardingRoles)
         assertTrue(TaskzRole.IT_MANAGER.isOnboardingAllowed)
-        assertTrue(TaskzRole.SO.isOnboardingAllowed)
         assertTrue(TaskzRole.VCO.isOnboardingAllowed)
+        assertEquals(TaskzRole.IT_MANAGER, TaskzRole.fromCode("SO"))
+        assertEquals(TaskzRole.IT_MANAGER, TaskzRole.fromCode("SYSTEM_OPERATOR"))
+        assertEquals(TaskzRole.IT_MANAGER, TaskzRole.fromCode("SITE_OFFICER"))
+        assertEquals("IT Manager", TaskzRole.IT_MANAGER.displayName)
+        assertEquals("City Head", TaskzRole.CITY_HEAD.displayName)
+        assertEquals("ROM", TaskzRole.ROM.displayName)
+        assertEquals("ZOM", TaskzRole.ZOM.displayName)
+        assertEquals("SPOC", TaskzRole.COMMAND_CENTER.displayName)
+        assertEquals("Admin", TaskzRole.SUPER_ADMIN.displayName)
         assertFalse(TaskzRole.CITY_HEAD.isOnboardingAllowed)
         assertFalse(TaskzRole.ROM.isOnboardingAllowed)
         assertFalse(TaskzRole.ZOM.isOnboardingAllowed)
@@ -136,9 +144,7 @@ class RbacScopeSyncSystemTest {
 
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.IT_MANAGER))
         assertEquals(listOf(ScopeLevel.CENTRE), pm.allowedTaskScopes())
-
-        pm.updateContext(buildContext(userId = "u1", role = TaskzRole.SO))
-        assertEquals(listOf(ScopeLevel.CENTRE), pm.allowedTaskScopes())
+        assertEquals(TaskzRole.IT_MANAGER, TaskzRole.fromCode("SO"))
 
         pm.updateContext(buildContext(userId = "u1", role = TaskzRole.VCO))
         assertEquals(listOf(ScopeLevel.CENTRE, ScopeLevel.CITY, ScopeLevel.STATE), pm.allowedTaskScopes())
@@ -299,7 +305,6 @@ class RbacScopeSyncSystemTest {
         assertEquals(
             listOf(
                 TaskzRole.IT_MANAGER,
-                TaskzRole.SO,
                 TaskzRole.VCO,
                 TaskzRole.CITY_HEAD,
                 TaskzRole.ROM,
@@ -795,6 +800,20 @@ class RbacScopeSyncSystemTest {
         rt.onNetworkUnavailable()
         assertFalse("Network loss must immediately clear isConnected state", rt.isConnected.value)
         assertTrue("Stale channel join states must be cleared on disconnect", rt.channelJoinStates.value.isEmpty())
+    }
+
+    @Test
+    fun onLeaveStatusAndGroupSelfJoinPermissionRules() {
+        val activeItManager = buildContext(userId = "it-active", role = TaskzRole.IT_MANAGER)
+        val pm = TaskzPermissionManager(activeItManager)
+        assertFalse(pm.isOnLeave())
+        assertTrue(pm.canSelfJoinGroups())
+        assertFalse(pm.canManageGroups())
+
+        val onLeaveItManager = activeItManager.copy(isOnLeave = true)
+        pm.updateContext(onLeaveItManager)
+        assertTrue(pm.isOnLeave())
+        assertFalse(pm.canSelfJoinGroups())
     }
 
     private fun buildContext(

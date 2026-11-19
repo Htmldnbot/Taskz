@@ -498,6 +498,10 @@ class TasksViewModel(
 
     fun joinTask(taskId: String, roleId: String, message: String?) {
         viewModelScope.launch {
+            if (permissionManager.isOnLeave()) {
+                _actionEvent.emit("You are currently On Leave. Switch to On Duty to join tasks.")
+                return@launch
+            }
             _isLoading.value = true
             val res = taskRepository.joinTask(taskId, roleId, message)
             res.fold(
@@ -663,7 +667,8 @@ class TasksViewModel(
         numeric1: Double? = null,
         numeric2: Double? = null,
         textValue: String? = null,
-        lanNumber: String? = null
+        lanNumber: String? = null,
+        nextReminderMinutes: Int? = null
     ) {
         viewModelScope.launch {
             val current = _selectedTask.value
@@ -685,21 +690,20 @@ class TasksViewModel(
                 numeric1 = numeric1,
                 numeric2 = numeric2,
                 textValue = textValue,
-                lanNumber = lanNumber
+                lanNumber = lanNumber,
+                nextReminderMinutes = nextReminderMinutes
             )
             res.fold(
                 onSuccess = { item ->
                     val reminderMins = (current?.overdueReminderIntervalMinutes ?: current?.repeatIntervalMinutes ?: 10).coerceAtLeast(1)
+                    val targetPct = (current?.targetPercentage ?: 100).coerceAtLeast(1)
                     val msg = when {
-                        effectiveResponseType == ResponseType.YES_NO && responseValue.equals("NO", ignoreCase = true) -> {
-                            if (item.isPendingSync) {
-                                "Response 'NO' saved offline. Reminder scheduled in ${reminderMins}m."
-                            } else {
-                                "Response 'NO' synced. Follow-up reminder scheduled in ${reminderMins}m."
-                            }
-                        }
-                        item.isPendingSync -> "Offline: Response saved locally & queued for sync"
-                        else -> "Response synced to server"
+                        percentage != null && percentage >= targetPct -> "Task 100% completed"
+                        percentage != null && nextReminderMinutes != null -> "Saved $percentage% • Next reminder in ${nextReminderMinutes}m"
+                        effectiveResponseType == ResponseType.YES_NO && responseValue.equals("NO", ignoreCase = true) ->
+                            "Saved NO • Reminder in ${reminderMins}m"
+                        item.isPendingSync -> "Saved offline • Queued for sync"
+                        else -> "Response saved"
                     }
                     _actionEvent.emit(msg)
                     loadTaskDetails(taskId)
@@ -709,6 +713,50 @@ class TasksViewModel(
                 }
             )
             _isLoading.value = false
+        }
+    }
+
+    fun updateTaskDetails(
+        taskId: String,
+        title: String,
+        description: String?,
+        location: String?,
+        executionTime: String?,
+        dueAt: String?,
+        priority: String,
+        importance: TaskImportance,
+        alarmType: AlarmType,
+        overdueReminderIntervalMinutes: Int,
+        targetPercentage: Int,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.updateTaskDetails(
+                taskId = taskId,
+                title = title,
+                description = description,
+                location = location,
+                executionTime = executionTime,
+                dueAt = dueAt,
+                priority = priority,
+                importance = importance,
+                alarmType = alarmType,
+                overdueReminderIntervalMinutes = overdueReminderIntervalMinutes,
+                targetPercentage = targetPercentage
+            )
+            _isLoading.value = false
+            res.fold(
+                onSuccess = { updated ->
+                    _selectedTask.value = updated
+                    _actionEvent.emit("Task updated")
+                    loadTaskDetails(taskId)
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionEvent.emit(err.message ?: "Failed to update task")
+                }
+            )
         }
     }
 
@@ -899,7 +947,8 @@ class TasksViewModel(
                         cityName = m.cityName,
                         centreId = m.centreId,
                         centreCode = m.centreCode,
-                        isActive = m.isActive
+                        isActive = m.isActive,
+                        isOnLeave = m.isOnLeave
                     )
                 }
             } else {
@@ -922,7 +971,8 @@ class TasksViewModel(
                         stateName = u.stateName,
                         zoneId = u.zoneId,
                         zoneName = u.zoneName,
-                        isActive = u.isActive
+                        isActive = u.isActive,
+                        isOnLeave = u.isOnLeave
                     )
                 }
             }

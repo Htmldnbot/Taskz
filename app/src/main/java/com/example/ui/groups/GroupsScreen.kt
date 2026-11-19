@@ -82,8 +82,11 @@ fun GroupsScreen(
     modifier: Modifier = Modifier
 ) {
     val groups by viewModel.groupsFlow.collectAsStateWithLifecycle()
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val canManage = viewModel.canManageGroups()
+    val canSelfJoin = viewModel.canSelfJoinGroups()
 
     LaunchedEffect(Unit) {
         viewModel.actionEvent.collectLatest { msg ->
@@ -94,13 +97,15 @@ fun GroupsScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onCreateGroupClick,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.testTag("fab_create_group")
-            ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Create Group")
+            if (canManage) {
+                FloatingActionButton(
+                    onClick = onCreateGroupClick,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.testTag("fab_create_group")
+                ) {
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Create Exam Group")
+                }
             }
         }
     ) { innerPadding ->
@@ -120,11 +125,11 @@ fun GroupsScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "Groups & Events",
+                        text = "Exam Groups",
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        text = "Workforce departments, teams and events",
+                        text = "Exams • Shifts • Tasks",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -148,15 +153,9 @@ fun GroupsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No groups or events created yet",
+                            text = "No exam groups yet",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Tap the + button to create a new group or event.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -168,8 +167,10 @@ fun GroupsScreen(
                     items(groups, key = { it.id }) { group ->
                         GroupCard(
                             group = group,
+                            canSelfJoin = canSelfJoin,
+                            isOnLeave = authContext.isOnLeave,
                             onClick = { onGroupClick(group) },
-                            onJoinClick = { viewModel.joinGroup(group.id) }
+                            onJoinClick = { viewModel.joinGroupTasksBulk(group.id) }
                         )
                     }
                 }
@@ -183,7 +184,9 @@ fun GroupCard(
     group: TaskGroup,
     onClick: () -> Unit,
     onJoinClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    canSelfJoin: Boolean = true,
+    isOnLeave: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -323,22 +326,10 @@ fun GroupCard(
             Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 when {
-                    group.isCurrentUserMember -> {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = TaskzSuccess.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = "Joined",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TaskzSuccess),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
                     group.isCurrentUserPending -> {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -351,13 +342,42 @@ fun GroupCard(
                             )
                         }
                     }
-                    group.allowSelfJoin -> {
+                    group.isCurrentUserMember -> {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = TaskzSuccess.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "Joined",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TaskzSuccess),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        if ((canSelfJoin || isOnLeave) && group.allowSelfJoin && group.taskCount > 0) {
+                            OutlinedButton(
+                                onClick = onJoinClick,
+                                enabled = !isOnLeave,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("btn_join_all_group_tasks")
+                            ) {
+                                Text(
+                                    text = if (isOnLeave) "On Leave" else "Join All Tasks",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                    (canSelfJoin || isOnLeave) && group.allowSelfJoin -> {
                         Button(
                             onClick = onJoinClick,
+                            enabled = !isOnLeave,
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.height(36.dp)
+                            modifier = Modifier.testTag("btn_join_all_group_tasks")
                         ) {
-                            Text("Join Group", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                text = if (isOnLeave) "On Leave" else "Join All Tasks",
+                                style = MaterialTheme.typography.labelSmall
+                            )
                         }
                     }
                 }

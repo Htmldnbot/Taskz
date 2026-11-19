@@ -186,6 +186,7 @@ class TaskzSyncManager(
                         employeeId = cachedProfile.employeeId,
                         fullName = cachedProfile.fullName,
                         isActive = cachedProfile.isActive,
+                        isOnLeave = cachedProfile.isOnLeave,
                         activeRole = role,
                         primaryRole = TaskzRole.fromCode(cachedProfile.primaryRoleCode),
                         assignedRoles = cachedProfile.assignedRoleCodes.map { code ->
@@ -444,6 +445,9 @@ class TaskzSyncManager(
             permissionManager.updateContext(authCtx)
             database.authorizationDao().upsertAuthContext(authCtx.toEntity())
             syncProfileSnapshot(authCtx)
+            if (authCtx.isOnLeave) {
+                runCatching { com.example.alarm.TaskAlarmScheduler(context).cancelAllAlarmsForUser(authCtx.userId) }
+            }
             realtimeManager.updateSessionAndRole(token, authCtx.userId, authCtx.activeRole.code, authCtx.scope)
         }
 
@@ -541,7 +545,8 @@ class TaskzSyncManager(
                 centreCode = ctx.scope.centreCode,
                 roleVersion = ctx.roleVersion,
                 scopeVersion = ctx.scopeVersion,
-                isActive = ctx.isActive
+                isActive = ctx.isActive,
+                isOnLeave = ctx.isOnLeave
             )
         )
     }
@@ -610,7 +615,8 @@ class TaskzSyncManager(
         cityId: String? = null,
         centreId: String? = null,
         centreCode: String? = null,
-        lanNumber: String? = null
+        lanNumber: String? = null,
+        zoneId: String? = null
     ): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
         val tokenRes = authRepository.getValidAccessToken()
         if (tokenRes.isFailure) return@withContext Result.failure(tokenRes.exceptionOrNull()!!)
@@ -623,7 +629,8 @@ class TaskzSyncManager(
             cityId = cityId,
             centreId = centreId,
             centreCode = centreCode,
-            lanNumber = lanNumber
+            lanNumber = lanNumber,
+            zoneId = zoneId
         )
         if (res.isFailure) return@withContext res
         val newCtx = res.getOrThrow()
@@ -638,6 +645,28 @@ class TaskzSyncManager(
         realtimeManager.refreshSubscriptionsForRoleSwitch(newCtx.activeRole.code, newCtx.scope)
 
         syncNow(forceFull = true)
+        Result.success(newCtx)
+    }
+
+    suspend fun updateLeaveStatus(isOnLeave: Boolean): Result<AuthorizationContext> = withContext(Dispatchers.IO) {
+        val tokenRes = authRepository.getValidAccessToken()
+        if (tokenRes.isFailure) return@withContext Result.failure(tokenRes.exceptionOrNull()!!)
+        val token = tokenRes.getOrThrow()
+
+        val res = supabaseClient.setMyLeaveStatus(token, isOnLeave)
+        if (res.isFailure) return@withContext res
+        val newCtx = res.getOrThrow()
+
+        permissionManager.updateContext(newCtx)
+        database.authorizationDao().upsertAuthContext(newCtx.toEntity())
+        syncProfileSnapshot(newCtx)
+
+        val scheduler = com.example.alarm.TaskAlarmScheduler(context)
+        if (isOnLeave) {
+            runCatching { scheduler.cancelAllAlarmsForUser(newCtx.userId) }
+        } else {
+            syncNow(forceFull = false)
+        }
         Result.success(newCtx)
     }
 
@@ -697,6 +726,7 @@ private fun AuthorizationContext.toEntity(): CachedAuthContextEntity = CachedAut
     employeeId = employeeId,
     fullName = fullName,
     isActive = isActive,
+    isOnLeave = isOnLeave,
     activeRoleCode = activeRole.code,
     primaryRoleCode = primaryRole.code,
     assignedRolesJson = JSONArray().apply {
@@ -745,6 +775,7 @@ private fun CachedAuthContextEntity.toDomain(): AuthorizationContext {
         employeeId = employeeId,
         fullName = fullName,
         isActive = isActive,
+        isOnLeave = isOnLeave,
         activeRole = TaskzRole.fromCode(activeRoleCode),
         primaryRole = TaskzRole.fromCode(primaryRoleCode),
         assignedRoles = assigned,

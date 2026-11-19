@@ -86,13 +86,8 @@ fun WorkRolesScreen(
         ) {
             Column {
                 Text(
-                    text = "Operational Work Roles",
+                    text = "Work Roles",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = "Manpower roles for exam invigilation, security, IT & events",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

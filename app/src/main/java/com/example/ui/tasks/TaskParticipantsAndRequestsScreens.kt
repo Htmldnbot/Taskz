@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Search
@@ -59,6 +60,7 @@ import com.example.core.model.TaskJoinRequest
 import com.example.core.model.TaskParticipant
 import com.example.ui.theme.TaskzError
 import com.example.ui.theme.TaskzSuccess
+import com.example.ui.theme.TaskzWarning
 
 @Composable
 fun TaskParticipantsScreen(
@@ -210,9 +212,10 @@ fun TaskParticipantsScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             items(directoryEmployees) { emp ->
+                                val onLeave = emp.isOnLeave
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    color = if (onLeave) TaskzWarning.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Row(
@@ -223,17 +226,33 @@ fun TaskParticipantsScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = emp.fullName,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                )
+                                                if (onLeave) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.EventBusy,
+                                                        contentDescription = "On Leave",
+                                                        tint = TaskzWarning,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Text(
+                                                        text = "On Leave",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = TaskzWarning
+                                                    )
+                                                }
+                                            }
                                             Text(
-                                                text = emp.fullName,
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                            )
-                                            Text(
-                                                text = "ID: ${emp.employeeId} • ${emp.mobile}",
+                                                text = "ID: ${emp.employeeId} • ${emp.resolvedActiveRole.displayName}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                         Button(
+                                            enabled = !onLeave,
                                             onClick = {
                                                 viewModel.assignUserToTask(
                                                     taskId = taskId,
@@ -243,7 +262,7 @@ fun TaskParticipantsScreen(
                                             },
                                             shape = RoundedCornerShape(6.dp)
                                         ) {
-                                            Text("Add")
+                                            Text(if (onLeave) "Leave" else "Add")
                                         }
                                     }
                                 }

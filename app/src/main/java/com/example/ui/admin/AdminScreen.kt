@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Person
@@ -140,7 +141,7 @@ fun AdminScreen(
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        text = "Workforce & Credential Governance",
+                        text = "Users & Roles",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -527,6 +528,33 @@ private fun UserAdminCard(
                         )
                     }
 
+                    if (user.isOnLeave) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = TaskzWarning.copy(alpha = 0.18f),
+                            modifier = Modifier.testTag("badge_admin_on_leave_${user.employeeId}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.EventBusy,
+                                    contentDescription = "On Leave",
+                                    tint = TaskzWarning,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "On Leave",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TaskzWarning
+                                )
+                            }
+                        }
+                    }
+
                     if (user.needsScopeReview) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Surface(
@@ -546,7 +574,7 @@ private fun UserAdminCard(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Needs Scope Review — Assign Org Scope",
+                                    text = "Needs Scope Review",
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
@@ -631,7 +659,7 @@ private fun AdminAuditLogCard(entry: AdminAuditEntry) {
                 )
             }
             Text(
-                text = "By ${entry.adminName ?: "Super Admin"} -> ${entry.targetName ?: entry.targetEmployeeId ?: entry.targetUserId ?: "System"}",
+                text = "By ${entry.adminName ?: "Admin"} -> ${entry.targetName ?: entry.targetEmployeeId ?: entry.targetUserId ?: "System"}",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -683,6 +711,12 @@ private fun UserAccessEditorDialog(
     var cityExpanded by remember { mutableStateOf(false) }
     var centreExpanded by remember { mutableStateOf(false) }
 
+    val resolvedActiveRole = TaskzRole.fromCode(activeRoleCode)
+    val needsZone = resolvedActiveRole !in setOf(TaskzRole.COMMAND_CENTER, TaskzRole.SUPER_ADMIN)
+    val needsState = resolvedActiveRole in setOf(TaskzRole.ROM, TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER)
+    val needsCity = resolvedActiveRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER)
+    val needsCentre = resolvedActiveRole in setOf(TaskzRole.VCO, TaskzRole.IT_MANAGER)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -732,7 +766,7 @@ private fun UserAccessEditorDialog(
                     onExpandedChange = { activeRoleExpanded = it }
                 ) {
                     OutlinedTextField(
-                        value = TaskzRole.fromCode(activeRoleCode).displayName,
+                        value = resolvedActiveRole.displayName,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Active Role") },
@@ -757,168 +791,191 @@ private fun UserAccessEditorDialog(
                     }
                 }
 
-                // Zone Dropdown
-                ExposedDropdownMenuBox(
-                    expanded = zoneExpanded,
-                    onExpandedChange = { zoneExpanded = it }
-                ) {
-                    val zoneLabel = orgHierarchy.zones.firstOrNull { it.id == selectedZoneId }?.name ?: "None (All / Unassigned)"
-                    OutlinedTextField(
-                        value = zoneLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Assigned Zone") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(expanded = zoneExpanded, onDismissRequest = { zoneExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("None") },
-                            onClick = {
-                                selectedZoneId = null
-                                selectedStateId = null
-                                selectedCityId = null
-                                selectedCentreId = null
-                                zoneExpanded = false
-                            }
+                if (!needsZone) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Global Access (All Zones, States, Cities & Centres)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(12.dp)
                         )
-                        orgHierarchy.zones.forEach { z ->
+                    }
+                }
+
+                // Zone Dropdown
+                if (needsZone) {
+                    ExposedDropdownMenuBox(
+                        expanded = zoneExpanded,
+                        onExpandedChange = { zoneExpanded = it }
+                    ) {
+                        val zoneLabel = orgHierarchy.zones.firstOrNull { it.id == selectedZoneId }?.name ?: "None"
+                        OutlinedTextField(
+                            value = zoneLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Zone") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(expanded = zoneExpanded, onDismissRequest = { zoneExpanded = false }) {
                             DropdownMenuItem(
-                                text = { Text("${z.name} (${z.code})") },
+                                text = { Text("None") },
                                 onClick = {
-                                    selectedZoneId = z.id
+                                    selectedZoneId = null
+                                    selectedStateId = null
+                                    selectedCityId = null
+                                    selectedCentreId = null
                                     zoneExpanded = false
                                 }
                             )
+                            orgHierarchy.zones.forEach { z ->
+                                DropdownMenuItem(
+                                    text = { Text("${z.name} (${z.code})") },
+                                    onClick = {
+                                        selectedZoneId = z.id
+                                        zoneExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 // State Dropdown
-                val filteredStates = orgHierarchy.states.filter { selectedZoneId == null || it.zoneId == selectedZoneId }
-                ExposedDropdownMenuBox(
-                    expanded = stateExpanded,
-                    onExpandedChange = { stateExpanded = it }
-                ) {
-                    val stateLabel = orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name ?: "None"
-                    OutlinedTextField(
-                        value = stateLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Assigned State") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(expanded = stateExpanded, onDismissRequest = { stateExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("None") },
-                            onClick = {
-                                selectedStateId = null
-                                selectedCityId = null
-                                selectedCentreId = null
-                                stateExpanded = false
-                            }
+                if (needsState) {
+                    val filteredStates = orgHierarchy.states.filter { selectedZoneId == null || it.zoneId == selectedZoneId }
+                    ExposedDropdownMenuBox(
+                        expanded = stateExpanded,
+                        onExpandedChange = { stateExpanded = it }
+                    ) {
+                        val stateLabel = orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name ?: "None"
+                        OutlinedTextField(
+                            value = stateLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("State") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
                         )
-                        filteredStates.forEach { st ->
+                        ExposedDropdownMenu(expanded = stateExpanded, onDismissRequest = { stateExpanded = false }) {
                             DropdownMenuItem(
-                                text = { Text("${st.name} (${st.code})") },
+                                text = { Text("None") },
                                 onClick = {
-                                    selectedStateId = st.id
-                                    selectedZoneId = st.zoneId
+                                    selectedStateId = null
+                                    selectedCityId = null
+                                    selectedCentreId = null
                                     stateExpanded = false
                                 }
                             )
+                            filteredStates.forEach { st ->
+                                DropdownMenuItem(
+                                    text = { Text("${st.name} (${st.code})") },
+                                    onClick = {
+                                        selectedStateId = st.id
+                                        selectedZoneId = st.zoneId
+                                        stateExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 // City Dropdown
-                val filteredCities = orgHierarchy.cities.filter {
-                    (selectedStateId == null || it.stateId == selectedStateId) &&
-                        (selectedZoneId == null || it.zoneId == selectedZoneId)
-                }
-                ExposedDropdownMenuBox(
-                    expanded = cityExpanded,
-                    onExpandedChange = { cityExpanded = it }
-                ) {
-                    val cityLabel = orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "None"
-                    OutlinedTextField(
-                        value = cityLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Assigned City") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(expanded = cityExpanded, onDismissRequest = { cityExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("None") },
-                            onClick = {
-                                selectedCityId = null
-                                selectedCentreId = null
-                                cityExpanded = false
-                            }
+                if (needsCity) {
+                    val filteredCities = orgHierarchy.cities.filter {
+                        (selectedStateId == null || it.stateId == selectedStateId) &&
+                            (selectedZoneId == null || it.zoneId == selectedZoneId)
+                    }
+                    ExposedDropdownMenuBox(
+                        expanded = cityExpanded,
+                        onExpandedChange = { cityExpanded = it }
+                    ) {
+                        val cityLabel = orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "None"
+                        OutlinedTextField(
+                            value = cityLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("City") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
                         )
-                        filteredCities.forEach { ct ->
+                        ExposedDropdownMenu(expanded = cityExpanded, onDismissRequest = { cityExpanded = false }) {
                             DropdownMenuItem(
-                                text = { Text("${ct.name} (${ct.code})") },
+                                text = { Text("None") },
                                 onClick = {
-                                    selectedCityId = ct.id
-                                    selectedStateId = ct.stateId
-                                    selectedZoneId = ct.zoneId
+                                    selectedCityId = null
+                                    selectedCentreId = null
                                     cityExpanded = false
                                 }
                             )
+                            filteredCities.forEach { ct ->
+                                DropdownMenuItem(
+                                    text = { Text("${ct.name} (${ct.code})") },
+                                    onClick = {
+                                        selectedCityId = ct.id
+                                        selectedStateId = ct.stateId
+                                        selectedZoneId = ct.zoneId
+                                        cityExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 // Centre Dropdown
-                val filteredCentres = orgHierarchy.centres.filter {
-                    (selectedCityId == null || it.cityId == selectedCityId) &&
-                        (selectedStateId == null || it.stateId == selectedStateId) &&
-                        (selectedZoneId == null || it.zoneId == selectedZoneId)
-                }
-                ExposedDropdownMenuBox(
-                    expanded = centreExpanded,
-                    onExpandedChange = { centreExpanded = it }
-                ) {
-                    val centreLabel = orgHierarchy.centres.firstOrNull { it.id == selectedCentreId }?.let { "${it.code} · ${it.name}" } ?: "None"
-                    OutlinedTextField(
-                        value = centreLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Assigned Centre") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(expanded = centreExpanded, onDismissRequest = { centreExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("None") },
-                            onClick = {
-                                selectedCentreId = null
-                                centreExpanded = false
-                            }
+                if (needsCentre) {
+                    val filteredCentres = orgHierarchy.centres.filter {
+                        (selectedCityId == null || it.cityId == selectedCityId) &&
+                            (selectedStateId == null || it.stateId == selectedStateId) &&
+                            (selectedZoneId == null || it.zoneId == selectedZoneId)
+                    }
+                    ExposedDropdownMenuBox(
+                        expanded = centreExpanded,
+                        onExpandedChange = { centreExpanded = it }
+                    ) {
+                        val centreLabel = orgHierarchy.centres.firstOrNull { it.id == selectedCentreId }?.let { "${it.code} · ${it.name}" } ?: "None"
+                        OutlinedTextField(
+                            value = centreLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Test Centre") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
                         )
-                        filteredCentres.forEach { c ->
+                        ExposedDropdownMenu(expanded = centreExpanded, onDismissRequest = { centreExpanded = false }) {
                             DropdownMenuItem(
-                                text = { Text("${c.code} · ${c.name}") },
+                                text = { Text("None") },
                                 onClick = {
-                                    selectedCentreId = c.id
-                                    selectedCityId = c.cityId
-                                    selectedStateId = c.stateId
-                                    selectedZoneId = c.zoneId
+                                    selectedCentreId = null
                                     centreExpanded = false
                                 }
                             )
+                            filteredCentres.forEach { c ->
+                                DropdownMenuItem(
+                                    text = { Text("${c.code} · ${c.name}") },
+                                    onClick = {
+                                        selectedCentreId = c.id
+                                        selectedCityId = c.cityId
+                                        selectedStateId = c.stateId
+                                        selectedZoneId = c.zoneId
+                                        centreExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -939,10 +996,10 @@ private fun UserAccessEditorDialog(
                     onSave(
                         selectedRoles.value.toList(),
                         activeRoleCode,
-                        selectedZoneId,
-                        selectedStateId,
-                        selectedCityId,
-                        selectedCentreId,
+                        if (needsZone) selectedZoneId else null,
+                        if (needsState) selectedStateId else null,
+                        if (needsCity) selectedCityId else null,
+                        if (needsCentre) selectedCentreId else null,
                         isActive
                     )
                 },

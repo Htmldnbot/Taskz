@@ -107,14 +107,9 @@ fun StepBasicInfo(
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
-            text = "Step 1: Basic Information",
+            text = "Step 1: Basic Info",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Enter the primary task details and target operations location.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         OutlinedTextField(
@@ -200,14 +195,9 @@ fun StepTaskType(
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Step 2: What type of task is this?",
+            text = "Step 2: Task Type",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Select the execution archetype for this examination operation.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         TaskType.entries.forEach { type ->
@@ -638,14 +628,9 @@ fun StepImportance(
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
-            text = "Step 4: How important is this task?",
+            text = "Step 4: Importance",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Importance determines visual prominence, escalation rules, and default alarm intensity. It is independent of urgency.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         TaskImportance.entries.forEach { imp ->
@@ -717,14 +702,9 @@ fun StepResponseForm(
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
-            text = "Step 5: Response Form Configuration",
+            text = "Step 5: Response Form",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Define the structured response inputs required from assigned employees upon completion.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         // Primary Response Archetype
@@ -851,14 +831,9 @@ fun StepAssignment(
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(
-            text = "Step 6: Assignment & Completion Policy",
+            text = "Step 6: Assignment & Policy",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Configure LANs and completion rules. For multi-LAN operations, each LAN tracks progress independently.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         OutlinedTextField(

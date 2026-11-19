@@ -77,6 +77,9 @@ class HomeViewModel(
     private val _locationSaveError = MutableStateFlow<String?>(null)
     val locationSaveError: StateFlow<String?> = _locationSaveError.asStateFlow()
 
+    private val _isTogglingLeave = MutableStateFlow(false)
+    val isTogglingLeave: StateFlow<Boolean> = _isTogglingLeave.asStateFlow()
+
     init {
         // Automatic silent sync & authorization validation on entering home
         triggerAutomaticRefresh()
@@ -93,6 +96,7 @@ class HomeViewModel(
 
     fun updateOperationalLocation(
         roleCode: String?,
+        zoneId: String? = null,
         stateId: String?,
         cityId: String?,
         centreId: String?,
@@ -110,7 +114,8 @@ class HomeViewModel(
                 cityId = cityId,
                 centreId = centreId,
                 centreCode = centreCode,
-                lanNumber = lanNumber
+                lanNumber = lanNumber,
+                zoneId = zoneId
             )
             _isSavingLocation.value = false
             res.fold(
@@ -120,6 +125,22 @@ class HomeViewModel(
                 },
                 onFailure = { err ->
                     _locationSaveError.value = err.message ?: "Failed to save duty station on server"
+                }
+            )
+        }
+    }
+
+    fun toggleLeaveStatus(isOnLeave: Boolean) {
+        if (_isTogglingLeave.value) return
+        viewModelScope.launch {
+            _isTogglingLeave.value = true
+            _syncErrorMessage.value = null
+            val res = taskzSyncManager.updateLeaveStatus(isOnLeave)
+            _isTogglingLeave.value = false
+            res.fold(
+                onSuccess = { loadDashboardStats() },
+                onFailure = { err ->
+                    _syncErrorMessage.value = err.message ?: "Unable to update leave status"
                 }
             )
         }

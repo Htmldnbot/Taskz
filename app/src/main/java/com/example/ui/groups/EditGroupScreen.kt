@@ -88,7 +88,7 @@ fun EditGroupScreen(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Edit Group / Event",
+                    text = "Edit Exam Group",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }
@@ -101,8 +101,8 @@ fun EditGroupScreen(
                     title = it
                     errorMessage = null
                 },
-                label = "Group Title *",
-                placeholder = "Group title",
+                label = "Exam Name *",
+                placeholder = "Exam name",
                 leadingIcon = Icons.Default.Title,
                 testTag = "edit_group_title"
             )

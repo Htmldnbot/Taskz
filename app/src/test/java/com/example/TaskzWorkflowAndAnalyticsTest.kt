@@ -388,10 +388,10 @@ class TaskzWorkflowAndAnalyticsTest {
             targetRoleCodes = listOf("VCO", "SO", "IT_MANAGER")
         )
 
-        val soSameStatePm = TaskzPermissionManager(
+        val itSameStatePm = TaskzPermissionManager(
             AuthorizationContext(
-                userId = "so-kota-1",
-                activeRole = TaskzRole.SO,
+                userId = "it-kota-1",
+                activeRole = TaskzRole.IT_MANAGER,
                 scope = OrgScope(
                     effectiveScopeLevel = ScopeLevel.CENTRE,
                     zoneId = "z-north",
@@ -401,14 +401,14 @@ class TaskzWorkflowAndAnalyticsTest {
                 )
             )
         )
-        assertEquals(TaskzRole.SO, TaskzRole.fromCode("SO"))
-        assertTrue(soSameStatePm.canViewTask(stateTask))
-        assertTrue(soSameStatePm.canCompleteTask(stateTask))
+        assertEquals(TaskzRole.IT_MANAGER, TaskzRole.fromCode("SO"))
+        assertTrue(itSameStatePm.canViewTask(stateTask))
+        assertTrue(itSameStatePm.canCompleteTask(stateTask))
 
-        val soOtherStatePm = TaskzPermissionManager(
+        val itOtherStatePm = TaskzPermissionManager(
             AuthorizationContext(
-                userId = "so-dl-1",
-                activeRole = TaskzRole.SO,
+                userId = "it-dl-1",
+                activeRole = TaskzRole.IT_MANAGER,
                 scope = OrgScope(
                     effectiveScopeLevel = ScopeLevel.CENTRE,
                     zoneId = "z-north",
@@ -418,7 +418,7 @@ class TaskzWorkflowAndAnalyticsTest {
                 )
             )
         )
-        assertFalse(soOtherStatePm.canViewTask(stateTask))
+        assertFalse(itOtherStatePm.canViewTask(stateTask))
     }
 
     @Test
