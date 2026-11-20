@@ -2,15 +2,18 @@ package com.example.ui.home
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,34 +26,32 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DesktopWindows
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.EventBusy
-import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lan
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.ReportProblem
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,39 +64,63 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
+import com.example.core.model.AppNotification
 import com.example.core.model.DailyDutyCheckin
+import com.example.core.model.NotificationCategory
 import com.example.core.model.OrgCentre
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.OrgScope
+import com.example.core.model.SystemIncident
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskItem
+import com.example.core.model.TaskStatus
 import com.example.core.model.TaskzRole
 import com.example.ui.common.AccountInactiveDialog
 import com.example.ui.common.NothingDivider
 import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingDotPatternStrip
 import com.example.ui.common.NothingHairlineCard
-import com.example.ui.common.NothingSectionHeader
-import com.example.ui.common.NothingStatTile
 import com.example.ui.common.NothingStatusDot
 import com.example.ui.common.NothingTagChip
-import com.example.ui.common.SyncStatusCard
 import com.example.ui.theme.NothingAmber
 import com.example.ui.theme.NothingGreen
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingTheme
 import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Calendar
+import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+
+private data class HomeActivityRowData(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val timeLabel: String,
+    val sortKey: Long,
+    val dotColor: Color,
+    val onClick: () -> Unit
+)
 
 @Composable
 fun HomeScreen(
@@ -105,26 +130,26 @@ fun HomeScreen(
     onNavigateToProfile: () -> Unit,
     onNavigateToAdmin: () -> Unit,
     onNavigateToIncidents: () -> Unit = {},
+    onNavigateToReports: () -> Unit = onNavigateToIncidents,
     onNavigateToAlarmSettings: () -> Unit = {},
     onSignedOut: () -> Unit,
     tasks: List<TaskItem> = emptyList(),
+    incidents: List<SystemIncident> = emptyList(),
+    notifications: List<AppNotification> = emptyList(),
     onTaskClick: (TaskItem) -> Unit = {},
+    onIncidentClick: (SystemIncident) -> Unit = { onNavigateToIncidents() },
+    onOpenNotifications: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
     val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
     val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
     val scopedSummary by viewModel.scopedSummaryFlow.collectAsStateWithLifecycle()
-    val syncMetadata by viewModel.syncMetadataFlow.collectAsStateWithLifecycle()
     val dashboardStats by viewModel.dashboardStats.collectAsStateWithLifecycle()
-    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
-    val syncManagerSyncing by viewModel.syncManagerSyncing.collectAsStateWithLifecycle()
-    val unreadNotifications by viewModel.unreadNotificationsCount.collectAsStateWithLifecycle()
     val syncErrorMessage by viewModel.syncErrorMessage.collectAsStateWithLifecycle()
     val isAccountInactive by viewModel.isAccountInactive.collectAsStateWithLifecycle()
     val isSavingLocation by viewModel.isSavingLocation.collectAsStateWithLifecycle()
     val locationSaveError by viewModel.locationSaveError.collectAsStateWithLifecycle()
-    val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
 
     LaunchedEffect(authContext.activeRole, authContext.scope) {
         viewModel.loadDashboardStats()
@@ -203,264 +228,268 @@ fun HomeScreen(
         onPauseOrDispose {}
     }
 
-    val liveTimelineTasks = remember(tasks) {
-        tasks
-            .filter { !it.status.equals("completed", ignoreCase = true) }
-            .sortedBy { it.executionTime ?: it.dueAt ?: it.startsAt ?: "9999" }
-            .take(4)
+    // Real task summary & Today's Timeline
+    val activeTasks = remember(tasks) {
+        tasks.filter {
+            !it.status.equals("completed", ignoreCase = true) &&
+                !it.status.equals("cancelled", ignoreCase = true)
+        }
     }
-    val nextDueTask = liveTimelineTasks.firstOrNull()
+    val completedTasksCount = remember(tasks) {
+        tasks.count { it.status.equals("completed", ignoreCase = true) }
+    }
+    val activeTaskCount = maxOf(activeTasks.size, scopedSummary.pendingTasks)
+    val overdueCount = remember(activeTasks, scopedSummary) {
+        maxOf(activeTasks.count { it.displayStatus == TaskStatus.OVERDUE }, scopedSummary.overdueTasks)
+    }
+    val dueTodayCount = remember(activeTasks, dashboardStats) {
+        val today = LocalDate.now()
+        val zone = ZoneId.systemDefault()
+        val matchingToday = activeTasks.count { task ->
+            val millis = task.scheduledExecutionMillis() ?: return@count false
+            Instant.ofEpochMilli(millis).atZone(zone).toLocalDate() == today
+        }
+        if (matchingToday > 0) matchingToday else dashboardStats.myTasksToday
+    }
+    val progressRingSweepRatio = remember(activeTaskCount, completedTasksCount, overdueCount) {
+        val total = activeTaskCount + completedTasksCount
+        when {
+            total <= 0 -> 0f
+            completedTasksCount > 0 -> (completedTasksCount.toFloat() / total.toFloat()).coerceIn(0.14f, 0.96f)
+            else -> (1f - (overdueCount.toFloat() / total.coerceAtLeast(1)).coerceAtMost(0.75f)).coerceIn(0.25f, 0.72f)
+        }
+    }
+
+    val liveTimelineTasks = remember(activeTasks) {
+        val today = LocalDate.now()
+        val zone = ZoneId.systemDefault()
+        val sorted = activeTasks.sortedBy { it.scheduledExecutionMillis() ?: Long.MAX_VALUE }
+        val todayOrOverdue = sorted.filter { task ->
+            val ms = task.scheduledExecutionMillis() ?: return@filter true
+            val date = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
+            !date.isAfter(today)
+        }
+        (if (todayOrOverdue.isNotEmpty()) todayOrOverdue else sorted).take(4)
+    }
+
+    val recentActivityRows = remember(incidents, notifications, onOpenNotifications) {
+        val timeFmt = DateTimeFormatter.ofPattern("hh:mm a", Locale.US)
+        val zone = ZoneId.systemDefault()
+        val incidentRows = incidents
+            .sortedByDescending { it.incidentTimestampMillis }
+            .take(2)
+            .map { inc ->
+                val isResolved = inc.status.equals("RESOLVED", ignoreCase = true)
+                val meta = listOfNotNull(
+                    inc.centreCode.takeIf { it.isNotBlank() }?.let { "Centre $it" }
+                        ?: inc.centreName.takeIf { it.isNotBlank() },
+                    inc.lanName.takeIf { it.isNotBlank() }
+                ).joinToString(" • ")
+                HomeActivityRowData(
+                    id = "inc_${inc.id}",
+                    title = inc.reason.ifBlank { "System Incident" },
+                    subtitle = meta.ifBlank { inc.lockedSystemNumber.ifBlank { "System Log" } },
+                    timeLabel = inc.incidentTime.ifBlank {
+                        Instant.ofEpochMilli(inc.incidentTimestampMillis).atZone(zone).format(timeFmt)
+                    },
+                    sortKey = inc.incidentTimestampMillis,
+                    dotColor = if (isResolved) NothingGreen else NothingRed,
+                    onClick = { onIncidentClick(inc) }
+                )
+            }
+        val notifRows = if (incidentRows.size < 2) {
+            notifications.take(2 - incidentRows.size).map { notif ->
+                val cat = NotificationCategory.fromRaw(notif.category, notif.type)
+                val parsedMs = TaskItem.parseIsoToMillis(notif.createdAt) ?: 0L
+                val formattedTime = if (parsedMs > 0L) {
+                    Instant.ofEpochMilli(parsedMs).atZone(zone).format(timeFmt)
+                } else {
+                    notif.createdAt.takeLast(5)
+                }
+                HomeActivityRowData(
+                    id = "notif_${notif.id}",
+                    title = notif.title,
+                    subtitle = notif.body?.takeIf { it.isNotBlank() } ?: cat.displayName,
+                    timeLabel = formattedTime,
+                    sortKey = parsedMs,
+                    dotColor = if (cat.urgent) NothingRed else NothingGreen,
+                    onClick = onOpenNotifications
+                )
+            }
+        } else {
+            emptyList()
+        }
+        (incidentRows + notifRows).sortedByDescending { it.sortKey }.take(2)
+    }
+
+    val greetingText = remember {
+        when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
+            in 0..11 -> "Good Morning,"
+            in 12..16 -> "Good Afternoon,"
+            else -> "Good Evening,"
+        }
+    }
+
+    val isFieldLevel = authContext.activeRole.hierarchyRank <= TaskzRole.VCO.hierarchyRank
+    val scopeSubtitle = remember(authContext.activeRole, authContext.scope, todayDutyCheckin, isFieldLevel) {
+        val roleTitle = authContext.activeRole.displayName
+        val stationPart = when {
+            isFieldLevel && todayDutyCheckin != null -> {
+                val duty = todayDutyCheckin!!
+                val base = if (duty.centreCode.isNotBlank()) "Centre ${duty.centreCode}" else duty.centreName
+                if (authContext.activeRole == TaskzRole.IT_MANAGER && !duty.lan.isNullOrBlank()) {
+                    "$base · ${duty.lan}"
+                } else {
+                    base
+                }
+            }
+            authContext.activeRole == TaskzRole.COMMAND_CENTER || authContext.activeRole == TaskzRole.SUPER_ADMIN ->
+                "Global Scope"
+            else -> authContext.scope.summaryLabel()
+        }
+        "$roleTitle • $stationPart"
+    }
+    val needsStationSelection = isFieldLevel &&
+        todayDutyCheckin == null &&
+        authContext.scope.centreCode.isNullOrBlank()
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(NothingTheme.colors.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        // 1. Compact Operator Identity & Duty Station Strip
-        val isFieldLevel = authContext.activeRole.hierarchyRank <= TaskzRole.VCO.hierarchyRank
-        NothingHairlineCard(contentPadding = PaddingValues(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        // 1. Minimalist Greeting & Active Role Scope Line
+        Box(modifier = Modifier.fillMaxWidth()) {
+            NothingDotPatternStrip(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .width(72.dp)
+                    .height(54.dp),
+                dotRadiusDp = 1.4.dp,
+                spacingDp = 9.dp
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                val photoUrl = profile?.avatarSignedUrl
-                if (!photoUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = photoUrl,
-                        contentDescription = "Profile Photo",
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .border(1.dp, NothingTheme.colors.border, CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(NothingTheme.colors.surfaceElevated)
-                            .border(1.dp, NothingTheme.colors.border, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        NothingDotMatrixText(
-                            text = profile?.fullName?.take(2)?.uppercase() ?: "TZ",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = profile?.fullName?.ifBlank { "Employee" } ?: "Employee",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        NothingTagChip(text = profile?.employeeId?.ifBlank { "EMP" } ?: "EMP")
-                        NothingTagChip(
-                            text = authContext.activeRole.displayName,
-                            containerColor = NothingTheme.colors.accentPrimary,
-                            contentColor = NothingTheme.colors.onAccentPrimary,
-                            borderColor = NothingTheme.colors.accentPrimary,
-                            modifier = Modifier.testTag("home_active_role_badge")
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = onNavigateToProfile,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open Profile",
-                        tint = NothingTheme.colors.textSecondary
-                    )
-                }
-            }
-
-            if (!isFieldLevel &&
-                authContext.activeRole != TaskzRole.COMMAND_CENTER &&
-                authContext.activeRole != TaskzRole.SUPER_ADMIN
-            ) {
-                Spacer(modifier = Modifier.height(10.dp))
-                NothingDivider()
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("active_duty_station_card"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Business,
-                            contentDescription = null,
-                            tint = NothingTheme.colors.textSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "${authContext.activeRole.displayName} · ${authContext.scope.summaryLabel()}",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontFamily = TechMonoFontFamily,
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    IconButton(
-                        onClick = { showDutyCheckinModal = true },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .testTag("btn_change_duty_station")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit Scope",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            } else if (isFieldLevel && todayDutyCheckin != null) {
-                val duty = todayDutyCheckin!!
-                Spacer(modifier = Modifier.height(10.dp))
-                NothingDivider()
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("active_duty_station_card"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${duty.centreCode} · ${duty.centreName}",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = if (duty.role == "VCO") "VCO" else "IT Manager · ${duty.lan ?: "All LANs"}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
-                            color = NothingTheme.colors.textSecondary
-                        )
-                    }
-                    IconButton(
-                        onClick = { showDutyCheckinModal = true },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .testTag("btn_change_duty_station")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Change Station",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            } else if (isFieldLevel) {
-                Spacer(modifier = Modifier.height(10.dp))
-                NothingDivider()
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showDutyCheckinModal = true }
-                        .testTag("prompt_duty_checkin_card"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        NothingStatusDot(color = NothingAmber, size = 7.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Select Duty Station (Centre & LAN)",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = NothingAmber
-                        )
-                    }
-                    NothingTagChip(
-                        text = "SET",
-                        containerColor = NothingTheme.colors.accentPrimary,
-                        contentColor = NothingTheme.colors.onAccentPrimary,
-                        borderColor = NothingTheme.colors.accentPrimary
-                    )
-                }
-            }
-        }
-
-        // 2. Compact Duty / On-Leave Strip
-        NothingHairlineCard(
-            containerColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.08f) else NothingTheme.colors.surface,
-            borderColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.45f) else NothingTheme.colors.border,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            modifier = Modifier.testTag("home_on_leave_card")
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    NothingStatusDot(
-                        color = if (authContext.isOnLeave) NothingAmber else NothingGreen,
-                        size = 7.dp
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.Default.EventBusy,
-                        contentDescription = null,
-                        tint = if (authContext.isOnLeave) NothingAmber else NothingTheme.colors.textSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (authContext.isOnLeave) "On Leave · No alarms/tasks" else "On Duty · Active for assignments",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = if (authContext.isOnLeave) NothingAmber else MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Switch(
-                    checked = authContext.isOnLeave,
-                    enabled = !isTogglingLeave,
-                    onCheckedChange = { checked -> viewModel.toggleLeaveStatus(checked) },
-                    modifier = Modifier.testTag("home_on_leave_switch")
+                Text(
+                    text = greetingText,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 21.sp
+                    ),
+                    color = NothingTheme.colors.textSecondary
                 )
+                Text(
+                    text = profile?.fullName?.trim()?.ifBlank { "Team Member" } ?: "Team Member",
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 28.sp,
+                        lineHeight = 32.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                val canEditScope = authContext.activeRole != TaskzRole.COMMAND_CENTER &&
+                    authContext.activeRole != TaskzRole.SUPER_ADMIN
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .then(
+                            if (canEditScope) {
+                                Modifier.clickable { showDutyCheckinModal = true }
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                        .testTag(
+                            when {
+                                needsStationSelection -> "prompt_duty_checkin_card"
+                                canEditScope -> "btn_change_duty_station"
+                                else -> "home_active_role_badge"
+                            }
+                        )
+                ) {
+                    if (needsStationSelection) {
+                        NothingStatusDot(color = NothingAmber, size = 7.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${authContext.activeRole.displayName} • Select Duty Station ›",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = NothingAmber,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        Text(
+                            text = scopeSubtitle,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = NothingTheme.colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (canEditScope) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Change scope",
+                                tint = NothingTheme.colors.textSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        // 3. Compact Collapsible Alarm Permissions Warning
-        if (!hasNotificationsPermission || !hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
+        // Optional compact sync error notice
+        if (!syncErrorMessage.isNullOrBlank()) {
             NothingHairlineCard(
                 containerColor = NothingRed.copy(alpha = 0.08f),
-                borderColor = NothingRed.copy(alpha = 0.45f),
-                contentPadding = PaddingValues(12.dp),
+                borderColor = NothingRed.copy(alpha = 0.4f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = syncErrorMessage.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingRed,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    TextButton(
+                        onClick = { viewModel.clearSyncError() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+
+        // Compact Collapsible Alarm Permissions Warning (only visible when missing)
+        if (!hasNotificationsPermission || !hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
+            NothingHairlineCard(
+                containerColor = NothingRed.copy(alpha = 0.07f),
+                borderColor = NothingRed.copy(alpha = 0.4f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier.testTag("overlay_permission_banner")
             ) {
                 Row(
@@ -475,25 +504,25 @@ fun HomeScreen(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
                             tint = NothingRed,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Alarm permissions required",
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = NothingRed
                         )
                     }
                     Icon(
                         imageVector = if (alarmBannerExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Toggle details",
+                        contentDescription = "Toggle alarm permission details",
                         tint = NothingRed,
                         modifier = Modifier.size(18.dp)
                     )
                 }
 
                 AnimatedVisibility(visible = alarmBannerExpanded) {
-                    Column(modifier = Modifier.padding(top = 6.dp)) {
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
                         Text(
                             text = buildString {
                                 if (!hasNotificationsPermission) append("• Notifications (ring alarms)\n")
@@ -504,308 +533,304 @@ fun HomeScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (!hasFullScreenIntentPermission &&
-                        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                    ) {
-                        Button(
-                            onClick = {
-                                try {
-                                    context.startActivity(
-                                        android.content.Intent(
-                                            android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
-                                            android.net.Uri.parse("package:${context.packageName}")
-                                        )
-                                    )
-                                } catch (_: Exception) {}
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
-                            shape = RoundedCornerShape(999.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 38.dp)
-                        ) {
-                            Text("Grant Full-Screen", maxLines = 1, style = MaterialTheme.typography.labelSmall)
-                        }
-                    } else if (!hasOverlayPermission) {
-                        Button(
-                            onClick = {
-                                try {
-                                    context.startActivity(
-                                        android.content.Intent(
-                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            android.net.Uri.parse("package:${context.packageName}")
-                                        )
-                                    )
-                                } catch (_: Exception) {}
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
-                            shape = RoundedCornerShape(999.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 38.dp)
-                        ) {
-                            Text("Grant Overlay", maxLines = 1, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = onNavigateToAlarmSettings,
-                        shape = RoundedCornerShape(999.dp),
-                        border = BorderStroke(1.dp, NothingRed.copy(alpha = 0.45f)),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 38.dp)
-                    ) {
-                        Text("Alarm Settings", maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
-        }
-
-        // 4. Role-Aware KPI Command Grid
-        val overviewHeading = when (authContext.activeRole) {
-            TaskzRole.IT_MANAGER -> "CENTRE TELEMETRY"
-            TaskzRole.VCO -> "VENUE TELEMETRY"
-            TaskzRole.CITY_HEAD -> "CITY TELEMETRY"
-            TaskzRole.ROM -> "STATE TELEMETRY"
-            TaskzRole.ZOM -> "ZONE TELEMETRY"
-            TaskzRole.COMMAND_CENTER -> "SPOC TELEMETRY"
-            TaskzRole.SUPER_ADMIN -> "ADMIN TELEMETRY"
-        }
-        NothingSectionHeader(
-            title = overviewHeading,
-            trailingText = authContext.scope.summaryLabel(),
-            onTrailingClick = if (isFieldLevel) ({ showDutyCheckinModal = true }) else null,
-            useDotMatrix = true
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            NothingStatTile(
-                value = maxOf(scopedSummary.assignedTasks, dashboardStats.myTasksToday).toString(),
-                label = "Assigned / Scope",
-                statusDotColor = NothingGreen,
-                onClick = onNavigateToTasks,
-                modifier = Modifier.weight(1f)
-            )
-            NothingStatTile(
-                value = maxOf(scopedSummary.pendingTasks, dashboardStats.upcomingTasks).toString(),
-                label = "Pending Tasks",
-                onClick = onNavigateToTasks,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            NothingStatTile(
-                value = scopedSummary.overdueTasks.toString(),
-                label = "Overdue",
-                statusDotColor = if (scopedSummary.overdueTasks > 0) NothingRed else null,
-                onClick = onNavigateToTasks,
-                modifier = Modifier.weight(1f)
-            )
-            NothingStatTile(
-                value = if (scopedSummary.escalatedIncidents > 0) "${scopedSummary.openIncidents}+${scopedSummary.escalatedIncidents}" else scopedSummary.openIncidents.toString(),
-                label = "Open Incidents",
-                statusDotColor = if (scopedSummary.openIncidents > 0) NothingAmber else null,
-                onClick = onNavigateToIncidents,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            NothingStatTile(
-                value = maxOf(scopedSummary.unreadNotifications, unreadNotifications).toString(),
-                label = "Unread Alerts",
-                onClick = onNavigateToTasks,
-                modifier = Modifier.weight(1f)
-            )
-            NothingStatTile(
-                value = dashboardStats.vacancies.toString(),
-                label = "Open Vacancies",
-                onClick = onNavigateToTasks,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        // 5. Next Due Task & Live Today Timeline
-        NothingSectionHeader(
-            title = "LIVE TIMELINE",
-            trailingText = "ALL TASKS ›",
-            onTrailingClick = onNavigateToTasks,
-            useDotMatrix = true
-        )
-
-        if (nextDueTask != null) {
-            val nextTime = (nextDueTask.executionTime ?: nextDueTask.dueAt ?: nextDueTask.startsAt)?.let {
-                TaskItem.formatForDisplay(it) ?: it
-            } ?: "SCHEDULED"
-            NothingHairlineCard(
-                onClick = { onTaskClick(nextDueTask) },
-                containerColor = NothingTheme.colors.surfaceElevated,
-                contentPadding = PaddingValues(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    NothingTagChip(
-                        text = "NEXT DUE",
-                        containerColor = NothingTheme.colors.accentPrimary,
-                        contentColor = NothingTheme.colors.onAccentPrimary,
-                        borderColor = NothingTheme.colors.accentPrimary
-                    )
-                    Text(
-                        text = nextTime,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = TechMonoFontFamily,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = nextDueTask.title,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val meta = listOfNotNull(nextDueTask.groupTitle, nextDueTask.shiftName, nextDueTask.location).joinToString(" · ")
-                if (meta.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = meta,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = NothingTheme.colors.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            if (liveTimelineTasks.size > 1) {
-                NothingHairlineCard(contentPadding = PaddingValues(0.dp)) {
-                    liveTimelineTasks.drop(1).forEachIndexed { idx, item ->
-                        if (idx > 0) NothingDivider()
-                        val itemTime = (item.executionTime ?: item.dueAt ?: item.startsAt)?.let {
-                            TaskItem.formatForDisplay(it) ?: it
-                        } ?: "--:--"
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onTaskClick(item) }
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            NothingStatusDot(
-                                color = if (item.priority.equals("urgent", ignoreCase = true)) NothingRed else NothingTheme.colors.textSecondary,
-                                size = 6.dp
+                            if (!hasFullScreenIntentPermission &&
+                                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                            ) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            context.startActivity(
+                                                android.content.Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                                    android.net.Uri.parse("package:${context.packageName}")
+                                                )
+                                            )
+                                        } catch (_: Exception) {}
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                                    shape = RoundedCornerShape(999.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 38.dp)
+                                ) {
+                                    Text("Grant Full-Screen", maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                                }
+                            } else if (!hasOverlayPermission) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            context.startActivity(
+                                                android.content.Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    android.net.Uri.parse("package:${context.packageName}")
+                                                )
+                                            )
+                                        } catch (_: Exception) {}
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                                    shape = RoundedCornerShape(999.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 38.dp)
+                                ) {
+                                    Text("Grant Overlay", maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = onNavigateToAlarmSettings,
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(1.dp, NothingRed.copy(alpha = 0.45f)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 38.dp)
+                            ) {
+                                Text("Alarm Settings", maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Hero Active Tasks Progress Ring Card
+        HomeTaskSummaryRingCard(
+            activeTaskCount = activeTaskCount,
+            overdueCount = overdueCount,
+            dueTodayCount = dueTodayCount,
+            sweepFraction = progressRingSweepRatio,
+            onClick = onNavigateToTasks
+        )
+
+        // 3. Today's Timeline
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            HomeSectionTitleRow(
+                title = "Today's Timeline",
+                actionText = "View All",
+                onActionClick = onNavigateToTasks,
+                actionTestTag = "home_timeline_view_all"
+            )
+
+            if (liveTimelineTasks.isEmpty()) {
+                NothingHairlineCard(
+                    onClick = onNavigateToTasks,
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "No pending tasks in timeline",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = item.title,
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = itemTime,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = TechMonoFontFamily,
-                                    fontSize = 10.sp
-                                ),
+                                text = "Upcoming & scheduled tasks appear here automatically",
+                                style = MaterialTheme.typography.bodySmall,
                                 color = NothingTheme.colors.textSecondary
                             )
                         }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open Tasks",
+                            tint = NothingTheme.colors.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    liveTimelineTasks.forEachIndexed { index, task ->
+                        TimelineTaskRow(
+                            task = task,
+                            scopeFallback = authContext.scope,
+                            isFirst = index == 0,
+                            isLast = index == liveTimelineTasks.lastIndex,
+                            onClick = { onTaskClick(task) }
+                        )
                     }
                 }
             }
         }
 
-        // 6. Sync Status Strip
-        SyncStatusCard(
-            syncMetadata = syncMetadata,
-            onRefreshClick = { viewModel.triggerAutomaticRefresh() },
-            onClearFailedClick = { viewModel.clearFailedSyncItems() },
-            externalErrorMessage = syncErrorMessage,
-            isRefreshing = isRefreshing || syncManagerSyncing
-        )
+        // 4. Quick Access (2x2 Grid)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            HomeSectionTitleRow(title = "Quick Access")
 
-        // 7. Compact Operations Modules
-        NothingSectionHeader(title = "MODULES", useDotMatrix = true)
-
-        NothingHairlineCard(contentPadding = PaddingValues(0.dp)) {
-            HomeModuleRow(
-                title = "Tasks",
-                subtitle = "${authContext.scope.summaryLabel()} · ${authContext.activeRole.displayName}",
-                icon = Icons.Default.Assignment,
-                tag = "ACTIVE",
-                onClick = onNavigateToTasks,
-                testTag = "home_module_tasks"
-            )
-            if (viewModel.permissionManager.canSelfJoinGroups()) {
-                NothingDivider()
-                HomeModuleRow(
-                    title = "Exam Groups & Shifts",
-                    subtitle = "1-click group join & shift workflows",
-                    icon = Icons.Default.Groups,
-                    tag = if (viewModel.permissionManager.canManageGroups()) "MANAGE" else "JOIN",
-                    onClick = onNavigateToGroups,
-                    testTag = "home_module_groups"
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                HomeQuickAccessTile(
+                    icon = Icons.Outlined.CheckBox,
+                    title = "My Tasks",
+                    subtitle = "View & manage",
+                    onClick = onNavigateToTasks,
+                    testTag = "home_module_tasks",
+                    modifier = Modifier.weight(1f)
+                )
+                HomeQuickAccessTile(
+                    icon = Icons.Outlined.ReportProblem,
+                    title = "Incidents",
+                    subtitle = "View incidents",
+                    onClick = onNavigateToIncidents,
+                    testTag = "home_module_incidents",
+                    modifier = Modifier.weight(1f)
                 )
             }
-            NothingDivider()
-            HomeModuleRow(
-                title = "Incident Register",
-                subtitle = "System locks & LAN telemetry",
-                icon = Icons.Default.DesktopWindows,
-                tag = "LOG",
-                onClick = onNavigateToIncidents,
-                testTag = "home_module_incidents"
-            )
-            NothingDivider()
-            HomeModuleRow(
-                title = "Profile & Role",
-                subtitle = "Roles, scope & leave state",
-                icon = Icons.Default.Person,
-                tag = "PROFILE",
-                onClick = onNavigateToProfile,
-                testTag = "home_module_profile"
-            )
-            if (viewModel.permissionManager.canManageUsers()) {
-                NothingDivider()
-                HomeModuleRow(
-                    title = "Admin Console",
-                    subtitle = "Users, roles & scope controls",
-                    icon = Icons.Default.AdminPanelSettings,
-                    tag = "ADMIN",
-                    onClick = onNavigateToAdmin,
-                    testTag = "home_module_admin"
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                HomeQuickAccessTile(
+                    icon = Icons.Outlined.Assessment,
+                    title = "Reports",
+                    subtitle = "View reports",
+                    onClick = onNavigateToReports,
+                    testTag = "home_module_reports",
+                    modifier = Modifier.weight(1f)
                 )
+                when {
+                    viewModel.permissionManager.canManageUsers() -> {
+                        HomeQuickAccessTile(
+                            icon = Icons.Outlined.Settings,
+                            title = "Admin",
+                            subtitle = "Manage system",
+                            onClick = onNavigateToAdmin,
+                            testTag = "home_module_admin",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    viewModel.permissionManager.canSelfJoinGroups() -> {
+                        HomeQuickAccessTile(
+                            icon = Icons.Outlined.Groups,
+                            title = "Groups",
+                            subtitle = "Exam shifts",
+                            onClick = onNavigateToGroups,
+                            testTag = "home_module_groups",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    else -> {
+                        HomeQuickAccessTile(
+                            icon = Icons.Outlined.NotificationsActive,
+                            title = "Alarms",
+                            subtitle = "Alert settings",
+                            onClick = onNavigateToAlarmSettings,
+                            testTag = "home_module_alarms",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 5. Recent Activity
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            HomeSectionTitleRow(
+                title = "Recent Activity",
+                actionText = "View All",
+                onActionClick = if (incidents.isNotEmpty()) onNavigateToIncidents else onOpenNotifications,
+                actionTestTag = "home_activity_view_all"
+            )
+
+            if (recentActivityRows.isEmpty()) {
+                NothingHairlineCard(
+                    onClick = onOpenNotifications,
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            NothingStatusDot(color = NothingTheme.colors.textSecondary, size = 8.dp)
+                            Column {
+                                Text(
+                                    text = "All clear",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "No recent incidents or alerts",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NothingTheme.colors.textSecondary
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "View notifications",
+                            tint = NothingTheme.colors.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    recentActivityRows.forEach { entry ->
+                        NothingHairlineCard(
+                            onClick = entry.onClick,
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                            modifier = Modifier.testTag("home_activity_${entry.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                NothingStatusDot(color = entry.dotColor, size = 8.dp)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = entry.title,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = entry.subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = NothingTheme.colors.textSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = entry.timeLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = TechMonoFontFamily,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = NothingTheme.colors.textSecondary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = NothingTheme.colors.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -855,51 +880,520 @@ fun HomeScreen(
 }
 
 @Composable
-private fun HomeModuleRow(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    tag: String,
-    onClick: () -> Unit,
-    testTag: String
+private fun HomeTaskSummaryRingCard(
+    activeTaskCount: Int,
+    overdueCount: Int,
+    dueTodayCount: Int,
+    sweepFraction: Float,
+    onClick: () -> Unit
 ) {
+    val trackColor = NothingTheme.colors.border
+    val progressColor = MaterialTheme.colorScheme.onSurface
+
+    NothingHairlineCard(
+        onClick = onClick,
+        shape = RoundedCornerShape(22.dp),
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+        modifier = Modifier.testTag("home_summary_ring_card")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(98.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val strokePx = 6.dp.toPx()
+                    val pad = strokePx / 2f + 3.dp.toPx()
+                    val arcSize = Size(size.width - pad * 2f, size.height - pad * 2f)
+                    val topLeft = Offset(pad, pad)
+
+                    drawArc(
+                        color = trackColor,
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(width = strokePx, cap = StrokeCap.Round)
+                    )
+
+                    val clamped = sweepFraction.coerceIn(0f, 1f)
+                    if (clamped > 0.01f) {
+                        val sweepDeg = 360f * clamped
+                        drawArc(
+                            color = progressColor,
+                            startAngle = -90f,
+                            sweepAngle = sweepDeg,
+                            useCenter = false,
+                            topLeft = topLeft,
+                            size = arcSize,
+                            style = Stroke(width = strokePx, cap = StrokeCap.Round)
+                        )
+                        val endRad = ((-90f + sweepDeg) * (PI / 180.0))
+                        val radius = arcSize.width / 2f
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        val dotOffset = Offset(
+                            x = center.x + (radius * cos(endRad)).toFloat(),
+                            y = center.y + (radius * sin(endRad)).toFloat()
+                        )
+                        drawCircle(
+                            color = progressColor.copy(alpha = 0.28f),
+                            radius = 6.5.dp.toPx(),
+                            center = dotOffset
+                        )
+                        drawCircle(
+                            color = progressColor,
+                            radius = 3.5.dp.toPx(),
+                            center = dotOffset
+                        )
+                    }
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = activeTaskCount.toString(),
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 26.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Active Tasks",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = NothingTheme.colors.textSecondary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(58.dp)
+                    .background(NothingTheme.colors.border)
+            )
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(NothingRed),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "!",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            ),
+                            color = Color.White
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = overdueCount.toString(),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (overdueCount > 0) NothingRed else MaterialTheme.colorScheme.onSurface
+                            )
+                        )
+                        Text(
+                            text = "Overdue",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NothingTheme.colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Schedule,
+                        contentDescription = null,
+                        tint = NothingTheme.colors.textSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = dueTodayCount.toString(),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Due Today",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NothingTheme.colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(NothingTheme.colors.surfaceElevated)
+                    .border(1.dp, NothingTheme.colors.border, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Open Tasks",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeSectionTitleRow(
+    title: String,
+    actionText: String? = null,
+    onActionClick: (() -> Unit)? = null,
+    actionTestTag: String? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            NothingDotGridIcon(size = 15.dp)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                ),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        if (!actionText.isNullOrBlank() && onActionClick != null) {
+            TextButton(
+                onClick = onActionClick,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier
+                    .heightIn(min = 40.dp)
+                    .then(if (actionTestTag != null) Modifier.testTag(actionTestTag) else Modifier)
+            ) {
+                Text(
+                    text = actionText,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = NothingTheme.colors.textSecondary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NothingDotGridIcon(
+    size: Dp = 15.dp,
+    color: Color = NothingTheme.colors.textSecondary
+) {
+    Canvas(modifier = Modifier.size(size)) {
+        val radius = (this.size.minDimension / 9f).coerceAtLeast(1.4f)
+        val step = (this.size.minDimension - radius * 2f) / 2f
+        for (row in 0..2) {
+            for (col in 0..2) {
+                drawCircle(
+                    color = color,
+                    radius = radius,
+                    center = Offset(radius + col * step, radius + row * step)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineTaskRow(
+    task: TaskItem,
+    scopeFallback: OrgScope,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onClick: () -> Unit
+) {
+    val lineColor = NothingTheme.colors.border
+    val nodeActiveColor = MaterialTheme.colorScheme.onBackground
+    val nodeInactiveColor = NothingTheme.colors.textSecondary
+    val bgColor = NothingTheme.colors.background
+
+    val timeString = remember(task.executionTime, task.dueAt, task.startsAt, task.taskType) {
+        val ms = task.scheduledExecutionMillis()
+        when {
+            ms != null -> Instant.ofEpochMilli(ms)
+                .atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("hh:mm a", Locale.US))
+            task.taskType == com.example.core.model.TaskType.IMMEDIATE -> "NOW"
+            else -> "--:--"
+        }
+    }
+
+    val subtitleString = remember(task, scopeFallback) {
+        val loc = task.location?.takeIf { it.isNotBlank() }
+            ?: scopeFallback.centreCode?.takeIf { it.isNotBlank() }?.let { "Centre $it" }
+        val lan = task.lanTargetList.takeIf { it.isNotEmpty() }?.let { list ->
+            if (list.size == 1) list.first() else "${list.first()} +${list.size - 1}"
+        }
+        val groupOrShift = task.shiftName?.takeIf { it.isNotBlank() }
+            ?: task.groupTitle?.takeIf { it.isNotBlank() }
+        listOfNotNull(loc, lan, if (loc == null && lan == null) groupOrShift else null)
+            .joinToString(" • ")
+            .ifBlank { task.description?.takeIf { it.isNotBlank() } ?: "Scheduled task" }
+    }
+
+    val status = task.displayStatus
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp)
-            .testTag(testTag),
+            .testTag("timeline_task_${task.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
+        // Left timeline node & connector column
+        Canvas(
+            modifier = Modifier
+                .width(22.dp)
+                .fillMaxHeight()
+        ) {
+            val cx = this.size.width / 2f
+            val cy = this.size.height / 2f
+            if (!isFirst) {
+                drawLine(
+                    color = lineColor,
+                    start = Offset(cx, 0f),
+                    end = Offset(cx, cy),
+                    strokeWidth = 1.2.dp.toPx()
+                )
+            }
+            if (!isLast) {
+                drawLine(
+                    color = lineColor,
+                    start = Offset(cx, cy),
+                    end = Offset(cx, this.size.height),
+                    strokeWidth = 1.2.dp.toPx()
+                )
+            }
+            if (isFirst) {
+                drawCircle(
+                    color = nodeActiveColor.copy(alpha = 0.18f),
+                    radius = 9.dp.toPx(),
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = nodeActiveColor,
+                    radius = 5.dp.toPx(),
+                    center = Offset(cx, cy)
+                )
+            } else {
+                drawCircle(
+                    color = bgColor,
+                    radius = 5.dp.toPx(),
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = nodeInactiveColor,
+                    radius = 4.5.dp.toPx(),
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = timeString,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = if (isFirst) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = 12.sp
+                    ),
+                    color = if (isFirst) MaterialTheme.colorScheme.onBackground else NothingTheme.colors.textSecondary,
+                    modifier = Modifier.width(68.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 10.dp)
+                        .width(1.dp)
+                        .height(28.dp)
+                        .background(NothingTheme.colors.borderSubtle)
+                )
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = task.title,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = if (isFirst) FontWeight.SemiBold else FontWeight.Medium,
+                            fontSize = 14.sp
+                        ),
+                        color = if (isFirst) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = subtitleString,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = NothingTheme.colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                when {
+                    status == TaskStatus.OVERDUE -> {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = NothingRed.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, NothingRed.copy(alpha = 0.45f))
+                        ) {
+                            Text(
+                                text = "Overdue",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                ),
+                                color = NothingRed,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    isFirst || status == TaskStatus.ACTION_REQUIRED || status == TaskStatus.PENDING_CONFIRMATION -> {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = NothingTheme.colors.accentPrimary
+                        ) {
+                            Text(
+                                text = "Due",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                ),
+                                color = NothingTheme.colors.onAccentPrimary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    task.currentProgress in 1..99 -> {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        NothingTagChip(text = "${task.currentProgress}%")
+                    }
+                }
+            }
+            if (!isLast) {
+                NothingDivider(color = NothingTheme.colors.borderSubtle)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeQuickAccessTile(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    NothingHairlineCard(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+        modifier = modifier
+            .heightIn(min = 66.dp)
+            .testTag(testTag)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
             )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = NothingTheme.colors.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = NothingTheme.colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = NothingTheme.colors.textSecondary,
+                modifier = Modifier.size(16.dp)
             )
         }
-        NothingTagChip(text = tag)
-        Spacer(modifier = Modifier.width(6.dp))
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = NothingTheme.colors.textSecondary,
-            modifier = Modifier.size(16.dp)
-        )
     }
 }
 

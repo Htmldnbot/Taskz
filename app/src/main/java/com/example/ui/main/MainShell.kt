@@ -14,6 +14,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,9 +39,6 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Groups
@@ -48,6 +46,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReportProblem
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.DesktopWindows
@@ -60,6 +59,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -86,6 +86,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -95,12 +96,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.TaskzApplication
 import com.example.core.model.AssignedRoleInfo
 import com.example.core.model.NotificationCategory
 import com.example.core.model.Shift
-import com.example.core.model.SyncStatus
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskItem
 import com.example.notifications.DeepLinkTarget
@@ -232,6 +233,7 @@ fun MainShell(
         syncManager.syncNow(forceFull = false)
     }
 
+    val profile by homeViewModel.profileFlow.collectAsStateWithLifecycle()
     val authContext by permissionManager.contextFlow.collectAsStateWithLifecycle()
     val syncMetadata by homeViewModel.syncMetadataFlow.collectAsStateWithLifecycle()
     val isSyncing by syncManager.isSyncing.collectAsStateWithLifecycle()
@@ -240,10 +242,13 @@ fun MainShell(
     val allShifts by tasksViewModel.allShiftsFlow.collectAsStateWithLifecycle()
     val allGroups by tasksViewModel.taskGroupsFlow.collectAsStateWithLifecycle()
     val allTasks by tasksViewModel.allTasksFlow.collectAsStateWithLifecycle()
+    val allIncidents by systemIncidentViewModel.allIncidents.collectAsStateWithLifecycle()
     val isOnline by app.networkMonitor.isOnlineFlow.collectAsStateWithLifecycle(initialValue = app.networkMonitor.isCurrentlyConnected())
     val pendingDeepLink by NotificationDeepLinkRouter.pendingTarget.collectAsStateWithLifecycle()
 
     var showRoleMenu by remember { mutableStateOf(false) }
+    var showAvailabilityMenu by remember { mutableStateOf(false) }
+    var isUpdatingAvailability by remember { mutableStateOf(false) }
     var showNotificationsSheet by remember { mutableStateOf(false) }
     var showCreateActionSheet by remember { mutableStateOf(false) }
     var pendingShift1Candidates by remember { mutableStateOf<List<Shift>?>(null) }
@@ -443,26 +448,60 @@ fun MainShell(
             },
             topBar = {
                 if (currentSubRoute == SubRoute.None) {
+                    val initials = remember(profile?.fullName) {
+                        val parts = profile?.fullName.orEmpty().trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        when {
+                            parts.size >= 2 -> "${parts.first().first()}${parts.last().first()}".uppercase()
+                            parts.size == 1 -> parts.first().take(2).uppercase()
+                            else -> "TZ"
+                        }
+                    }
                     TopAppBar(
                         title = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.taskz_launcher_icon_1791997779230),
-                                    contentDescription = "Taskz",
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                )
-                                NothingDotMatrixText(
-                                    text = "TASKZ",
-                                    fontSize = 18.sp,
-                                    letterSpacing = 1.6.sp,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
-                                if (currentTab != MainTab.HOME) {
+                            if (currentTab == MainTab.HOME) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    NothingDotMatrixText(
+                                        text = "Taskz",
+                                        fontSize = 22.sp,
+                                        letterSpacing = 1.6.sp,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "Operations. Simplified.",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = NothingTheme.colors.textSecondary,
+                                            maxLines = 1
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .width(18.dp)
+                                                .height(1.dp)
+                                                .background(NothingTheme.colors.border)
+                                        )
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.taskz_launcher_icon_1791997779230),
+                                        contentDescription = "Taskz",
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                    )
+                                    NothingDotMatrixText(
+                                        text = "Taskz",
+                                        fontSize = 18.sp,
+                                        letterSpacing = 1.4.sp,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
                                     Text(
                                         text = "/ ${currentTab.title.uppercase()}",
                                         style = MaterialTheme.typography.labelSmall.copy(
@@ -477,147 +516,126 @@ fun MainShell(
                             }
                         },
                         actions = {
-                            if (authContext.isOnLeave) {
-                                NothingTagChip(
-                                    text = "LEAVE",
-                                    containerColor = NothingAmber.copy(alpha = 0.14f),
-                                    contentColor = NothingAmber,
-                                    borderColor = NothingAmber.copy(alpha = 0.45f),
-                                    modifier = Modifier
-                                        .padding(end = 4.dp)
-                                        .testTag("topbar_on_leave_badge")
-                                )
-                            }
-
+                            // Clear 1-tap Available / Away pill right at the top
+                            val isAway = authContext.isOnLeave
+                            val statusColor = if (isAway) NothingAmber else NothingGreen
                             Box {
                                 Surface(
-                                    onClick = { showRoleMenu = true },
+                                    onClick = { showAvailabilityMenu = true },
                                     shape = RoundedCornerShape(999.dp),
-                                    color = NothingTheme.colors.surface,
-                                    border = BorderStroke(1.dp, NothingTheme.colors.border),
+                                    color = if (isAway) NothingAmber.copy(alpha = 0.12f) else NothingTheme.colors.surface,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isAway) NothingAmber.copy(alpha = 0.48f) else NothingTheme.colors.border
+                                    ),
                                     modifier = Modifier
-                                        .heightIn(min = 34.dp)
-                                        .testTag("topbar_role_switcher")
+                                        .heightIn(min = 36.dp)
+                                        .testTag("topbar_availability_toggle")
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(start = 9.dp, end = 5.dp, top = 5.dp, bottom = 5.dp)
+                                        modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
                                     ) {
+                                        NothingStatusDot(color = statusColor, size = 8.dp)
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = authContext.activeRole.displayName,
+                                            text = if (isAway) "Away" else "Available",
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontFamily = TechMonoFontFamily,
+                                            style = MaterialTheme.typography.labelMedium.copy(
                                                 fontWeight = FontWeight.SemiBold,
-                                                fontSize = 10.sp
+                                                fontSize = 12.sp
                                             ),
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = if (isAway) NothingAmber else MaterialTheme.colorScheme.onSurface
                                         )
                                         Icon(
                                             imageVector = Icons.Default.ArrowDropDown,
-                                            contentDescription = "Switch Active Role",
-                                            tint = NothingTheme.colors.textSecondary,
+                                            contentDescription = "Change availability status",
+                                            tint = if (isAway) NothingAmber else NothingTheme.colors.textSecondary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
                                 DropdownMenu(
-                                    expanded = showRoleMenu,
-                                    onDismissRequest = { showRoleMenu = false }
+                                    expanded = showAvailabilityMenu,
+                                    onDismissRequest = { showAvailabilityMenu = false }
                                 ) {
-                                    val assigned = authContext.assignedRoles.ifEmpty {
-                                        listOf(
-                                            AssignedRoleInfo(
-                                                roleId = "",
-                                                roleCode = authContext.activeRole.code,
-                                                roleName = authContext.activeRole.displayName,
-                                                isPrimary = true
-                                            )
-                                        )
-                                    }
-                                    assigned.forEach { role ->
-                                        val isCurrent = role.roleCode.equals(authContext.activeRole.code, ignoreCase = true)
-                                        DropdownMenuItem(
-                                            text = {
+                                    DropdownMenuItem(
+                                        enabled = !isUpdatingAvailability,
+                                        leadingIcon = { NothingStatusDot(color = NothingGreen, size = 9.dp) },
+                                        trailingIcon = if (!isAway) {
+                                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                        } else null,
+                                        text = {
+                                            Column {
                                                 Text(
-                                                    text = role.roleName,
-                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                                                    text = "Available",
+                                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                                                 )
-                                            },
-                                            leadingIcon = if (isCurrent) {
-                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                                            } else null,
-                                            onClick = {
-                                                showRoleMenu = false
-                                                if (!isCurrent) {
-                                                    coroutineScope.launch {
-                                                        val res = syncManager.switchActiveRole(role.roleCode)
-                                                        res.onFailure { err ->
-                                                            snackbarHostState.showSnackbar(err.message ?: "Unable to switch role")
-                                                        }
+                                                Text(
+                                                    text = "Active · Receive tasks & alarms",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = NothingTheme.colors.textSecondary
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showAvailabilityMenu = false
+                                            if (isAway && !isUpdatingAvailability) {
+                                                coroutineScope.launch {
+                                                    isUpdatingAvailability = true
+                                                    syncManager.updateLeaveStatus(false).onFailure { err ->
+                                                        snackbarHostState.showSnackbar(err.message ?: "Unable to set Available")
                                                     }
+                                                    isUpdatingAvailability = false
                                                 }
-                                            },
-                                            modifier = Modifier.testTag("role_option_${role.roleCode}")
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            val syncBadgeColor = when {
-                                !isOnline -> NothingTheme.colors.textSecondary
-                                isSyncing || syncMetadata.status == SyncStatus.SYNCING -> MaterialTheme.colorScheme.onSurface
-                                syncMetadata.pendingSyncCount > 0 || syncMetadata.status == SyncStatus.PENDING -> NothingAmber
-                                else -> NothingGreen
-                            }
-                            val syncIcon = when {
-                                !isOnline -> Icons.Default.CloudOff
-                                isSyncing || syncMetadata.status == SyncStatus.SYNCING -> Icons.Default.CloudSync
-                                else -> Icons.Default.CloudDone
-                            }
-                            Surface(
-                                shape = CircleShape,
-                                color = NothingTheme.colors.surface,
-                                border = BorderStroke(1.dp, NothingTheme.colors.border),
-                                modifier = Modifier.testTag("topbar_sync_status")
-                            ) {
-                                Icon(
-                                    imageVector = syncIcon,
-                                    contentDescription = when {
-                                        !isOnline -> "Offline"
-                                        isSyncing -> "Syncing"
-                                        syncMetadata.pendingSyncCount > 0 -> "Pending Sync"
-                                        else -> "Synced"
-                                    },
-                                    tint = syncBadgeColor,
-                                    modifier = Modifier
-                                        .padding(6.dp)
-                                        .size(14.dp)
-                                )
-                            }
-
-                            if (canManageUsers) {
-                                IconButton(
-                                    onClick = {
-                                        currentTab = MainTab.ADMIN
-                                        subRouteStack.clear()
-                                    },
-                                    modifier = Modifier.testTag("nav_tab_admin")
-                                ) {
-                                    Icon(
-                                        imageVector = if (currentTab == MainTab.ADMIN) Icons.Filled.AdminPanelSettings else Icons.Outlined.AdminPanelSettings,
-                                        contentDescription = "Admin Console",
-                                        tint = if (currentTab == MainTab.ADMIN) MaterialTheme.colorScheme.onBackground else NothingTheme.colors.textSecondary
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("availability_option_available")
+                                    )
+                                    DropdownMenuItem(
+                                        enabled = !isUpdatingAvailability,
+                                        leadingIcon = { NothingStatusDot(color = NothingAmber, size = 9.dp) },
+                                        trailingIcon = if (isAway) {
+                                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                        } else null,
+                                        text = {
+                                            Column {
+                                                Text(
+                                                    text = "Away",
+                                                    style = MaterialTheme.typography.labelLarge.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = NothingAmber
+                                                    )
+                                                )
+                                                Text(
+                                                    text = "Paused · No new tasks or alarms",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = NothingTheme.colors.textSecondary
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showAvailabilityMenu = false
+                                            if (!isAway && !isUpdatingAvailability) {
+                                                coroutineScope.launch {
+                                                    isUpdatingAvailability = true
+                                                    syncManager.updateLeaveStatus(true).onFailure { err ->
+                                                        snackbarHostState.showSnackbar(err.message ?: "Unable to set Away")
+                                                    }
+                                                    isUpdatingAvailability = false
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("availability_option_away")
                                     )
                                 }
                             }
 
                             IconButton(
                                 onClick = { showNotificationsSheet = true },
-                                modifier = Modifier.testTag("topbar_notifications_bell")
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .testTag("topbar_notifications_bell")
                             ) {
                                 BadgedBox(
                                     badge = {
@@ -640,7 +658,153 @@ fun MainShell(
                                     Icon(
                                         imageVector = if (unreadCount > 0) Icons.Filled.Notifications else Icons.Outlined.Notifications,
                                         contentDescription = "Notifications",
-                                        tint = MaterialTheme.colorScheme.onBackground
+                                        tint = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            Box(modifier = Modifier.padding(end = 6.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(NothingTheme.colors.surface)
+                                        .border(1.dp, NothingTheme.colors.border, CircleShape)
+                                        .clickable { showRoleMenu = true }
+                                        .testTag("topbar_role_switcher"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val photoUrl = profile?.avatarSignedUrl
+                                    if (!photoUrl.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = photoUrl,
+                                            contentDescription = "Account and Role Menu",
+                                            modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Text(
+                                            text = initials,
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontFamily = TechMonoFontFamily,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    if (!isOnline || syncMetadata.pendingSyncCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .size(9.dp)
+                                                .clip(CircleShape)
+                                                .background(NothingAmber)
+                                                .border(1.dp, NothingTheme.colors.background, CircleShape)
+                                        )
+                                    }
+                                }
+
+                                DropdownMenu(
+                                    expanded = showRoleMenu,
+                                    onDismissRequest = { showRoleMenu = false }
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = profile?.fullName?.ifBlank { "Account" } ?: "Account",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                        Text(
+                                            text = "${authContext.activeRole.displayName} · " + when {
+                                                !isOnline -> "No network connection"
+                                                isSyncing -> "Syncing..."
+                                                syncMetadata.pendingSyncCount > 0 -> "${syncMetadata.pendingSyncCount} pending sync"
+                                                else -> "All data synced"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                            color = NothingTheme.colors.textSecondary
+                                        )
+                                    }
+                                    HorizontalDivider(color = NothingTheme.colors.borderSubtle)
+
+                                    val assigned = authContext.assignedRoles.ifEmpty {
+                                        listOf(
+                                            AssignedRoleInfo(
+                                                roleId = "",
+                                                roleCode = authContext.activeRole.code,
+                                                roleName = authContext.activeRole.displayName,
+                                                isPrimary = true
+                                            )
+                                        )
+                                    }
+                                    assigned.forEach { role ->
+                                        val isCurrent = role.roleCode.equals(authContext.activeRole.code, ignoreCase = true)
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = "Role: ${role.roleName}",
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            },
+                                            leadingIcon = if (isCurrent) {
+                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                            } else null,
+                                            onClick = {
+                                                showRoleMenu = false
+                                                if (!isCurrent) {
+                                                    coroutineScope.launch {
+                                                        val res = syncManager.switchActiveRole(role.roleCode)
+                                                        res.onFailure { err ->
+                                                            snackbarHostState.showSnackbar(err.message ?: "Unable to switch role")
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("role_option_${role.roleCode}")
+                                        )
+                                    }
+
+                                    HorizontalDivider(color = NothingTheme.colors.borderSubtle)
+
+                                    DropdownMenuItem(
+                                        text = { Text("Sync Now") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        onClick = {
+                                            showRoleMenu = false
+                                            homeViewModel.triggerManualRefresh()
+                                        }
+                                    )
+
+                                    if (canManageUsers) {
+                                        DropdownMenuItem(
+                                            text = { Text("Admin Console") },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.AdminPanelSettings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            },
+                                            onClick = {
+                                                showRoleMenu = false
+                                                currentTab = MainTab.ADMIN
+                                                subRouteStack.clear()
+                                            },
+                                            modifier = Modifier.testTag("nav_tab_admin")
+                                        )
+                                    }
+
+                                    DropdownMenuItem(
+                                        text = { Text("Profile & Settings") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        onClick = {
+                                            showRoleMenu = false
+                                            currentTab = MainTab.PROFILE
+                                            subRouteStack.clear()
+                                        }
                                     )
                                 }
                             }
@@ -815,11 +979,26 @@ fun MainShell(
                                     onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
                                     onNavigateToProfile = { currentTab = MainTab.PROFILE },
                                     onNavigateToAdmin = { currentTab = MainTab.ADMIN },
-                                    onNavigateToIncidents = { currentTab = MainTab.INCIDENTS },
+                                    onNavigateToIncidents = {
+                                        systemIncidentViewModel.selectTab(1)
+                                        currentTab = MainTab.INCIDENTS
+                                    },
+                                    onNavigateToReports = {
+                                        systemIncidentViewModel.selectTab(2)
+                                        currentTab = MainTab.INCIDENTS
+                                    },
                                     onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
                                     onSignedOut = onLogoutSuccess,
                                     tasks = allTasks,
-                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) }
+                                    incidents = allIncidents,
+                                    notifications = notifications,
+                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
+                                    onIncidentClick = { incident ->
+                                        systemIncidentViewModel.selectTab(1)
+                                        systemIncidentViewModel.selectIncidentForDetail(incident)
+                                        currentTab = MainTab.INCIDENTS
+                                    },
+                                    onOpenNotifications = { showNotificationsSheet = true }
                                 )
                                 MainTab.TASKS -> TasksScreen(
                                     viewModel = tasksViewModel,

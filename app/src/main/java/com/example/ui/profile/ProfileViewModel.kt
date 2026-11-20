@@ -8,9 +8,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.TaskzApplication
 import com.example.core.model.AuthorizationContext
+import com.example.core.model.SyncMetadata
 import com.example.core.model.UserProfile
 import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ProfileRepository
+import com.example.domain.repository.SyncRepository
 import com.example.domain.security.TaskzPermissionManager
 import com.example.notifications.DeviceTokenManager
 import com.example.sync.TaskzSyncManager
@@ -34,6 +36,7 @@ sealed interface ProfileUpdateState {
 class ProfileViewModel(
     private val profileRepository: ProfileRepository,
     private val authRepository: AuthRepository,
+    private val syncRepository: SyncRepository = TaskzApplication.instance.syncRepository,
     private val taskzSyncManager: TaskzSyncManager = TaskzApplication.instance.taskzSyncManager,
     private val permissionManager: TaskzPermissionManager = TaskzApplication.instance.permissionManager,
     private val deviceTokenManager: DeviceTokenManager = TaskzApplication.instance.deviceTokenManager
@@ -45,6 +48,21 @@ class ProfileViewModel(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = null
         )
+
+    val syncMetadataFlow: StateFlow<SyncMetadata> = syncRepository.syncMetadataFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = SyncMetadata()
+        )
+
+    val syncManagerSyncing: StateFlow<Boolean> = taskzSyncManager.isSyncing
+
+    private val _isRefreshingSync = MutableStateFlow(false)
+    val isRefreshingSync: StateFlow<Boolean> = _isRefreshingSync.asStateFlow()
+
+    private val _syncErrorMessage = MutableStateFlow<String?>(null)
+    val syncErrorMessage: StateFlow<String?> = _syncErrorMessage.asStateFlow()
 
     val authContextFlow: StateFlow<AuthorizationContext> = permissionManager.contextFlow
 
@@ -82,6 +100,29 @@ class ProfileViewModel(
             profileRepository.refreshProfile()
             taskzSyncManager.syncNow(forceFull = false)
             _deviceId.value = runCatching { deviceTokenManager.getDeviceId() }.getOrNull()
+        }
+    }
+
+    fun triggerManualSync() {
+        if (_isRefreshingSync.value) return
+        viewModelScope.launch {
+            _isRefreshingSync.value = true
+            _syncErrorMessage.value = null
+            val res = taskzSyncManager.syncNow(forceFull = false)
+            _isRefreshingSync.value = false
+            res.onFailure { err ->
+                val msg = err.message.orEmpty()
+                if (msg.isNotBlank() && !msg.contains("Offline", ignoreCase = true)) {
+                    _syncErrorMessage.value = msg
+                }
+            }
+        }
+    }
+
+    fun clearFailedSyncItems() {
+        viewModelScope.launch {
+            syncRepository.clearPermanentFailedEvents()
+            _syncErrorMessage.value = null
         }
     }
 

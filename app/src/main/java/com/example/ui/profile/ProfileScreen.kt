@@ -92,6 +92,7 @@ import com.example.ui.common.NothingHairlineCard
 import com.example.ui.common.NothingSectionHeader
 import com.example.ui.common.NothingSegmentedTabs
 import com.example.ui.common.NothingTagChip
+import com.example.ui.common.SyncStatusCard
 import com.example.ui.common.TaskzOutlinedButton
 import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
@@ -130,6 +131,10 @@ fun ProfileScreen(
     val locationSaveError by viewModel.locationSaveError.collectAsStateWithLifecycle()
     val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
+    val syncMetadata by viewModel.syncMetadataFlow.collectAsStateWithLifecycle()
+    val syncManagerSyncing by viewModel.syncManagerSyncing.collectAsStateWithLifecycle()
+    val isRefreshingSync by viewModel.isRefreshingSync.collectAsStateWithLifecycle()
+    val syncErrorMessage by viewModel.syncErrorMessage.collectAsStateWithLifecycle()
     var showLocationDialog by remember { mutableStateOf(false) }
 
     var fullName by rememberSaveable(profile) { mutableStateOf(profile?.fullName.orEmpty()) }
@@ -254,7 +259,7 @@ fun ProfileScreen(
                         NothingTagChip(text = authContext.activeRole.displayName)
                         if (authContext.isOnLeave) {
                             NothingTagChip(
-                                text = "ON LEAVE",
+                                text = "AWAY",
                                 containerColor = NothingAmber.copy(alpha = 0.14f),
                                 contentColor = NothingAmber,
                                 borderColor = NothingAmber.copy(alpha = 0.45f),
@@ -266,7 +271,7 @@ fun ProfileScreen(
             }
         }
 
-        // On Leave Status Card
+        // Availability Status Card (Available / Away)
         NothingHairlineCard(
             containerColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.08f) else NothingTheme.colors.surface,
             borderColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.45f) else NothingTheme.colors.border,
@@ -291,12 +296,12 @@ fun ProfileScreen(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = if (authContext.isOnLeave) "On Leave" else "On Duty",
+                            text = if (authContext.isOnLeave) "Away" else "Available",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = if (authContext.isOnLeave) NothingAmber else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (authContext.isOnLeave) "No new tasks or alarms assigned" else "Available for task assignment",
+                            text = if (authContext.isOnLeave) "Paused — no new tasks or alarms assigned" else "Receiving task assignments & alarms",
                             style = MaterialTheme.typography.labelSmall,
                             color = NothingTheme.colors.textSecondary
                         )
@@ -646,6 +651,14 @@ fun ProfileScreen(
                 testTag = "save_profile_button"
             )
         }
+
+        SyncStatusCard(
+            syncMetadata = syncMetadata,
+            onRefreshClick = { viewModel.triggerManualSync() },
+            onClearFailedClick = { viewModel.clearFailedSyncItems() },
+            externalErrorMessage = syncErrorMessage,
+            isRefreshing = isRefreshingSync || syncManagerSyncing
+        )
 
         Text(
             text = "TASKZ CLIENT · BUILD 1.0",
