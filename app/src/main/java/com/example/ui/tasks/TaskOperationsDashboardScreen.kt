@@ -1,10 +1,12 @@
 package com.example.ui.tasks
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,32 +16,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.HourglassBottom
-import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,14 +52,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.model.LanStatusItem
 import com.example.core.model.TaskOperationsDashboardData
 import com.example.domain.repository.TaskRepository
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
+import com.example.ui.theme.DotMatrixFontFamily
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -74,7 +83,7 @@ fun TaskOperationsDashboardScreen(
     var dashboardData by remember { mutableStateOf<TaskOperationsDashboardData?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var selectedFilter by remember { mutableStateOf("ALL") } // ALL, COMPLETED, PENDING, OVERDUE
+    var selectedFilter by remember { mutableStateOf("ALL") }
 
     val coroutineScope = rememberCoroutineScope()
 
@@ -89,7 +98,6 @@ fun TaskOperationsDashboardScreen(
         isLoading = false
     }
 
-    // Auto-polling fallback every 15 seconds (PART 14)
     LaunchedEffect(taskId) {
         while (true) {
             loadData()
@@ -98,9 +106,14 @@ fun TaskOperationsDashboardScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Operations Dashboard", fontWeight = FontWeight.Bold) },
+                title = { NothingDotMatrixText("OPS DASHBOARD", fontSize = 18.sp) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                ),
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -129,20 +142,21 @@ fun TaskOperationsDashboardScreen(
                     .padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(strokeWidth = 2.dp)
             }
         } else if (errorMessage != null && dashboardData == null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .padding(20.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = TaskzError, modifier = Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(errorMessage ?: "Error", color = TaskzError, fontWeight = FontWeight.Bold)
-                }
+                NothingEmptyState(
+                    title = "Dashboard Unavailable",
+                    subtitle = errorMessage ?: "Error",
+                    icon = Icons.Default.Warning
+                )
             }
         } else {
             val data = dashboardData ?: return@Scaffold
@@ -158,158 +172,182 @@ fun TaskOperationsDashboardScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
             ) {
                 item {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    // Header Task Card
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
+                    NothingHairlineCard(
+                        contentPadding = PaddingValues(16.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = when (data.importance) {
-                                        "CRITICAL" -> TaskzError.copy(alpha = 0.2f)
-                                        "HIGH" -> TaskzWarning.copy(alpha = 0.2f)
-                                        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                                    }
-                                ) {
-                                    Text(
-                                        text = "${data.importance} PRIORITY",
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = when (data.importance) {
-                                            "CRITICAL" -> TaskzError
-                                            "HIGH" -> TaskzWarning
-                                            else -> MaterialTheme.colorScheme.primary
-                                        }
-                                    )
-                                }
+                        val priorityColor = when (data.importance) {
+                            "CRITICAL" -> NothingRed
+                            "HIGH" -> NothingAmber
+                            else -> MaterialTheme.colorScheme.onSurface
+                        }
+                        val statusCompleted = data.status.equals("completed", true)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            NothingTagChip(
+                                text = "${data.importance} PRIORITY",
+                                containerColor = priorityColor.copy(alpha = 0.12f),
+                                contentColor = priorityColor,
+                                borderColor = priorityColor.copy(alpha = 0.4f)
+                            )
+                            NothingTagChip(
+                                text = data.status.uppercase(),
+                                containerColor = if (statusCompleted) NothingGreen.copy(alpha = 0.12f) else NothingTheme.colors.surfaceElevated,
+                                contentColor = if (statusCompleted) NothingGreen else NothingTheme.colors.textPrimary,
+                                borderColor = if (statusCompleted) NothingGreen.copy(alpha = 0.4f) else NothingTheme.colors.border
+                            )
+                        }
 
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (data.status.equals("completed", true)) TaskzSuccess.copy(alpha = 0.2f) else MaterialTheme.colorScheme.secondaryContainer
-                                ) {
-                                    Text(
-                                        text = data.status.uppercase(),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (data.status.equals("completed", true)) TaskzSuccess else MaterialTheme.colorScheme.onSecondaryContainer
-                                    )
-                                }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = data.title,
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        if (data.executionTime != null || data.deadlineTime != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = NothingTheme.colors.textSecondary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "TIME ${data.executionTime ?: "N/A"} · DEADLINE ${data.deadlineTime ?: "N/A"}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                    color = NothingTheme.colors.textSecondary
+                                )
                             }
+                        }
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = data.title,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.ExtraBold
+                                text = "COMPLETION",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textSecondary
                             )
+                            Text(
+                                text = "${data.completedLans}/${data.totalLans} LANs · ${data.currentProgress}%",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { (data.currentProgress / 100f).coerceIn(0f, 1f) },
+                            color = if (data.currentProgress >= 100) NothingGreen else MaterialTheme.colorScheme.onSurface,
+                            trackColor = NothingTheme.colors.surfaceElevated,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                        )
+                    }
+                }
 
-                            if (data.executionTime != null || data.deadlineTime != null) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SummaryStatBox(
+                            label = "TOTAL",
+                            count = data.totalLans,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryStatBox(
+                            label = "DONE",
+                            count = data.completedLans,
+                            color = NothingGreen,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryStatBox(
+                            label = "PENDING",
+                            count = data.pendingLans,
+                            color = NothingAmber,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryStatBox(
+                            label = "OVERDUE",
+                            count = data.overdueLans,
+                            color = NothingRed,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                item {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            listOf(
+                                "ALL" to "All (${data.lanStatuses.size})",
+                                "PENDING" to "Pending (${data.pendingLans})",
+                                "COMPLETED" to "Done (${data.completedLans})",
+                                "OVERDUE" to "Overdue (${data.overdueLans})"
+                            )
+                        ) { (key, label) ->
+                            val selected = selectedFilter == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { selectedFilter = key },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                    selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                    containerColor = NothingTheme.colors.surface,
+                                    labelColor = NothingTheme.colors.textSecondary
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = selected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                ),
+                                label = {
                                     Text(
-                                        text = "Time: ${data.executionTime ?: "N/A"} • Deadline: ${data.deadlineTime ?: "N/A"}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                        maxLines = 1
                                     )
                                 }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Overall Completion", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                                Text("${data.completedLans} / ${data.totalLans} LANs (${data.currentProgress}%)", fontWeight = FontWeight.Bold)
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { data.currentProgress / 100f },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(8.dp)
-                                    .clip(RoundedCornerShape(4.dp))
                             )
                         }
                     }
                 }
 
-                // Summary Counters Row
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        SummaryStatBox(
-                            label = "Total LANs",
-                            count = data.totalLans,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        SummaryStatBox(
-                            label = "Completed",
-                            count = data.completedLans,
-                            color = TaskzSuccess,
-                            modifier = Modifier.weight(1f)
-                        )
-                        SummaryStatBox(
-                            label = "Pending",
-                            count = data.pendingLans,
-                            color = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        SummaryStatBox(
-                            label = "Overdue",
-                            count = data.overdueLans,
-                            color = TaskzError,
-                            modifier = Modifier.weight(1f)
+                if (filteredLans.isEmpty()) {
+                    item {
+                        NothingEmptyState(
+                            title = "No matching LANs",
+                            subtitle = "Switch filters to inspect other rooms.",
+                            icon = Icons.Default.Lan
                         )
                     }
-                }
-
-                // Filter Chips
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(
-                            "ALL" to "All (${data.lanStatuses.size})",
-                            "PENDING" to "Pending (${data.pendingLans})",
-                            "COMPLETED" to "Completed (${data.completedLans})",
-                            "OVERDUE" to "Overdue (${data.overdueLans})"
-                        ).forEach { (key, label) ->
-                            FilterChip(
-                                selected = selectedFilter == key,
-                                onClick = { selectedFilter = key },
-                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                            )
-                        }
+                } else {
+                    items(filteredLans) { lan ->
+                        LanStatusRow(lan = lan)
                     }
-                }
-
-                // LAN List Items
-                items(filteredLans) { lan ->
-                    LanStatusRow(lan = lan)
-                }
-
-                item {
-                    Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         }
@@ -323,29 +361,35 @@ fun SummaryStatBox(
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    NothingHairlineCard(
+        modifier = modifier,
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f)),
-        modifier = modifier
+        contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
+            NothingDotMatrixText(
                 text = count.toString(),
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 20.sp,
-                color = color
+                fontSize = 22.sp,
+                letterSpacing = 0.6.sp,
+                color = MaterialTheme.colorScheme.onSurface
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
-            )
+            NothingStatusDot(color = color, size = 6.dp)
         }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = TechMonoFontFamily,
+                fontSize = 10.sp
+            ),
+            color = NothingTheme.colors.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -355,29 +399,25 @@ fun LanStatusRow(lan: LanStatusItem) {
     val isOverdue = lan.isOverdue || lan.status.equals("overdue", true)
 
     val badgeColor = when {
-        isDone -> TaskzSuccess
-        isOverdue -> TaskzError
-        lan.status.equals("in_progress", true) -> TaskzWarning
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+        isDone -> NothingGreen
+        isOverdue -> NothingRed
+        lan.status.equals("in_progress", true) -> NothingAmber
+        else -> NothingTheme.colors.textSecondary
     }
 
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        modifier = Modifier.fillMaxWidth()
+    NothingHairlineCard(
+        contentPadding = PaddingValues(14.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(42.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(badgeColor.copy(alpha = 0.15f)),
+                    .background(NothingTheme.colors.surfaceElevated)
+                    .border(BorderStroke(1.dp, badgeColor.copy(alpha = 0.5f)), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -388,43 +428,49 @@ fun LanStatusRow(lan: LanStatusItem) {
                     },
                     contentDescription = null,
                     tint = badgeColor,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
                         text = lan.lanNumber,
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = badgeColor.copy(alpha = 0.18f)
-                    ) {
-                        Text(
-                            text = lan.status.uppercase(),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = badgeColor
-                        )
-                    }
+                    NothingTagChip(
+                        text = lan.status.uppercase(),
+                        containerColor = badgeColor.copy(alpha = 0.12f),
+                        contentColor = badgeColor,
+                        borderColor = badgeColor.copy(alpha = 0.4f)
+                    )
                 }
 
                 if (lan.employeeName != null) {
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                            tint = NothingTheme.colors.textSecondary
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "${lan.employeeName} (${lan.employeeId ?: ""})",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -432,17 +478,24 @@ fun LanStatusRow(lan: LanStatusItem) {
                 if (lan.lastResponseTime != null) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Updated: ${lan.lastResponseTime}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
+                        text = "UPDATED ${lan.lastResponseTime}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontSize = 10.sp
+                        ),
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
             }
 
+            Spacer(modifier = Modifier.width(8.dp))
+
             Text(
                 text = "${lan.progress}%",
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 16.sp,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = DotMatrixFontFamily,
+                    fontSize = 18.sp
+                ),
                 color = badgeColor
             )
         }

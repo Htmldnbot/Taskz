@@ -2,29 +2,29 @@ package com.example.ui.incidents
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Business
@@ -40,13 +40,9 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -54,10 +50,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,7 +66,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -80,10 +74,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.OrgCentre
 import com.example.core.model.SystemIncident
 import com.example.core.model.TaskGroup
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingTagChip
 import com.example.ui.incidents.components.SystemNumberField
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 private val STANDARD_REASONS = listOf(
@@ -121,7 +122,20 @@ fun QuickEntryScreen(
 
     val scrollState = rememberScrollState()
 
-    // Date Picker Dialog
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        unfocusedBorderColor = NothingTheme.colors.border,
+        focusedContainerColor = NothingTheme.colors.surface,
+        unfocusedContainerColor = NothingTheme.colors.surface
+    )
+    val chipColors = FilterChipDefaults.filterChipColors(
+        containerColor = NothingTheme.colors.surface,
+        labelColor = MaterialTheme.colorScheme.onSurface,
+        selectedContainerColor = NothingTheme.colors.accentPrimary,
+        selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+        selectedLeadingIconColor = NothingTheme.colors.onAccentPrimary
+    )
+
     fun openDatePicker() {
         val cal = Calendar.getInstance()
         val dpd = DatePickerDialog(
@@ -142,7 +156,6 @@ fun QuickEntryScreen(
         dpd.show()
     }
 
-    // Time Picker Dialog
     fun openTimePicker() {
         val cal = Calendar.getInstance()
         val tpd = TimePickerDialog(
@@ -167,178 +180,160 @@ fun QuickEntryScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-
-        // ==========================================
-        // 1. SMART AUTO-FILL: CENTRE SUMMARY CARD
-        // ==========================================
-        ElevatedCard(
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("centre_summary_card")
-                .clickable { showCentreDialog = true },
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-            ),
-            shape = RoundedCornerShape(12.dp)
+        // 1. CENTRE SUMMARY CARD
+        NothingHairlineCard(
+            onClick = { showCentreDialog = true },
+            containerColor = NothingTheme.colors.surfaceElevated,
+            contentPadding = PaddingValues(14.dp),
+            modifier = Modifier.testTag("centre_summary_card")
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Business,
-                    contentDescription = "Centre",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "${formState.centreCode.ifBlank { "141" }} \u00B7 ${formState.centreName.ifBlank { "Yagyavalkya Institute of Technology" }}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        text = "${formState.districtName.ifBlank { "Jaipur" }}, ${formState.stateName.ifBlank { "Rajasthan" }}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Filled.Edit,
-                    contentDescription = "Change Centre",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        // ==========================================
-        // 2. EXAMINATION DETAILS ROW
-        // ==========================================
-        OutlinedCard(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    // Date picker chip
-                    FilterChip(
-                        selected = true,
-                        onClick = { openDatePicker() },
-                        label = {
-                            Text(
-                                text = formState.examDate.ifBlank { "Select Date" },
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.CalendarMonth,
-                                contentDescription = "Date",
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        modifier = Modifier.testTag("exam_date_chip")
-                    )
-
-                    // Exam name button
-                    TextButton(
-                        onClick = { showExamEditDialog = true },
-                        modifier = Modifier.testTag("exam_name_btn")
-                    ) {
-                        Text(
-                            text = formState.examName.take(28) + if (formState.examName.length > 28) "..." else "",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                            maxLines = 1
-                        )
-                        Icon(
-                            imageVector = Icons.Filled.Edit,
-                            contentDescription = "Edit Exam",
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-
-                // Shift chips
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "Shift:",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    STANDARD_SHIFTS.forEach { shift ->
-                        val isSelected = formState.shiftName.equals(shift, ignoreCase = true)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { viewModel.onShiftNameChanged(shift) },
-                            label = { Text(shift, style = MaterialTheme.typography.bodySmall) },
-                            leadingIcon = if (isSelected) {
-                                {
-                                    Icon(
-                                        imageVector = Icons.Filled.Done,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            } else null,
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer
-                            ),
-                            modifier = Modifier.testTag("shift_chip_$shift")
-                        )
-                    }
-                }
-            }
-        }
-
-        // ==========================================
-        // 3. LAN NAME & IT MANAGER NAME
-        // ==========================================
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // LAN selector chips
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Lan,
-                    contentDescription = "LAN",
-                    tint = MaterialTheme.colorScheme.primary,
+                    imageVector = Icons.Filled.Business,
+                    contentDescription = "Centre",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        NothingTagChip(
+                            text = formState.centreCode.ifBlank { "141" },
+                            mono = true
+                        )
+                        Text(
+                            text = formState.centreName.ifBlank { "Yagyavalkya Institute of Technology" },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "${formState.districtName.ifBlank { "Jaipur" }}, ${formState.stateName.ifBlank { "Rajasthan" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textSecondary
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Filled.Edit,
+                    contentDescription = "Change Centre",
+                    tint = NothingTheme.colors.textSecondary,
                     modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "LAN Selection (${centreLans.firstOrNull() ?: "LAN 1"} – ${centreLans.lastOrNull() ?: "LAN 11"}):",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
+            }
+        }
+
+        // 2. EXAMINATION DETAILS CARD
+        NothingHairlineCard(contentPadding = PaddingValues(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                FilterChip(
+                    selected = true,
+                    onClick = { openDatePicker() },
+                    colors = chipColors,
+                    label = {
+                        Text(
+                            text = formState.examDate.ifBlank { "Select Date" },
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.CalendarMonth,
+                            contentDescription = "Date",
+                            modifier = Modifier.size(15.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("exam_date_chip")
                 )
+
+                TextButton(
+                    onClick = { showExamEditDialog = true },
+                    modifier = Modifier.testTag("exam_name_btn")
+                ) {
+                    Text(
+                        text = formState.examName.take(26) + if (formState.examName.length > 26) "..." else "",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "Edit Exam",
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
 
-            val lanScrollState = rememberScrollState()
+            Spacer(modifier = Modifier.height(6.dp))
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(lanScrollState),
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "SHIFT",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = NothingTheme.colors.textSecondary
+                )
+                STANDARD_SHIFTS.forEach { shift ->
+                    val isSelected = formState.shiftName.equals(shift, ignoreCase = true)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { viewModel.onShiftNameChanged(shift) },
+                        label = {
+                            Text(
+                                text = shift,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        },
+                        leadingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Filled.Done,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        } else null,
+                        colors = chipColors,
+                        modifier = Modifier.testTag("shift_chip_$shift")
+                    )
+                }
+            }
+        }
+
+        // 3. LAN NAME & IT MANAGER NAME
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            NothingSectionHeader(
+                title = "LAN (${centreLans.firstOrNull() ?: "LAN 1"} - ${centreLans.lastOrNull() ?: "LAN 11"})"
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 centreLans.forEach { lan ->
@@ -346,17 +341,18 @@ fun QuickEntryScreen(
                     FilterChip(
                         selected = isSelected,
                         onClick = { viewModel.onLanNameChanged(lan) },
-                        label = { Text(lan, style = MaterialTheme.typography.bodySmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onTertiaryContainer
-                        ),
+                        label = {
+                            Text(
+                                text = lan,
+                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                            )
+                        },
+                        colors = chipColors,
                         modifier = Modifier.testTag("lan_chip_$lan")
                     )
                 }
             }
 
-            // Editable LAN field allows selecting centre LANs or custom room names
             OutlinedTextField(
                 value = formState.lanName,
                 onValueChange = { viewModel.onLanNameChanged(it) },
@@ -366,16 +362,18 @@ fun QuickEntryScreen(
                     Icon(
                         imageVector = Icons.Filled.Lan,
                         contentDescription = "LAN Number",
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = fieldColors,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = TechMonoFontFamily),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("lan_input")
             )
 
-            // IT Manager name
             OutlinedTextField(
                 value = formState.itManagerName,
                 onValueChange = { viewModel.onItManagerNameChanged(it) },
@@ -385,19 +383,19 @@ fun QuickEntryScreen(
                     Icon(
                         imageVector = Icons.Filled.Person,
                         contentDescription = "IT Manager",
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = fieldColors,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("it_manager_input")
             )
         }
 
-        // ==========================================
         // 4. MANUAL HARDWARE FIELDS: MAC & IP
-        // ==========================================
         var macFieldValue by remember {
             mutableStateOf(TextFieldValue(formState.macAddress, TextRange(formState.macAddress.length)))
         }
@@ -433,8 +431,10 @@ fun QuickEntryScreen(
                 label = { Text("MAC Address") },
                 placeholder = { Text("AA:BB:CC:DD:EE:FF") },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = fieldColors,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = TechMonoFontFamily,
                     fontWeight = FontWeight.SemiBold
                 ),
                 modifier = Modifier
@@ -451,8 +451,10 @@ fun QuickEntryScreen(
                 label = { Text("IP Address") },
                 placeholder = { Text("192.168.1.10") },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = fieldColors,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = TechMonoFontFamily,
                     fontWeight = FontWeight.SemiBold
                 ),
                 modifier = Modifier
@@ -461,9 +463,7 @@ fun QuickEntryScreen(
             )
         }
 
-        // ==========================================
         // 5. SYSTEM NUMBERS & CANDIDATE SHIFTED
-        // ==========================================
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -472,56 +472,53 @@ fun QuickEntryScreen(
             SystemNumberField(
                 value = formState.lockedSystemNumber,
                 onValueChange = { viewModel.onLockedSystemNumberChanged(it) },
-                label = "Locked System / Seat No.",
+                label = "Locked Seat No.",
                 modifier = Modifier.weight(1f),
                 testTag = "locked_system_input"
             )
 
-            // Candidate Shifted Toggle Card
-            OutlinedCard(
+            NothingHairlineCard(
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(68.dp),
-                shape = RoundedCornerShape(8.dp)
+                    .heightIn(min = 66.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.Center
+                Text(
+                    text = "CANDIDATE SHIFTED?",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontSize = 10.sp
+                    ),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Candidate Shifted?",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    FilterChip(
+                        selected = !formState.candidateShifted,
+                        onClick = { viewModel.onCandidateShiftedChanged(false) },
+                        label = { Text("No", style = MaterialTheme.typography.labelMedium) },
+                        colors = chipColors,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("candidate_shifted_no")
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = !formState.candidateShifted,
-                            onClick = { viewModel.onCandidateShiftedChanged(false) },
-                            label = { Text("No", style = MaterialTheme.typography.bodySmall) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("candidate_shifted_no")
-                        )
-                        FilterChip(
-                            selected = formState.candidateShifted,
-                            onClick = { viewModel.onCandidateShiftedChanged(true) },
-                            label = { Text("Yes", style = MaterialTheme.typography.bodySmall) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("candidate_shifted_yes")
-                        )
-                    }
+                    FilterChip(
+                        selected = formState.candidateShifted,
+                        onClick = { viewModel.onCandidateShiftedChanged(true) },
+                        label = { Text("Yes", style = MaterialTheme.typography.labelMedium) },
+                        colors = chipColors,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("candidate_shifted_yes")
+                    )
                 }
             }
         }
 
-        // If Candidate Shifted is Yes -> Show Newly Allocated System Number
         if (formState.candidateShifted) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -531,97 +528,103 @@ fun QuickEntryScreen(
                 SystemNumberField(
                     value = formState.newlyAllocatedSystemNumber,
                     onValueChange = { viewModel.onNewlyAllocatedSystemNumberChanged(it) },
-                    label = "Newly Allocated / Seat No.",
+                    label = "New Seat No.",
                     modifier = Modifier.weight(1f),
                     testTag = "newly_allocated_system_input"
                 )
 
-                // Informative badge
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(top = 4.dp)
+                NothingHairlineCard(
+                    containerColor = NothingTheme.colors.surfaceElevated,
+                    contentPadding = PaddingValues(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = "Replacement required. Must differ from locked system.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(8.dp)
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
             }
         }
 
-        // ==========================================
         // 6. FAILURE TIME & REASON
-        // ==========================================
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Failure Time Card
-            OutlinedCard(
+            NothingHairlineCard(
+                onClick = { openTimePicker() },
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(12.dp),
                 modifier = Modifier
                     .weight(0.9f)
-                    .clickable { openTimePicker() }
-                    .testTag("incident_time_card"),
-                shape = RoundedCornerShape(8.dp)
+                    .testTag("incident_time_card")
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = Icons.Filled.AccessTime,
                         contentDescription = "Failure Time",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
-                        Text("Failure Time", style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            text = "FAILURE TIME",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontSize = 10.sp
+                            ),
+                            color = NothingTheme.colors.textSecondary
+                        )
                         Text(
                             text = formState.incidentTime.ifBlank { "Now" },
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
             }
 
-            // Reason Dropdown Trigger
             Column(modifier = Modifier.weight(1.1f)) {
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showReasonMenu = true }
-                        .testTag("reason_selector_card"),
-                    shape = RoundedCornerShape(8.dp)
+                NothingHairlineCard(
+                    onClick = { showReasonMenu = true },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(12.dp),
+                    modifier = Modifier.testTag("reason_selector_card")
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Failure Reason", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                text = "FAILURE REASON",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontSize = 10.sp
+                                ),
+                                color = NothingTheme.colors.textSecondary
+                            )
                             Text(
                                 text = formState.reason,
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1
                             )
                         }
                         Icon(
                             imageVector = Icons.Filled.KeyboardArrowDown,
                             contentDescription = "Expand Reasons",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = NothingTheme.colors.textSecondary
                         )
                     }
                 }
@@ -643,7 +646,6 @@ fun QuickEntryScreen(
             }
         }
 
-        // Custom Reason field if "Other" is chosen
         if (formState.reason.equals("Other", ignoreCase = true)) {
             OutlinedTextField(
                 value = formState.customReason,
@@ -651,73 +653,64 @@ fun QuickEntryScreen(
                 label = { Text("Specify Custom Reason") },
                 placeholder = { Text("Describe system issue...") },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = fieldColors,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("custom_reason_input")
             )
         }
 
-        // ==========================================
         // 7. VALIDATION / SUCCESS FEEDBACK BANNERS
-        // ==========================================
         if (!formState.validationError.isNullOrBlank()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("validation_error_banner")
+            NothingHairlineCard(
+                containerColor = NothingRed.copy(alpha = 0.12f),
+                borderColor = NothingRed.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier.testTag("validation_error_banner")
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Filled.ErrorOutline,
                         contentDescription = "Validation Error",
-                        tint = MaterialTheme.colorScheme.error
+                        tint = NothingRed
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = formState.validationError ?: "",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = NothingRed
                     )
                 }
             }
         }
 
         if (!formState.successMessage.isNullOrBlank()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("success_banner")
+            NothingHairlineCard(
+                containerColor = NothingGreen.copy(alpha = 0.12f),
+                borderColor = NothingGreen.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier.testTag("success_banner")
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Filled.CheckCircle,
                         contentDescription = "Success",
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        tint = NothingGreen
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = formState.successMessage ?: "",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                        color = NothingGreen
                     )
                 }
             }
         }
 
-        // ==========================================
         // 8. ACTION BUTTONS: SAVE & NEXT / SAVE
-        // ==========================================
-        Spacer(modifier = Modifier.height(4.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -727,10 +720,9 @@ fun QuickEntryScreen(
                 enabled = !formState.isSubmitting,
                 modifier = Modifier
                     .weight(1.3f)
-                    .height(52.dp)
+                    .height(50.dp)
                     .testTag("btn_save_and_next"),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                shape = RoundedCornerShape(999.dp)
             ) {
                 if (formState.isSubmitting) {
                     CircularProgressIndicator(
@@ -741,18 +733,19 @@ fun QuickEntryScreen(
                 } else {
                     Icon(imageVector = Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Save & Next", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Save & Next", fontWeight = FontWeight.Bold)
                 }
             }
 
             OutlinedButton(
                 onClick = { viewModel.saveIncident(saveAndNext = false) },
                 enabled = !formState.isSubmitting,
+                border = BorderStroke(1.dp, NothingTheme.colors.border),
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp)
+                    .height(50.dp)
                     .testTag("btn_save_finish"),
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(999.dp)
             ) {
                 Icon(imageVector = Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
@@ -760,18 +753,16 @@ fun QuickEntryScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(96.dp))
     }
 
-    // ==========================================
     // DIALOGS: CENTRE SELECTION & EXAM EDIT
-    // ==========================================
     if (showCentreDialog) {
         val filteredCentres = availableCentres.filter {
             centreSearchQuery.isBlank() ||
-            it.title.contains(centreSearchQuery, ignoreCase = true) ||
-            it.description?.contains(centreSearchQuery, ignoreCase = true) == true ||
-            it.code?.contains(centreSearchQuery, ignoreCase = true) == true
+                it.title.contains(centreSearchQuery, ignoreCase = true) ||
+                it.description?.contains(centreSearchQuery, ignoreCase = true) == true ||
+                it.code?.contains(centreSearchQuery, ignoreCase = true) == true
         }
 
         AlertDialog(
@@ -779,21 +770,23 @@ fun QuickEntryScreen(
                 showCentreDialog = false
                 centreSearchQuery = ""
             },
+            containerColor = NothingTheme.colors.surface,
             title = {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Examination Centres",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    NothingDotMatrixText(
+                        text = "CENTRES",
+                        fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     IconButton(onClick = { showAddCentreDialog = true }) {
                         Icon(
                             imageVector = Icons.Filled.Add,
                             contentDescription = "Add New Centre",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -806,7 +799,7 @@ fun QuickEntryScreen(
                     OutlinedTextField(
                         value = centreSearchQuery,
                         onValueChange = { centreSearchQuery = it },
-                        placeholder = { Text("Search by code, name, or city...") },
+                        placeholder = { Text("Search code, name, or city...") },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Filled.Search,
@@ -815,8 +808,9 @@ fun QuickEntryScreen(
                             )
                         },
                         singleLine = true,
+                        colors = fieldColors,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
 
                     LazyColumn(
@@ -836,34 +830,26 @@ fun QuickEntryScreen(
                                     Text(
                                         text = if (centreSearchQuery.isNotBlank()) "No centres match '$centreSearchQuery'" else "No examination centres configured yet.",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = NothingTheme.colors.textSecondary
                                     )
                                 }
                             }
                         } else {
                             items(filteredCentres) { centre ->
                                 val isSelected = formState.selectedCentre?.id == centre.id
-                                ElevatedCard(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            viewModel.onCentreSelected(centre)
-                                            showCentreDialog = false
-                                            centreSearchQuery = ""
-                                        },
-                                    colors = CardDefaults.elevatedCardColors(
-                                        containerColor = if (isSelected) {
-                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                                        } else {
-                                            MaterialTheme.colorScheme.surface
-                                        }
-                                    ),
-                                    shape = RoundedCornerShape(10.dp)
+                                NothingHairlineCard(
+                                    onClick = {
+                                        viewModel.onCentreSelected(centre)
+                                        showCentreDialog = false
+                                        centreSearchQuery = ""
+                                    },
+                                    containerColor = if (isSelected) NothingTheme.colors.surfaceElevated else NothingTheme.colors.surface,
+                                    borderColor = if (isSelected) MaterialTheme.colorScheme.onSurface else NothingTheme.colors.border,
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(10.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(10.dp),
+                                        modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         RadioButton(
@@ -886,7 +872,7 @@ fun QuickEntryScreen(
                                             Text(
                                                 text = loc,
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                color = NothingTheme.colors.textSecondary
                                             )
                                         }
                                         IconButton(
@@ -896,7 +882,7 @@ fun QuickEntryScreen(
                                             Icon(
                                                 imageVector = Icons.Filled.Edit,
                                                 contentDescription = "Edit Centre",
-                                                tint = MaterialTheme.colorScheme.primary,
+                                                tint = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
@@ -909,11 +895,11 @@ fun QuickEntryScreen(
                     Button(
                         onClick = { showAddCentreDialog = true },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(999.dp)
                     ) {
                         Icon(imageVector = Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add New Centre")
+                        Text("Add New Centre", fontWeight = FontWeight.Bold)
                     }
                 }
             },
@@ -939,7 +925,14 @@ fun QuickEntryScreen(
 
         AlertDialog(
             onDismissRequest = { showAddCentreDialog = false },
-            title = { Text("Add Examination Centre", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            title = {
+                NothingDotMatrixText(
+                    text = "ADD CENTRE",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -951,6 +944,8 @@ fun QuickEntryScreen(
                         label = { Text("Centre Code *") },
                         placeholder = { Text("e.g., 41683, 141") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -959,6 +954,8 @@ fun QuickEntryScreen(
                         label = { Text("Centre / Institution Name *") },
                         placeholder = { Text("e.g., iON Digital Zone iDZ Sitapura 2") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -967,6 +964,8 @@ fun QuickEntryScreen(
                         label = { Text("City / District") },
                         placeholder = { Text("e.g., Jaipur, Ajmer, Kota") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -975,6 +974,8 @@ fun QuickEntryScreen(
                         label = { Text("Sub Hub (Optional)") },
                         placeholder = { Text("e.g., Jaipur 2 (Sitapura)") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -983,6 +984,8 @@ fun QuickEntryScreen(
                         label = { Text("State") },
                         placeholder = { Text("e.g., Rajasthan") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -991,12 +994,14 @@ fun QuickEntryScreen(
                         label = { Text("Centre LANs") },
                         placeholder = { Text("e.g., LAN 4-11 or LAN 1, LAN 2, LAN 3") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (addError != null) {
                         Text(
                             text = addError.orEmpty(),
-                            color = MaterialTheme.colorScheme.error,
+                            color = NothingRed,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -1004,6 +1009,7 @@ fun QuickEntryScreen(
             },
             confirmButton = {
                 Button(
+                    shape = RoundedCornerShape(999.dp),
                     onClick = {
                         if (newName.isBlank()) {
                             addError = "Please enter the centre name."
@@ -1021,7 +1027,7 @@ fun QuickEntryScreen(
                         }
                     }
                 ) {
-                    Text("Add & Select")
+                    Text("Add & Select", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1036,10 +1042,10 @@ fun QuickEntryScreen(
         val target = editingCentre!!
         val locParts = target.description?.split(",")?.map { it.trim() } ?: emptyList()
         var editCode by remember(target) {
-            mutableStateOf(target.code ?: target.title.substringBefore("·").trim().filter { it.isDigit() })
+            mutableStateOf(target.code ?: target.title.substringBefore("\u00B7").trim().filter { it.isDigit() })
         }
         var editName by remember(target) {
-            mutableStateOf(if (target.title.contains("·")) target.title.substringAfter("·").trim() else target.title)
+            mutableStateOf(if (target.title.contains("\u00B7")) target.title.substringAfter("\u00B7").trim() else target.title)
         }
         var editDistrict by remember(target) {
             mutableStateOf(if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: "Jaipur")
@@ -1057,7 +1063,14 @@ fun QuickEntryScreen(
 
         AlertDialog(
             onDismissRequest = { editingCentre = null },
-            title = { Text("Edit Examination Centre", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            title = {
+                NothingDotMatrixText(
+                    text = "EDIT CENTRE",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -1068,6 +1081,8 @@ fun QuickEntryScreen(
                         onValueChange = { editCode = it.trim() },
                         label = { Text("Centre Code *") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -1075,6 +1090,8 @@ fun QuickEntryScreen(
                         onValueChange = { editName = it },
                         label = { Text("Centre Name *") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -1082,6 +1099,8 @@ fun QuickEntryScreen(
                         onValueChange = { editDistrict = it },
                         label = { Text("City / District") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -1089,6 +1108,8 @@ fun QuickEntryScreen(
                         onValueChange = { editSubHub = it },
                         label = { Text("Sub Hub (Optional)") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -1096,6 +1117,8 @@ fun QuickEntryScreen(
                         onValueChange = { editState = it },
                         label = { Text("State") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -1104,12 +1127,14 @@ fun QuickEntryScreen(
                         label = { Text("Centre LANs") },
                         placeholder = { Text("e.g., LAN 4-11 or LAN 1, LAN 2") },
                         singleLine = true,
+                        colors = fieldColors,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (editError != null) {
                         Text(
                             text = editError.orEmpty(),
-                            color = MaterialTheme.colorScheme.error,
+                            color = NothingRed,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -1117,6 +1142,7 @@ fun QuickEntryScreen(
             },
             confirmButton = {
                 Button(
+                    shape = RoundedCornerShape(999.dp),
                     onClick = {
                         if (editName.isBlank()) {
                             editError = "Please enter the centre name."
@@ -1134,7 +1160,7 @@ fun QuickEntryScreen(
                         }
                     }
                 ) {
-                    Text("Save Changes")
+                    Text("Save Changes", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1149,22 +1175,34 @@ fun QuickEntryScreen(
         var tempExamName by remember { mutableStateOf(formState.examName) }
         AlertDialog(
             onDismissRequest = { showExamEditDialog = false },
-            title = { Text("Edit Examination Name") },
+            containerColor = NothingTheme.colors.surface,
+            title = {
+                NothingDotMatrixText(
+                    text = "EDIT EXAM NAME",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
             text = {
                 OutlinedTextField(
                     value = tempExamName,
                     onValueChange = { tempExamName = it },
                     label = { Text("Examination Name") },
                     singleLine = true,
+                    colors = fieldColors,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.onExamNameChanged(tempExamName)
-                    showExamEditDialog = false
-                }) {
-                    Text("Update")
+                Button(
+                    shape = RoundedCornerShape(999.dp),
+                    onClick = {
+                        viewModel.onExamNameChanged(tempExamName)
+                        showExamEditDialog = false
+                    }
+                ) {
+                    Text("Update", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

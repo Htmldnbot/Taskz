@@ -47,6 +47,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 
 /**
  * Shared ordered cascading dropdown filter bar:
@@ -89,15 +92,15 @@ fun OrderedCascadingFilterBar(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        shape = RoundedCornerShape(12.dp),
+        color = NothingTheme.colors.surface,
+        border = BorderStroke(1.dp, NothingTheme.colors.border)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -111,12 +114,16 @@ fun OrderedCascadingFilterBar(
                     Icon(
                         imageVector = Icons.Default.FilterList,
                         contentDescription = "Filters",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = if (activeCount > 0) "Filters ($activeCount active)" else "Filters",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        text = if (activeCount > 0) "FILTERS ($activeCount)" else "FILTERS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        ),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -132,10 +139,13 @@ fun OrderedCascadingFilterBar(
                             Icon(
                                 imageVector = Icons.Default.Clear,
                                 contentDescription = "Clear all filters",
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(15.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Reset", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = "Reset",
+                                style = MaterialTheme.typography.labelMedium
+                            )
                         }
                     }
                     TextButton(
@@ -159,11 +169,13 @@ fun OrderedCascadingFilterBar(
             }
 
             AnimatedVisibility(visible = expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Row 1: 1. State -> 2. City
+                Column(
+                    modifier = Modifier.padding(bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         OrderedFilterDropdownButton(
                             label = "1. State",
@@ -187,10 +199,9 @@ fun OrderedCascadingFilterBar(
                         )
                     }
 
-                    // Row 2: 3. Test Centre -> 4. LAN
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         OrderedFilterDropdownButton(
                             label = "3. Test Centre",
@@ -214,10 +225,9 @@ fun OrderedCascadingFilterBar(
                         )
                     }
 
-                    // Row 3: Shift -> Date
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         OrderedFilterDropdownButton(
                             label = "Shift",
@@ -264,17 +274,17 @@ fun OrderedFilterDropdownButton(
             shape = RoundedCornerShape(10.dp),
             colors = CardDefaults.outlinedCardColors(
                 containerColor = if (hasSelection) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    NothingTheme.colors.accentPrimary
                 } else {
-                    MaterialTheme.colorScheme.surface
+                    NothingTheme.colors.surfaceElevated
                 }
             ),
             border = BorderStroke(
                 width = 1.dp,
                 color = if (hasSelection) {
-                    MaterialTheme.colorScheme.primary
+                    NothingTheme.colors.accentPrimary
                 } else {
-                    MaterialTheme.colorScheme.outlineVariant
+                    NothingTheme.colors.border
                 }
             ),
             modifier = Modifier
@@ -285,7 +295,7 @@ fun OrderedFilterDropdownButton(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -298,11 +308,11 @@ fun OrderedFilterDropdownButton(
                             imageVector = icon,
                             contentDescription = label,
                             tint = if (hasSelection) {
-                                MaterialTheme.colorScheme.primary
+                                NothingTheme.colors.onAccentPrimary
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                                NothingTheme.colors.textSecondary
                             },
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                     }
@@ -312,7 +322,7 @@ fun OrderedFilterDropdownButton(
                             fontWeight = if (hasSelection) FontWeight.Bold else FontWeight.Medium
                         ),
                         color = if (hasSelection) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
+                            NothingTheme.colors.onAccentPrimary
                         } else {
                             MaterialTheme.colorScheme.onSurface
                         },
@@ -323,7 +333,7 @@ fun OrderedFilterDropdownButton(
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = "Open $label dropdown",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (hasSelection) NothingTheme.colors.onAccentPrimary else NothingTheme.colors.textSecondary,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -339,7 +349,7 @@ fun OrderedFilterDropdownButton(
                     Text(
                         text = "All ($label)",
                         fontWeight = if (!hasSelection) FontWeight.Bold else FontWeight.Normal,
-                        color = if (!hasSelection) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 onClick = {
@@ -353,7 +363,7 @@ fun OrderedFilterDropdownButton(
                         Text(
                             text = "No records in current scope",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary
                         )
                     },
                     enabled = false,
@@ -367,7 +377,7 @@ fun OrderedFilterDropdownButton(
                             Text(
                                 text = opt,
                                 fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         },
                         onClick = {

@@ -1,26 +1,32 @@
 package com.example.ui.admin
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Badge
@@ -29,29 +35,36 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.LockReset
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -72,29 +85,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.filled.ManageAccounts
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import com.example.core.model.AdminAuditEntry
 import com.example.core.model.OrgCentre
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
 import com.example.core.model.TaskzRole
 import com.example.core.model.UserProfile
+import com.example.ui.common.NothingDivider
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
 import com.example.ui.common.TaskzTextField
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 
 @Composable
 fun AdminScreen(
@@ -125,6 +134,7 @@ fun AdminScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
         // Admin Header
@@ -136,28 +146,32 @@ fun AdminScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(40.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(NothingTheme.colors.surfaceElevated)
+                        .border(1.dp, NothingTheme.colors.border, RoundedCornerShape(10.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Security,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
-                    Text(
-                        text = "Admin Console",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    NothingDotMatrixText(
+                        text = "ADMIN CONSOLE",
+                        fontSize = 20.sp
                     )
                     Text(
-                        text = "Users & Roles",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "USERS · ROLES · CENTRES",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            letterSpacing = 1.sp
+                        ),
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
             }
@@ -175,122 +189,118 @@ fun AdminScreen(
                         else -> viewModel.loadAllUsers()
                     }
                 },
-                modifier = Modifier.testTag("admin_refresh_button")
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(NothingTheme.colors.surfaceElevated)
+                    .border(1.dp, NothingTheme.colors.border, CircleShape)
+                    .testTag("admin_refresh_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Refresh",
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Status / Feedback message banner
         AnimatedVisibility(visible = actionState is AdminActionState.Success) {
-            Card(
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = TaskzSuccess.copy(alpha = 0.15f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
+            NothingHairlineCard(
+                shape = RoundedCornerShape(12.dp),
+                containerColor = NothingGreen.copy(alpha = 0.08f),
+                borderColor = NothingGreen.copy(alpha = 0.4f),
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier.padding(bottom = 12.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = null,
-                        tint = TaskzSuccess,
+                        tint = NothingGreen,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = (actionState as? AdminActionState.Success)?.message.orEmpty(),
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = TaskzSuccess
+                        color = NothingGreen
                     )
                 }
             }
         }
 
         AnimatedVisibility(visible = actionState is AdminActionState.Error) {
-            Card(
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
+            NothingHairlineCard(
+                shape = RoundedCornerShape(12.dp),
+                containerColor = NothingRed.copy(alpha = 0.08f),
+                borderColor = NothingRed.copy(alpha = 0.4f),
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier.padding(bottom = 12.dp)
             ) {
                 Text(
                     text = (actionState as? AdminActionState.Error)?.message.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(12.dp)
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = NothingRed
                 )
             }
         }
 
-        // Tabs
-        ScrollableTabRow(
-            selectedTabIndex = selectedTab,
-            edgePadding = 8.dp,
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = MaterialTheme.colorScheme.primary,
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    color = MaterialTheme.colorScheme.primary
-                )
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+        // Pill Tabs
+        val pendingCount = requests.count { it.isPending }
+        val adminTabs = listOf(
+            Triple(0, "Users (${users.size})", "admin_tab_users"),
+            Triple(1, if (pendingCount > 0) "Resets ($pendingCount)" else "Resets", "admin_tab_requests"),
+            Triple(2, "Work Roles", "admin_tab_work_roles"),
+            Triple(3, "Audit Logs", "admin_tab_audit_logs"),
+            Triple(4, "Centres (${orgHierarchy.centres.size})", "admin_tab_centres")
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Tab(
-                selected = selectedTab == 0,
-                onClick = { selectedTab = 0 },
-                text = { Text("Users (${users.size})", fontWeight = FontWeight.SemiBold) },
-                modifier = Modifier.testTag("admin_tab_users")
-            )
-            Tab(
-                selected = selectedTab == 1,
-                onClick = { selectedTab = 1 },
-                text = {
-                    val pendingCount = requests.count { it.isPending }
-                    Text(
-                        text = if (pendingCount > 0) "Reset Requests ($pendingCount)" else "Reset Requests",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                modifier = Modifier.testTag("admin_tab_requests")
-            )
-            Tab(
-                selected = selectedTab == 2,
-                onClick = { selectedTab = 2 },
-                text = { Text("Work Roles", fontWeight = FontWeight.SemiBold) },
-                modifier = Modifier.testTag("admin_tab_work_roles")
-            )
-            Tab(
-                selected = selectedTab == 3,
-                onClick = {
-                    selectedTab = 3
-                    viewModel.loadAuditLogs()
-                },
-                text = { Text("Audit Logs", fontWeight = FontWeight.SemiBold) },
-                modifier = Modifier.testTag("admin_tab_audit_logs")
-            )
-            Tab(
-                selected = selectedTab == 4,
-                onClick = {
-                    selectedTab = 4
-                    if (orgHierarchy.centres.isEmpty()) viewModel.loadOrgHierarchy()
-                },
-                text = { Text("Cities & Centres (${orgHierarchy.centres.size})", fontWeight = FontWeight.SemiBold) },
-                modifier = Modifier.testTag("admin_tab_centres")
-            )
+            items(adminTabs, key = { it.first }) { (tabIdx, title, tag) ->
+                val isSelected = selectedTab == tabIdx
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (isSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surfaceElevated,
+                    border = BorderStroke(
+                        1.dp,
+                        if (isSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
+                    ),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable {
+                            selectedTab = tabIdx
+                            when (tabIdx) {
+                                3 -> viewModel.loadAuditLogs()
+                                4 -> if (orgHierarchy.centres.isEmpty()) viewModel.loadOrgHierarchy()
+                            }
+                        }
+                        .testTag(tag)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (isSelected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -317,23 +327,59 @@ fun AdminScreen(
                 FilterChip(
                     selected = !filterNeedsScopeReview,
                     onClick = { filterNeedsScopeReview = false },
-                    label = { Text("All (${users.size})") },
+                    label = {
+                        Text(
+                            "All (${users.size})",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                        )
+                    },
+                    shape = RoundedCornerShape(999.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = NothingTheme.colors.accentPrimary,
+                        selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        labelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = !filterNeedsScopeReview,
+                        borderColor = NothingTheme.colors.border,
+                        selectedBorderColor = NothingTheme.colors.accentPrimary
+                    ),
                     modifier = Modifier.testTag("admin_filter_all_users_chip")
                 )
                 FilterChip(
                     selected = filterNeedsScopeReview,
                     onClick = { filterNeedsScopeReview = !filterNeedsScopeReview },
-                    label = { Text("Needs Scope Review ($scopeReviewCount)") },
+                    label = {
+                        Text(
+                            "Scope Review ($scopeReviewCount)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                        )
+                    },
                     leadingIcon = if (scopeReviewCount > 0) {
                         {
                             Icon(
                                 imageVector = Icons.Default.Warning,
                                 contentDescription = null,
-                                tint = if (filterNeedsScopeReview) MaterialTheme.colorScheme.error else TaskzWarning,
+                                tint = if (filterNeedsScopeReview) NothingTheme.colors.onAccentPrimary else NothingAmber,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
                     } else null,
+                    shape = RoundedCornerShape(999.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = NothingTheme.colors.accentPrimary,
+                        selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        labelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = filterNeedsScopeReview,
+                        borderColor = NothingTheme.colors.border,
+                        selectedBorderColor = NothingTheme.colors.accentPrimary
+                    ),
                     modifier = Modifier.testTag("admin_filter_scope_review_chip")
                 )
             }
@@ -354,18 +400,21 @@ fun AdminScreen(
 
             if (isLoadingUsers) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(strokeWidth = 3.dp)
+                    CircularProgressIndicator(strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
                 }
             } else if (filteredUsers.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (searchQuery.isBlank()) "No employees found." else "No match for '$searchQuery'",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    NothingEmptyState(
+                        icon = Icons.Default.Person,
+                        title = if (searchQuery.isBlank()) "NO EMPLOYEES" else "NO MATCHES",
+                        subtitle = if (searchQuery.isBlank()) "No personnel registered in directory yet." else "No match for '$searchQuery'."
                     )
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
                     items(filteredUsers, key = { it.id }) { user ->
                         UserAdminCard(
                             user = user,
@@ -379,18 +428,21 @@ fun AdminScreen(
             // Password Reset Requests Tab
             if (isLoadingRequests) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(strokeWidth = 3.dp)
+                    CircularProgressIndicator(strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
                 }
             } else if (requests.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "No password reset requests pending.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    NothingEmptyState(
+                        icon = Icons.Default.LockReset,
+                        title = "NO RESET REQUESTS",
+                        subtitle = "All password reset tickets are clear."
                     )
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
                     items(requests, key = { it.id }) { request ->
                         ResetRequestCard(
                             request = request,
@@ -406,18 +458,21 @@ fun AdminScreen(
             // Audit Logs Tab
             if (isLoadingAudits && auditLogs.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(strokeWidth = 3.dp)
+                    CircularProgressIndicator(strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
                 }
             } else if (auditLogs.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "No governance audit logs recorded yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    NothingEmptyState(
+                        icon = Icons.Default.History,
+                        title = "NO AUDIT LOGS",
+                        subtitle = "Governance audit logs will appear here."
                     )
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
                     items(auditLogs, key = { it.id }) { entry ->
                         AdminAuditLogCard(entry = entry)
                     }
@@ -446,7 +501,8 @@ fun AdminScreen(
             ) {
                 OutlinedButton(
                     onClick = { showAddCityDialog = true },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    border = BorderStroke(1.dp, NothingTheme.colors.border),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -454,11 +510,15 @@ fun AdminScreen(
                 ) {
                     Icon(Icons.Default.LocationCity, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("+ City")
+                    Text("+ City", color = MaterialTheme.colorScheme.onSurface)
                 }
                 Button(
                     onClick = { showAddCentreDialog = true },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary
+                    ),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -483,18 +543,55 @@ fun AdminScreen(
                         FilterChip(
                             selected = selectedCityFilterId == null,
                             onClick = { selectedCityFilterId = null },
-                            label = { Text("All Cities (${orgHierarchy.cities.size})") },
+                            label = {
+                                Text(
+                                    "All (${orgHierarchy.cities.size})",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                                )
+                            },
+                            shape = RoundedCornerShape(999.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                containerColor = NothingTheme.colors.surfaceElevated,
+                                labelColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = selectedCityFilterId == null,
+                                borderColor = NothingTheme.colors.border,
+                                selectedBorderColor = NothingTheme.colors.accentPrimary
+                            ),
                             modifier = Modifier.testTag("admin_city_filter_all")
                         )
                     }
                     items(orgHierarchy.cities, key = { it.id }) { city ->
                         val count = centreCountsByCity[city.id] ?: 0
+                        val isCitySelected = selectedCityFilterId == city.id
                         FilterChip(
-                            selected = selectedCityFilterId == city.id,
+                            selected = isCitySelected,
                             onClick = {
-                                selectedCityFilterId = if (selectedCityFilterId == city.id) null else city.id
+                                selectedCityFilterId = if (isCitySelected) null else city.id
                             },
-                            label = { Text("${city.name} ($count)") },
+                            label = {
+                                Text(
+                                    "${city.name} ($count)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                                )
+                            },
+                            shape = RoundedCornerShape(999.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                containerColor = NothingTheme.colors.surfaceElevated,
+                                labelColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = isCitySelected,
+                                borderColor = NothingTheme.colors.border,
+                                selectedBorderColor = NothingTheme.colors.accentPrimary
+                            ),
                             modifier = Modifier.testTag("admin_city_filter_${city.code}")
                         )
                     }
@@ -518,18 +615,21 @@ fun AdminScreen(
 
             if (filteredCentres.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (centreSearchQuery.isBlank() && selectedCityFilterId == null) {
+                    NothingEmptyState(
+                        icon = Icons.Default.Business,
+                        title = "NO CENTRES",
+                        subtitle = if (centreSearchQuery.isBlank() && selectedCityFilterId == null) {
                             "No centres loaded yet."
                         } else {
                             "No centres in this selection. Tap '+ Centre' to add one."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
                     items(filteredCentres, key = { it.id }) { centre ->
                         OrgCentreAdminCard(
                             centre = centre,
@@ -632,15 +732,13 @@ private fun UserAdminCard(
     onManageAccess: () -> Unit,
     onToggleActive: () -> Unit
 ) {
-    Card(
+    NothingHairlineCard(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(14.dp)
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -654,7 +752,8 @@ private fun UserAdminCard(
                         contentDescription = null,
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(CircleShape),
+                            .clip(CircleShape)
+                            .border(1.dp, NothingTheme.colors.border, CircleShape),
                         contentScale = ContentScale.Crop
                     )
                 } else {
@@ -662,13 +761,17 @@ private fun UserAdminCard(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                            .background(NothingTheme.colors.surfaceElevated)
+                            .border(1.dp, NothingTheme.colors.border, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = user.fullName.take(2).uppercase().ifBlank { "EM" },
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = NothingTheme.colors.textPrimary
                         )
                     }
                 }
@@ -676,27 +779,25 @@ private fun UserAdminCard(
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         Text(
                             text = user.fullName,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = NothingTheme.colors.textPrimary,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (user.isAdmin) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-                        ) {
-                            Text(
-                                text = user.resolvedActiveRole.displayName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (user.isAdmin) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        NothingTagChip(
+                            text = user.resolvedActiveRole.displayName.uppercase(),
+                            containerColor = if (user.isAdmin) NothingTheme.colors.accentPrimary else NothingTheme.colors.surfaceElevated,
+                            contentColor = if (user.isAdmin) NothingTheme.colors.onAccentPrimary else NothingTheme.colors.textPrimary,
+                            borderColor = if (user.isAdmin) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
 
                     Text(
                         text = listOfNotNull(
@@ -704,70 +805,39 @@ private fun UserAdminCard(
                             user.mobile.takeIf { it.isNotBlank() },
                             user.centreCode?.let { "Centre $it" } ?: user.cityName ?: user.stateName
                         ).joinToString(" • "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingTheme.colors.textSecondary
                     )
 
                     if (user.assignedRoleCodes.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "Assigned: ${user.assignedRoleCodes.joinToString(", ")}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textPrimary
                         )
                     }
 
                     if (user.isOnLeave) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = TaskzWarning.copy(alpha = 0.18f),
+                        Spacer(modifier = Modifier.height(5.dp))
+                        NothingTagChip(
+                            text = "ON LEAVE",
+                            containerColor = NothingAmber.copy(alpha = 0.14f),
+                            contentColor = NothingAmber,
+                            borderColor = NothingAmber.copy(alpha = 0.45f),
                             modifier = Modifier.testTag("badge_admin_on_leave_${user.employeeId}")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.EventBusy,
-                                    contentDescription = "On Leave",
-                                    tint = TaskzWarning,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "On Leave",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = TaskzWarning
-                                )
-                            }
-                        }
+                        )
                     }
 
                     if (user.needsScopeReview) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
+                        Spacer(modifier = Modifier.height(5.dp))
+                        NothingTagChip(
+                            text = "NEEDS SCOPE REVIEW",
+                            containerColor = NothingRed.copy(alpha = 0.14f),
+                            contentColor = NothingRed,
+                            borderColor = NothingRed.copy(alpha = 0.45f),
                             modifier = Modifier.testTag("badge_scope_review_${user.employeeId}")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = "Scope Review Needed",
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Needs Scope Review",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            }
-                        }
+                        )
                     }
                 }
             }
@@ -778,9 +848,12 @@ private fun UserAdminCard(
             ) {
                 OutlinedButton(
                     onClick = onManageAccess,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    border = BorderStroke(1.dp, NothingTheme.colors.border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                     modifier = Modifier
                         .weight(1f)
+                        .heightIn(min = 48.dp)
                         .testTag("admin_manage_access_${user.employeeId}")
                 ) {
                     Icon(
@@ -795,15 +868,20 @@ private fun UserAdminCard(
                 Button(
                     onClick = onToggleActive,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (user.isActive) TaskzError.copy(alpha = 0.15f) else TaskzSuccess.copy(alpha = 0.15f),
-                        contentColor = if (user.isActive) TaskzError else TaskzSuccess
+                        containerColor = if (user.isActive) NothingRed.copy(alpha = 0.14f) else NothingGreen.copy(alpha = 0.14f),
+                        contentColor = if (user.isActive) NothingRed else NothingGreen
                     ),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.testTag("toggle_status_${user.employeeId}")
+                    shape = RoundedCornerShape(999.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("toggle_status_${user.employeeId}")
                 ) {
                     Text(
                         text = if (user.isActive) "Deactivate" else "Activate",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        )
                     )
                 }
             }
@@ -813,49 +891,38 @@ private fun UserAdminCard(
 
 @Composable
 private fun AdminAuditLogCard(entry: AdminAuditEntry) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)),
-        modifier = Modifier.fillMaxWidth()
+    NothingHairlineCard(
+        shape = RoundedCornerShape(14.dp),
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(14.dp)
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Text(
-                        text = entry.action,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
+                NothingTagChip(text = entry.action.uppercase())
                 Text(
                     text = entry.createdAt.take(19).replace("T", " "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
                 )
             }
             Text(
                 text = "By ${entry.adminName ?: "Admin"} -> ${entry.targetName ?: entry.targetEmployeeId ?: entry.targetUserId ?: "System"}",
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                color = NothingTheme.colors.textPrimary
             )
             if (entry.metadataJson.isNotBlank() && entry.metadataJson != "{}") {
                 Text(
                     text = entry.metadataJson,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
                 )
             }
         }
@@ -907,13 +974,20 @@ private fun UserAccessEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
+        shape = RoundedCornerShape(16.dp),
         title = {
-            Column {
-                Text("Manage Roles & Scope", fontWeight = FontWeight.Bold)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                NothingDotMatrixText(
+                    text = "ROLES & SCOPE",
+                    fontSize = 16.sp,
+                    letterSpacing = 1.sp,
+                    color = NothingTheme.colors.textPrimary
+                )
                 Text(
                     text = "${user.fullName} (${user.employeeId})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
                 )
             }
         },
@@ -924,11 +998,30 @@ private fun UserAccessEditorDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Assigned Roles", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "ASSIGNED ROLES",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = NothingTheme.colors.textSecondary
+                )
                 TaskzRole.entries.forEach { role ->
                     val checked = selectedRoles.value.contains(role.code)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val next = if (!checked) {
+                                    selectedRoles.value + role.code
+                                } else {
+                                    selectedRoles.value - role.code
+                                }
+                                selectedRoles.value = next
+                                if (!next.contains(activeRoleCode) && next.isNotEmpty()) {
+                                    activeRoleCode = next.first()
+                                }
+                            },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(
@@ -943,9 +1036,18 @@ private fun UserAccessEditorDialog(
                                 if (!next.contains(activeRoleCode) && next.isNotEmpty()) {
                                     activeRoleCode = next.first()
                                 }
-                            }
+                            },
+                            colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                checkedColor = NothingTheme.colors.accentPrimary,
+                                checkmarkColor = NothingTheme.colors.onAccentPrimary,
+                                uncheckedColor = NothingTheme.colors.textSecondary
+                            )
                         )
-                        Text(role.displayName, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = role.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NothingTheme.colors.textPrimary
+                        )
                     }
                 }
 
@@ -958,6 +1060,7 @@ private fun UserAccessEditorDialog(
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Active Role") },
+                        shape = RoundedCornerShape(12.dp),
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = activeRoleExpanded) },
                         modifier = Modifier
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -980,16 +1083,15 @@ private fun UserAccessEditorDialog(
                 }
 
                 if (!needsZone) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                        modifier = Modifier.fillMaxWidth()
+                    NothingHairlineCard(
+                        shape = RoundedCornerShape(10.dp),
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        contentPadding = PaddingValues(12.dp)
                     ) {
                         Text(
                             text = "Global Access (All Zones, States, Cities & Centres)",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(12.dp)
+                            color = NothingTheme.colors.textPrimary
                         )
                     }
                 }
@@ -1006,6 +1108,7 @@ private fun UserAccessEditorDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Zone") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1048,6 +1151,7 @@ private fun UserAccessEditorDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("State") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1093,6 +1197,7 @@ private fun UserAccessEditorDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("City") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1139,6 +1244,7 @@ private fun UserAccessEditorDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Test Centre") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = centreExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1173,7 +1279,12 @@ private fun UserAccessEditorDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Account Active", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Account Active",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NothingTheme.colors.textPrimary
+                    )
                     Switch(checked = isActive, onCheckedChange = { isActive = it })
                 }
             }
@@ -1192,14 +1303,24 @@ private fun UserAccessEditorDialog(
                     )
                 },
                 enabled = selectedRoles.value.isNotEmpty(),
-                modifier = Modifier.testTag("btn_save_user_access")
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("btn_save_user_access")
             ) {
-                Text("Save Access")
+                Text("Save Access", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("Cancel", color = NothingTheme.colors.textSecondary)
             }
         }
     )
@@ -1210,87 +1331,92 @@ private fun ResetRequestCard(
     request: PasswordResetRequest,
     onResetClick: () -> Unit
 ) {
-    Card(
+    NothingHairlineCard(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(16.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Employee ID: ${request.employeeId}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    if (!request.employeeName.isNullOrBlank()) {
-                        Text(
-                            text = request.employeeName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = when (request.status) {
-                        "pending" -> TaskzWarning.copy(alpha = 0.15f)
-                        "resolved" -> TaskzSuccess.copy(alpha = 0.15f)
-                        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                    }
-                ) {
-                    Text(
-                        text = request.status.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = when (request.status) {
-                            "pending" -> TaskzWarning
-                            "resolved" -> TaskzSuccess
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "Mobile: ${request.mobile}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            if (!request.message.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "\"${request.message}\"",
-                    style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = "Employee ID: ${request.employeeId}",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = NothingTheme.colors.textPrimary
                 )
+                if (!request.employeeName.isNullOrBlank()) {
+                    Text(
+                        text = request.employeeName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textPrimary
+                    )
+                }
             }
 
-            if (request.isPending) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onResetClick,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("admin_reset_button_${request.employeeId}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Key,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Issue Temporary Password")
+            NothingTagChip(
+                text = request.status.uppercase(),
+                containerColor = when (request.status) {
+                    "pending" -> NothingAmber.copy(alpha = 0.14f)
+                    "resolved" -> NothingGreen.copy(alpha = 0.14f)
+                    else -> NothingTheme.colors.surfaceElevated
+                },
+                contentColor = when (request.status) {
+                    "pending" -> NothingAmber
+                    "resolved" -> NothingGreen
+                    else -> NothingTheme.colors.textSecondary
+                },
+                borderColor = when (request.status) {
+                    "pending" -> NothingAmber.copy(alpha = 0.45f)
+                    "resolved" -> NothingGreen.copy(alpha = 0.45f)
+                    else -> NothingTheme.colors.border
                 }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Mobile: ${request.mobile}",
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+            color = NothingTheme.colors.textSecondary
+        )
+
+        if (!request.message.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "\"${request.message}\"",
+                style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                color = NothingTheme.colors.textPrimary
+            )
+        }
+
+        if (request.isPending) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onResetClick,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("admin_reset_button_${request.employeeId}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Issue Temporary Password", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1307,10 +1433,14 @@ private fun ResetPasswordModal(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
+        shape = RoundedCornerShape(16.dp),
         title = {
-            Text(
-                text = "Reset Password",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            NothingDotMatrixText(
+                text = "RESET PASSWORD",
+                fontSize = 16.sp,
+                letterSpacing = 1.sp,
+                color = NothingTheme.colors.textPrimary
             )
         },
         text = {
@@ -1318,7 +1448,7 @@ private fun ResetPasswordModal(
                 Text(
                     text = "Assign a new temporary password for Employee ID: ${request.employeeId}.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = NothingTheme.colors.textSecondary
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 TaskzTextField(
@@ -1344,14 +1474,24 @@ private fun ResetPasswordModal(
                     }
                     onConfirm(temporaryPassword)
                 },
-                modifier = Modifier.testTag("admin_confirm_temp_password_button")
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("admin_confirm_temp_password_button")
             ) {
-                Text("Execute Server Reset")
+                Text("Execute Server Reset", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("Cancel", color = NothingTheme.colors.textSecondary)
             }
         }
     )
@@ -1364,18 +1504,15 @@ private fun OrgCentreAdminCard(
     onEditClick: () -> Unit
 ) {
     val lans = remember(centre) { centre.resolvedLans() }
-    Card(
+    NothingHairlineCard(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("admin_centre_card_${centre.code}")
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(14.dp),
+        modifier = Modifier.testTag("admin_centre_card_${centre.code}")
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1385,7 +1522,8 @@ private fun OrgCentreAdminCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "${centre.code} · ${centre.name}",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = NothingTheme.colors.textPrimary
                     )
                     val meta = listOfNotNull(
                         centre.districtName?.takeIf { it.isNotBlank() },
@@ -1394,8 +1532,8 @@ private fun OrgCentreAdminCard(
                     if (meta.isNotBlank()) {
                         Text(
                             text = meta,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
                 }
@@ -1406,7 +1544,7 @@ private fun OrgCentreAdminCard(
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Edit Centre",
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = NothingTheme.colors.textPrimary
                     )
                 }
             }
@@ -1415,27 +1553,17 @@ private fun OrgCentreAdminCard(
                 Text(
                     text = centre.address,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = NothingTheme.colors.textSecondary,
                     maxLines = 2
                 )
             }
 
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 lans.forEach { lan ->
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = lan,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
+                    NothingTagChip(text = lan)
                 }
             }
         }
@@ -1466,7 +1594,16 @@ private fun AddOrgCityDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add City", fontWeight = FontWeight.Bold) },
+        containerColor = NothingTheme.colors.surface,
+        shape = RoundedCornerShape(16.dp),
+        title = {
+            NothingDotMatrixText(
+                text = "ADD CITY",
+                fontSize = 16.sp,
+                letterSpacing = 1.sp,
+                color = NothingTheme.colors.textPrimary
+            )
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -1480,6 +1617,7 @@ private fun AddOrgCityDialog(
                     label = { Text("City Name *") },
                     placeholder = { Text("e.g., Alwar, Sikar, Gurugram") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("admin_city_name_input")
@@ -1490,6 +1628,7 @@ private fun AddOrgCityDialog(
                     label = { Text("City Code (Optional)") },
                     placeholder = { Text("e.g., ALW, SKR (auto-generated if blank)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("admin_city_code_input")
@@ -1510,6 +1649,7 @@ private fun AddOrgCityDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("State") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateDropdownExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1531,7 +1671,13 @@ private fun AddOrgCityDialog(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("+ New State", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                                text = {
+                                    Text(
+                                        "+ New State",
+                                        fontWeight = FontWeight.Bold,
+                                        color = NothingTheme.colors.textPrimary
+                                    )
+                                },
                                 onClick = {
                                     useNewState = true
                                     selectedStateId = null
@@ -1549,6 +1695,7 @@ private fun AddOrgCityDialog(
                         label = { Text("New State Name *") },
                         placeholder = { Text("e.g., Haryana, Delhi, Uttar Pradesh") },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("admin_new_state_name_input")
@@ -1564,6 +1711,7 @@ private fun AddOrgCityDialog(
                                 onValueChange = {},
                                 readOnly = true,
                                 label = { Text("Zone") },
+                                shape = RoundedCornerShape(12.dp),
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneDropdownExpanded) },
                                 modifier = Modifier
                                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1606,14 +1754,24 @@ private fun AddOrgCityDialog(
                         selectedZoneId
                     )
                 },
-                modifier = Modifier.testTag("confirm_save_admin_city_btn")
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("confirm_save_admin_city_btn")
             ) {
-                Text("Save City")
+                Text("Save City", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("Cancel", color = NothingTheme.colors.textSecondary)
             }
         }
     )
@@ -1672,10 +1830,14 @@ private fun AddEditOrgCentreDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
+        shape = RoundedCornerShape(16.dp),
         title = {
-            Text(
-                text = if (existing == null) "Add Exam Centre" else "Edit Exam Centre",
-                fontWeight = FontWeight.Bold
+            NothingDotMatrixText(
+                text = if (existing == null) "ADD EXAM CENTRE" else "EDIT EXAM CENTRE",
+                fontSize = 16.sp,
+                letterSpacing = 1.sp,
+                color = NothingTheme.colors.textPrimary
             )
         },
         text = {
@@ -1692,6 +1854,7 @@ private fun AddEditOrgCentreDialog(
                     label = { Text("TC Code *") },
                     placeholder = { Text("e.g., 41683") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().testTag("admin_centre_code_input")
                 )
                 OutlinedTextField(
@@ -1700,6 +1863,7 @@ private fun AddEditOrgCentreDialog(
                     label = { Text("TC Name *") },
                     placeholder = { Text("e.g., iON Digital Zone iDZ Sitapura 2") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().testTag("admin_centre_name_input")
                 )
 
@@ -1718,6 +1882,7 @@ private fun AddEditOrgCentreDialog(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("City") },
+                            shape = RoundedCornerShape(12.dp),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityDropdownExpanded) },
                             modifier = Modifier
                                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1732,7 +1897,7 @@ private fun AddEditOrgCentreDialog(
                                     Text(
                                         "+ New City",
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = NothingTheme.colors.textPrimary
                                     )
                                 },
                                 onClick = {
@@ -1775,6 +1940,7 @@ private fun AddEditOrgCentreDialog(
                                 onValueChange = {},
                                 readOnly = true,
                                 label = { Text("State") },
+                                shape = RoundedCornerShape(12.dp),
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateDropdownExpanded) },
                                 modifier = Modifier
                                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -1795,7 +1961,13 @@ private fun AddEditOrgCentreDialog(
                                     )
                                 }
                                 DropdownMenuItem(
-                                    text = { Text("+ New State", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                                    text = {
+                                        Text(
+                                            "+ New State",
+                                            fontWeight = FontWeight.Bold,
+                                            color = NothingTheme.colors.textPrimary
+                                        )
+                                    },
                                     onClick = {
                                         useNewState = true
                                         selectedStateId = null
@@ -1812,6 +1984,7 @@ private fun AddEditOrgCentreDialog(
                             label = { Text("New State Name *") },
                             placeholder = { Text("e.g., Haryana, Delhi") },
                             singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1830,6 +2003,7 @@ private fun AddEditOrgCentreDialog(
                     label = { Text(if (useNewCity) "New City Name *" else "City / District") },
                     placeholder = { Text("e.g., Alwar, Sikar, Gurugram") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -1838,18 +2012,24 @@ private fun AddEditOrgCentreDialog(
                     label = { Text("Sub Hub") },
                     placeholder = { Text("e.g., Jaipur 2 (Sitapura)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it },
                     label = { Text("Address") },
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Text(
-                    text = "Available LANs (e.g., LAN 4-11 or LAN 1, LAN 2)",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    text = "AVAILABLE LANS (e.g., LAN 4-11 or LAN 1, LAN 2)",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = NothingTheme.colors.textSecondary
                 )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(
@@ -1859,10 +2039,29 @@ private fun AddEditOrgCentreDialog(
                         "LAN 4-11" to "LAN 4-11",
                         "LAN 1-11" to "LAN 1-11"
                     ).forEach { (chipLabel, presetValue) ->
+                        val selected = lansInput.equals(presetValue, ignoreCase = true)
                         FilterChip(
-                            selected = lansInput.equals(presetValue, ignoreCase = true),
+                            selected = selected,
                             onClick = { lansInput = presetValue },
-                            label = { Text(chipLabel) }
+                            label = {
+                                Text(
+                                    text = chipLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily)
+                                )
+                            },
+                            shape = RoundedCornerShape(999.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = NothingTheme.colors.surfaceElevated,
+                                labelColor = NothingTheme.colors.textSecondary,
+                                selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                selectedLabelColor = NothingTheme.colors.onAccentPrimary
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = selected,
+                                borderColor = NothingTheme.colors.border,
+                                selectedBorderColor = NothingTheme.colors.accentPrimary
+                            )
                         )
                     }
                 }
@@ -1871,13 +2070,14 @@ private fun AddEditOrgCentreDialog(
                     onValueChange = { lansInput = it },
                     label = { Text("LAN List / Range") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().testTag("admin_centre_lans_input")
                 )
                 if (parsedPreview.isNotEmpty()) {
                     Text(
                         text = "Resolved (${parsedPreview.size}): ${parsedPreview.joinToString(", ")}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingTheme.colors.textPrimary
                     )
                 }
             }
@@ -1906,14 +2106,24 @@ private fun AddEditOrgCentreDialog(
                         finalLans
                     )
                 },
-                modifier = Modifier.testTag("confirm_save_admin_centre_btn")
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("confirm_save_admin_centre_btn")
             ) {
-                Text("Save Centre")
+                Text("Save Centre", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("Cancel", color = NothingTheme.colors.textSecondary)
             }
         }
     )

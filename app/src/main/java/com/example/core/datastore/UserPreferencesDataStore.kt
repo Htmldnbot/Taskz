@@ -15,6 +15,17 @@ import kotlinx.coroutines.flow.map
 
 private val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(name = "taskz_app_prefs")
 
+enum class AppThemeMode(val label: String) {
+    SYSTEM("System"),
+    DARK("Dark"),
+    LIGHT("Light");
+
+    companion object {
+        fun fromStorage(raw: String?): AppThemeMode =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: SYSTEM
+    }
+}
+
 data class UserSession(
     val accessToken: String?,
     val refreshToken: String?,
@@ -45,6 +56,7 @@ class UserPreferencesDataStore(private val context: Context) {
 
         private val KEY_CUSTOM_SUPABASE_URL = stringPreferencesKey("custom_supabase_url")
         private val KEY_CUSTOM_SUPABASE_KEY = stringPreferencesKey("custom_supabase_key")
+        private val KEY_APP_THEME_MODE = stringPreferencesKey("app_theme_mode")
     }
 
     private fun readSession(): UserSession {
@@ -142,6 +154,16 @@ class UserPreferencesDataStore(private val context: Context) {
         context.appDataStore.edit { prefs ->
             prefs[KEY_CUSTOM_SUPABASE_URL] = url
             prefs[KEY_CUSTOM_SUPABASE_KEY] = key
+        }
+    }
+
+    val themeModeFlow: Flow<AppThemeMode> = context.appDataStore.data.map { prefs ->
+        AppThemeMode.fromStorage(prefs[KEY_APP_THEME_MODE])
+    }
+
+    suspend fun saveThemeMode(mode: AppThemeMode) {
+        context.appDataStore.edit { prefs ->
+            prefs[KEY_APP_THEME_MODE] = mode.name
         }
     }
 

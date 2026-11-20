@@ -1,5 +1,6 @@
 package com.example.ui.incidents
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -13,51 +14,36 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.Business
-import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Badge
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,29 +51,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.runtime.rememberCoroutineScope
 import com.example.TaskzApplication
 import com.example.core.model.SystemIncident
 import com.example.core.model.SystemIncidentAudit
 import com.example.core.model.TaskzRole
+import com.example.ui.common.NothingDivider
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSearchInput
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
 import com.example.ui.common.OrderedCascadingFilterBar
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -129,10 +122,14 @@ fun IncidentHistoryScreen(
         filterCentre != null || filterCity != null || filterState != null || filterZone != null ||
         filterShift != null || (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(NothingTheme.colors.background)
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // Search & Refresh Row
@@ -142,40 +139,31 @@ fun IncidentHistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
+                    NothingSearchInput(
                         value = searchQuery,
                         onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = { Text("Search by system, centre, reason...") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Search,
-                                contentDescription = "Search",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        trailingIcon = {
-                            if (searchQuery.isNotBlank()) {
-                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                    Icon(imageVector = Icons.Filled.Clear, contentDescription = "Clear Search")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(24.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("history_search_input")
+                        placeholder = "Search system, centre, reason...",
+                        testTag = "history_search_input",
+                        modifier = Modifier.weight(1f)
                     )
 
-                    IconButton(
+                    Surface(
                         onClick = { viewModel.refreshIncidents() },
-                        modifier = Modifier.size(48.dp).testTag("history_refresh_btn")
+                        shape = RoundedCornerShape(12.dp),
+                        color = NothingTheme.colors.surface,
+                        border = BorderStroke(1.dp, NothingTheme.colors.border),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("history_refresh_btn")
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Refresh,
-                            contentDescription = "Sync from Cloud",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "Sync from Cloud",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -222,92 +210,55 @@ fun IncidentHistoryScreen(
                 )
             }
 
-            // Quick Toggles: My Reports, Shifted Only, Clear
+            // Compact Quick Toggles
             item(key = "history_quick_chips") {
                 val primaryChipScroll = rememberScrollState()
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(primaryChipScroll),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
+                    CompactHistoryFilterChip(
+                        label = "My Reports",
                         selected = myReportsOnly,
+                        icon = Icons.Filled.Person,
                         onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
-                        label = { Text(if (myReportsOnly) "My Reports Only ✓" else "My Reports Only") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        modifier = Modifier.testTag("filter_my_reports_chip")
+                        testTag = "filter_my_reports_chip"
                     )
-
-                    FilterChip(
+                    CompactHistoryFilterChip(
+                        label = "All (${allIncidents.size})",
                         selected = !filterShiftedOnly && !hasActiveFilter,
                         onClick = { viewModel.clearAllFilters() },
-                        label = { Text("All (${allIncidents.size})") },
-                        modifier = Modifier.testTag("filter_all_chip")
+                        testTag = "filter_all_chip"
                     )
-
-                    FilterChip(
+                    CompactHistoryFilterChip(
+                        label = "Shifted Only",
                         selected = filterShiftedOnly,
                         onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
-                        label = { Text("Shifted Only") },
-                        modifier = Modifier.testTag("filter_shifted_chip")
+                        testTag = "filter_shifted_chip"
                     )
-
                     if (hasActiveFilter) {
-                        AssistChip(
+                        CompactHistoryFilterChip(
+                            label = "Clear",
+                            selected = false,
+                            icon = Icons.Filled.Clear,
+                            tintColor = NothingRed,
                             onClick = { viewModel.clearAllFilters() },
-                            label = { Text("Clear All Filters", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Filled.Clear,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
+                            testTag = "filter_clear_all_chip"
                         )
                     }
                 }
             }
 
-            // Incident Cards List or Empty State
             if (incidents.isEmpty()) {
                 item(key = "history_empty_state") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 24.dp, vertical = 48.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Text(
-                                text = if (searchQuery.isNotBlank()) "No incidents match your search" else "No incidents recorded yet",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "Use Quick Entry to record technical system incidents.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
+                    NothingEmptyState(
+                        title = if (searchQuery.isNotBlank()) "NO MATCHES" else "NO INCIDENTS",
+                        subtitle = "Use Quick Entry to log system locks.",
+                        icon = Icons.Filled.Info
+                    )
                 }
             } else {
                 items(incidents, key = { it.id }) { incident ->
@@ -326,31 +277,27 @@ fun IncidentHistoryScreen(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(16.dp)
+                .padding(bottom = 84.dp, start = 16.dp, end = 16.dp)
         )
     }
 
-    // Delete Incident Dialog
     if (incidentToDelete != null) {
         AlertDialog(
             onDismissRequest = { incidentToDelete = null },
-            title = {
-                Text("Delete Incident Record")
-            },
+            containerColor = NothingTheme.colors.surface,
+            title = { Text("Delete Incident Record", fontWeight = FontWeight.Bold) },
             text = {
-                Text("Are you sure you want to delete incident for system '${incidentToDelete?.lockedSystemNumber}'? This will remove it from the register and cloud database.")
+                Text("Delete incident for system '${incidentToDelete?.lockedSystemNumber}'? This removes it from the register and cloud database.")
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         val id = incidentToDelete?.id
-                        if (id != null) {
-                            viewModel.deleteIncident(id)
-                        }
+                        if (id != null) viewModel.deleteIncident(id)
                         incidentToDelete = null
                     }
                 ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("Delete", color = NothingRed)
                 }
             },
             dismissButton = {
@@ -361,7 +308,6 @@ fun IncidentHistoryScreen(
         )
     }
 
-    // Incident Details Dialog with Escalation
     if (selectedIncident != null) {
         IncidentDetailDialog(
             incident = selectedIncident!!,
@@ -391,6 +337,55 @@ fun IncidentHistoryScreen(
     }
 }
 
+@Composable
+private fun CompactHistoryFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    testTag: String,
+    icon: ImageVector? = null,
+    tintColor: Color? = null
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
+        border = BorderStroke(
+            1.dp,
+            when {
+                selected -> NothingTheme.colors.accentPrimary
+                tintColor != null -> tintColor.copy(alpha = 0.45f)
+                else -> NothingTheme.colors.border
+            }
+        ),
+        modifier = Modifier
+            .heightIn(min = 34.dp)
+            .testTag(testTag)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = tintColor ?: if (selected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = tintColor ?: if (selected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun IncidentItemCard(
@@ -398,192 +393,133 @@ fun IncidentItemCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
-    Card(
+    val isEscalated = incident.status.equals("ESCALATED", ignoreCase = true)
+    val isResolved = incident.status.equals("RESOLVED", ignoreCase = true)
+    val isSynced = incident.syncStatus.equals("SYNCED", ignoreCase = true)
+    val statusDotColor = when {
+        isEscalated -> NothingRed
+        isResolved -> NothingGreen
+        else -> NothingAmber
+    }
+
+    val systemTransition = buildString {
+        append(incident.lockedSystemNumber)
+        if (incident.candidateShifted && !incident.newlyAllocatedSystemNumber.isNullOrBlank()) {
+            append(" → ")
+            append(incident.newlyAllocatedSystemNumber)
+        }
+    }
+
+    // Ultra-compact 2-line telemetry row (~8-10 visible on screen)
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
             .testTag("incident_card_${incident.lockedSystemNumber}"),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        shape = RoundedCornerShape(10.dp),
+        color = NothingTheme.colors.surface,
+        border = BorderStroke(
+            1.dp,
+            if (isEscalated) NothingRed.copy(alpha = 0.45f) else NothingTheme.colors.border
         )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 11.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            // Header: System numbers & Sync Badge
+            // Line 1: [StatusDot] System->System · Reason [Time + Sync]
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Locked System badge
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = incident.lockedSystemNumber,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    if (incident.candidateShifted && !incident.newlyAllocatedSystemNumber.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Shifted to",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = incident.newlyAllocatedSystemNumber,
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-
-                // Sync Status Badge
-                val isSynced = incident.syncStatus.equals("SYNCED", ignoreCase = true)
-                Surface(
-                    color = if (isSynced) Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
-                    shape = RoundedCornerShape(12.dp)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isSynced) Icons.Filled.CloudDone else Icons.Filled.CloudUpload,
-                            contentDescription = null,
-                            tint = if (isSynced) Color(0xFF2E7D32) else Color(0xFFE65100),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = if (isSynced) "Synced" else "Pending",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = if (isSynced) Color(0xFF2E7D32) else Color(0xFFE65100)
-                        )
-                    }
-                }
-            }
-
-            // Reason and LAN row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
+                    NothingStatusDot(color = statusDotColor, size = 7.dp)
                     Text(
-                        text = incident.reason,
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        text = systemTransition,
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "· ${incident.reason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-
-                Text(
-                    text = "${incident.lanName} \u00B7 ${incident.shiftName}",
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = incident.incidentTime,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontSize = 10.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    NothingStatusDot(
+                        color = if (isSynced) NothingGreen else NothingAmber,
+                        size = 5.dp
+                    )
+                }
             }
 
-            // Centre and Time row
+            // Line 2: Centre · LAN · Shift | Status · Level ›
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "${incident.centreCode} \u00B7 ${incident.centreName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    text = "${incident.centreCode} · ${incident.lanName} · ${incident.shiftName}",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontSize = 10.sp
+                    ),
+                    color = NothingTheme.colors.textSecondary,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = incident.incidentTime,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            // Status, Escalation Level & Scope Badges
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val isEscalated = incident.status.equals("ESCALATED", ignoreCase = true)
-                val isResolved = incident.status.equals("RESOLVED", ignoreCase = true)
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = when {
-                        isEscalated -> MaterialTheme.colorScheme.errorContainer
-                        isResolved -> Color(0xFFE8F5E9)
-                        else -> MaterialTheme.colorScheme.primaryContainer
-                    }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
+                    NothingTagChip(
                         text = incident.status.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = when {
-                            isEscalated -> MaterialTheme.colorScheme.onErrorContainer
-                            isResolved -> Color(0xFF2E7D32)
-                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        containerColor = if (isEscalated) NothingRed.copy(alpha = 0.14f) else NothingTheme.colors.surfaceElevated,
+                        contentColor = when {
+                            isEscalated -> NothingRed
+                            isResolved -> NothingGreen
+                            else -> MaterialTheme.colorScheme.onSurface
                         },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        borderColor = if (isEscalated) NothingRed.copy(alpha = 0.4f) else NothingTheme.colors.border
                     )
-                }
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surface
-                ) {
-                    Text(
-                        text = "Level: ${TaskzRole.fromCode(incident.escalationLevel).displayName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = incident.scopeLevel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = NothingTheme.colors.textSecondary,
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -618,10 +554,11 @@ fun IncidentDetailDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
         title = {
-            Text(
-                text = "Incident: ${incident.lockedSystemNumber}",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            NothingDotMatrixText(
+                text = "INCIDENT // ${incident.lockedSystemNumber}",
+                fontSize = 16.sp
             )
         },
         text = {
@@ -629,41 +566,48 @@ fun IncidentDetailDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(scroll),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 DetailRow("Status", incident.status.uppercase())
-                DetailRow("Escalation Level", currentLevelRole.displayName)
+                DetailRow("Escalation", currentLevelRole.displayName)
                 DetailRow("Scope", incident.scopeLevel)
+                NothingDivider()
                 DetailRow("Centre", "${incident.centreCode} · ${incident.centreName}")
                 DetailRow("Location", "${incident.districtName}, ${incident.stateName}")
-                DetailRow("Examination", incident.examName)
-                DetailRow("Date & Shift", "${incident.examDate} · ${incident.shiftName}")
+                DetailRow("Exam", incident.examName)
+                DetailRow("Date / Shift", "${incident.examDate} · ${incident.shiftName}")
                 DetailRow("LAN", incident.lanName)
-                DetailRow("Locked System", incident.lockedSystemNumber)
-                DetailRow("Candidate Shifted", if (incident.candidateShifted) "Yes" else "No")
+                DetailRow("Locked Sys", incident.lockedSystemNumber)
+                DetailRow("Shifted", if (incident.candidateShifted) "Yes" else "No")
                 if (incident.candidateShifted) {
-                    DetailRow("New System", incident.newlyAllocatedSystemNumber ?: "NA")
+                    DetailRow("New Sys", incident.newlyAllocatedSystemNumber ?: "NA")
                 }
-                DetailRow("Failure Time", incident.incidentTime)
+                DetailRow("Time", incident.incidentTime)
                 DetailRow("Reason", incident.reason)
-                DetailRow("MAC Address", incident.macAddress)
-                DetailRow("IP Address", incident.ipAddress)
+                DetailRow("MAC", incident.macAddress)
+                DetailRow("IP", incident.ipAddress)
                 DetailRow("IT Manager", incident.itManagerName)
-                DetailRow("Sync Status", incident.syncStatus)
+                DetailRow("Sync", incident.syncStatus)
 
                 if (audits.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    NothingDivider()
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Audit History",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        text = "AUDIT HISTORY",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = NothingTheme.colors.textSecondary
                     )
                     audits.forEach { audit ->
                         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(audit.changedAt))
                         val actor = (audit.changedByName ?: "").ifBlank { "User" }
                         Text(
-                            text = "\u2022 [${audit.action}] by $actor on $dateStr",
+                            text = "• [${audit.action}] by $actor · $dateStr",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
                 }
@@ -673,13 +617,14 @@ fun IncidentDetailDialog(
             if (canEscalate) {
                 Button(
                     onClick = { showEscalatePicker = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                    shape = RoundedCornerShape(999.dp),
                     modifier = Modifier.testTag("btn_escalate_incident")
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowUpward,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Escalate")
@@ -696,20 +641,21 @@ fun IncidentDetailDialog(
     if (showEscalatePicker) {
         AlertDialog(
             onDismissRequest = { showEscalatePicker = false },
-            title = { Text("Escalate Incident", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            title = { NothingDotMatrixText(text = "ESCALATE INCIDENT", fontSize = 16.sp) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Select target authority in the operational escalation chain:",
+                        text = "Select target authority in escalation chain:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NothingTheme.colors.textSecondary
                     )
                     higherChain.forEach { role ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { selectedTargetRole = role }
-                                .padding(vertical = 4.dp),
+                                .padding(vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -741,7 +687,8 @@ fun IncidentDetailDialog(
                         onEscalate(selectedTargetRole.code, escalationReason.takeIf { it.isNotBlank() })
                         showEscalatePicker = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                    shape = RoundedCornerShape(999.dp),
                     modifier = Modifier.testTag("btn_confirm_escalate_incident")
                 ) {
                     Text("Confirm Escalation")
@@ -765,12 +712,16 @@ fun DetailRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = MaterialTheme.typography.labelSmall,
+            color = NothingTheme.colors.textSecondary
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = TechMonoFontFamily,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }
@@ -782,21 +733,18 @@ fun FilterDropdownButton(
     options: List<String>,
     onSelect: (String?) -> Unit,
     modifier: Modifier = Modifier,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
+    icon: ImageVector? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     Box(modifier = modifier) {
-        OutlinedCard(
+        Surface(
             onClick = { expanded = true },
             shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.outlinedCardColors(
-                containerColor = if (selectedValue != null) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surface
-            ),
-            border = CardDefaults.outlinedCardBorder().copy(
-                brush = androidx.compose.ui.graphics.SolidColor(
-                    if (selectedValue != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                )
+            color = if (selectedValue != null) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
+            border = BorderStroke(
+                1.dp,
+                if (selectedValue != null) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
             )
         ) {
             Row(
@@ -814,24 +762,26 @@ fun FilterDropdownButton(
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
-                            tint = if (selectedValue != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (selectedValue != null) NothingTheme.colors.onAccentPrimary else NothingTheme.colors.textSecondary,
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
                         text = if (selectedValue != null) "$label: $selectedValue" else "$label: All",
-                        style = MaterialTheme.typography.labelMedium.copy(
+                        style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = if (selectedValue != null) FontWeight.Bold else FontWeight.Normal
                         ),
+                        color = if (selectedValue != null) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    tint = if (selectedValue != null) NothingTheme.colors.onAccentPrimary else NothingTheme.colors.textSecondary,
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }
@@ -845,8 +795,7 @@ fun FilterDropdownButton(
                 text = {
                     Text(
                         text = "All $label",
-                        fontWeight = if (selectedValue == null) FontWeight.Bold else FontWeight.Normal,
-                        color = if (selectedValue == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        fontWeight = if (selectedValue == null) FontWeight.Bold else FontWeight.Normal
                     )
                 },
                 onClick = {
@@ -859,8 +808,7 @@ fun FilterDropdownButton(
                     text = {
                         Text(
                             text = opt,
-                            fontWeight = if (selectedValue == opt) FontWeight.Bold else FontWeight.Normal,
-                            color = if (selectedValue == opt) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            fontWeight = if (selectedValue == opt) FontWeight.Bold else FontWeight.Normal
                         )
                     },
                     onClick = {

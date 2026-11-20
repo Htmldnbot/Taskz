@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -18,7 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.core.network.SupabaseConfig
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
 
 @Composable
 fun ConfigureSupabaseDialog(
@@ -31,20 +35,22 @@ fun ConfigureSupabaseDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
         title = {
-            Text(
-                text = "Supabase Backend Config",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            NothingDotMatrixText(
+                text = "BACKEND CONFIG",
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface
             )
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Configure your Supabase project URL and anon public key. You can also specify these in your root .env file.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Set your Supabase project URL and anon public key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingTheme.colors.textSecondary
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
                 TaskzTextField(
                     value = url,
                     onValueChange = {
@@ -55,7 +61,7 @@ fun ConfigureSupabaseDialog(
                     placeholder = "https://your-project.supabase.co",
                     testTag = "supabase_url_input"
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 TaskzTextField(
                     value = key,
                     onValueChange = {
@@ -70,7 +76,7 @@ fun ConfigureSupabaseDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = errorText!!,
-                        color = MaterialTheme.colorScheme.error,
+                        color = NothingRed,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -92,9 +98,10 @@ fun ConfigureSupabaseDialog(
                     onSave(url.trim(), key.trim())
                     onDismiss()
                 },
+                shape = RoundedCornerShape(999.dp),
                 modifier = Modifier.testTag("save_config_button")
             ) {
-                Text("Save Configuration")
+                Text("Save Configuration", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

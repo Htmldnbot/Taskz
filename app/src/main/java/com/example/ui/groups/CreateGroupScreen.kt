@@ -6,11 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,10 +26,10 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,9 +48,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.TaskGroup
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
 import com.example.ui.common.TaskzTextField
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import java.time.LocalDate
 import java.util.Locale
 
@@ -100,7 +109,9 @@ fun CreateGroupScreen(
 
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -116,9 +127,9 @@ fun CreateGroupScreen(
                     Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Create Exam Group",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                NothingDotMatrixText(
+                    text = "CREATE EXAM GROUP",
+                    fontSize = 20.sp
                 )
             }
 
@@ -160,7 +171,25 @@ fun CreateGroupScreen(
                         onClick = {
                             code = toggleLanTagInCode(code, lan)
                         },
-                        label = { Text(lan) },
+                        label = {
+                            Text(
+                                text = lan,
+                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                            )
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NothingTheme.colors.accentPrimary,
+                            selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            labelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isSelected,
+                            borderColor = NothingTheme.colors.border,
+                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                        ),
                         modifier = Modifier.testTag("chip_group_${lan.lowercase().replace(" ", "_")}")
                     )
                 }
@@ -228,34 +257,50 @@ fun CreateGroupScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            Text(
-                text = "Visibility & Join Settings",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-            )
+            NothingSectionHeader(title = "VISIBILITY & JOIN SETTINGS")
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Card(
+            NothingHairlineCard(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                contentPadding = PaddingValues(16.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column {
                     Text(
                         text = "Visibility",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = visibility == "everyone",
-                            onClick = { visibility = "everyone" },
-                            label = { Text("Everyone") }
-                        )
-                        FilterChip(
-                            selected = visibility == "restricted",
-                            onClick = { visibility = "restricted" },
-                            label = { Text("Members Only") }
-                        )
+                        listOf("everyone" to "Everyone", "restricted" to "Members Only").forEach { (key, label) ->
+                            val selected = visibility == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { visibility = key },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                                    )
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                    selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                    containerColor = NothingTheme.colors.surfaceElevated,
+                                    labelColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = selected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                )
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -322,7 +367,7 @@ fun CreateGroupScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = errorMessage!!,
-                    color = MaterialTheme.colorScheme.error,
+                    color = NothingRed,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -350,15 +395,24 @@ fun CreateGroupScreen(
                     )
                 },
                 enabled = !isLoading,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
+                    .heightIn(min = 50.dp)
                     .testTag("submit_create_group")
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = NothingTheme.colors.onAccentPrimary
+                    )
                 } else {
-                    Text("Create Exam Group")
+                    Text("Create Exam Group", fontWeight = FontWeight.Bold)
                 }
             }
         }

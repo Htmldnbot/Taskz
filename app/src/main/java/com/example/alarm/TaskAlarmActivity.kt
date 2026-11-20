@@ -94,10 +94,24 @@ import com.example.data.local.entity.TaskAcknowledgementEntity
 import com.example.data.local.entity.TaskResponseEntity
 import com.example.data.remote.SupabaseClient
 import com.example.sync.SyncWorker
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingDotPatternStrip
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.theme.DotMatrixFontFamily
 import com.example.ui.theme.MyApplicationTheme
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingDarkBg
+import com.example.ui.theme.NothingDarkBorder
+import com.example.ui.theme.NothingDarkSecondaryText
+import com.example.ui.theme.NothingDarkSurface
+import com.example.ui.theme.NothingDarkSurfaceElevated
+import com.example.ui.theme.NothingDarkText
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -154,7 +168,7 @@ class TaskAlarmActivity : ComponentActivity() {
         }
 
         setContent {
-            MyApplicationTheme {
+            MyApplicationTheme(darkTheme = true) {
                 var actionState by remember { mutableStateOf(AlarmActionState.IDLE) }
                 var statusMessage by remember { mutableStateOf("") }
                 var resolvedResponseType by remember { mutableStateOf(initialResponseType) }
@@ -1058,22 +1072,17 @@ fun TaskAlarmScreen(
     val isCritical = importance.equals("CRITICAL", ignoreCase = true)
     val isHigh = importance.equals("HIGH", ignoreCase = true)
 
-    val primaryBgColor = when {
-        isCritical -> Color(0xFF1E0A0A)
-        isHigh -> Color(0xFF1F1206)
-        else -> MaterialTheme.colorScheme.background
-    }
-
+    val primaryBgColor = NothingDarkBg
     val accentColor = when {
-        isCritical -> TaskzError
-        isHigh -> TaskzWarning
-        else -> MaterialTheme.colorScheme.primary
+        isCritical -> NothingRed
+        isHigh -> NothingAmber
+        else -> NothingDarkText
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1.0f,
-        targetValue = 1.15f,
+        targetValue = 1.14f,
         animationSpec = infiniteRepeatable(
             animation = tween(600),
             repeatMode = RepeatMode.Reverse
@@ -1087,12 +1096,20 @@ fun TaskAlarmScreen(
         modifier = modifier
             .fillMaxSize()
             .background(primaryBgColor)
-            .padding(24.dp)
     ) {
+        NothingDotPatternStrip(
+            dotColor = accentColor.copy(alpha = 0.22f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(88.dp)
+                .align(Alignment.TopCenter)
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1100,54 +1117,60 @@ fun TaskAlarmScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Pulsing Alarm Icon
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size(92.dp)
                         .scale(pulseScale)
                         .clip(CircleShape)
-                        .background(accentColor.copy(alpha = 0.2f))
-                        .border(3.dp, accentColor, CircleShape),
+                        .background(NothingDarkSurface)
+                        .border(2.dp, accentColor, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (isCritical) Icons.Default.NotificationImportant else Icons.Default.Alarm,
                         contentDescription = "Alarm Active",
                         tint = accentColor,
-                        modifier = Modifier.size(54.dp)
+                        modifier = Modifier.size(44.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                // Importance Tag
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = accentColor.copy(alpha = 0.25f)
+                    shape = RoundedCornerShape(999.dp),
+                    color = accentColor.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f))
                 ) {
-                    Text(
-                        text = "$importance PRIORITY • $reminderLabel",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = accentColor
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        NothingStatusDot(color = accentColor, size = 7.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${importance.uppercase()} PRIORITY \u00B7 ${reminderLabel.uppercase()}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = accentColor
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Task Title
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold,
                         fontSize = 24.sp,
                         lineHeight = 30.sp
                     ),
                     textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = NothingDarkText,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
 
@@ -1157,14 +1180,14 @@ fun TaskAlarmScreen(
                         Icon(
                             imageVector = Icons.Default.Schedule,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            tint = NothingDarkSecondaryText,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Scheduled: $scheduledTime",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "SCHEDULED: $scheduledTime",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingDarkSecondaryText
                         )
                     }
                 }
@@ -1175,91 +1198,104 @@ fun TaskAlarmScreen(
                         Icon(
                             imageVector = Icons.Default.LocationOn,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            tint = NothingDarkSecondaryText,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = location,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingDarkSecondaryText
                         )
                     }
                 }
 
                 if (description.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Card(
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                        modifier = Modifier.fillMaxWidth()
+                    Spacer(modifier = Modifier.height(14.dp))
+                    NothingHairlineCard(
+                        containerColor = NothingDarkSurface,
+                        borderColor = NothingDarkBorder,
+                        contentPadding = PaddingValues(14.dp)
                     ) {
                         Text(
                             text = description,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(14.dp)
+                            color = NothingDarkText
                         )
                     }
                 }
 
-                // Status Message Box (PART 3)
                 AnimatedVisibility(visible = actionState != AlarmActionState.IDLE) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    Card(
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = when (actionState) {
-                                AlarmActionState.SERVER_CONFIRMED -> TaskzSuccess.copy(alpha = 0.2f)
-                                AlarmActionState.PENDING_CREATOR_CONFIRMATION -> TaskzWarning.copy(alpha = 0.2f)
-                                AlarmActionState.RESPONSE_SAVED_PENDING_SYNC -> MaterialTheme.colorScheme.surfaceVariant
-                                AlarmActionState.ERROR -> TaskzError.copy(alpha = 0.2f)
-                                else -> MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                    val stateBorder = when (actionState) {
+                        AlarmActionState.SERVER_CONFIRMED -> NothingGreen
+                        AlarmActionState.PENDING_CREATOR_CONFIRMATION -> NothingAmber
+                        AlarmActionState.ERROR -> NothingRed
+                        else -> NothingDarkBorder
+                    }
+                    NothingHairlineCard(
+                        containerColor = NothingDarkSurfaceElevated,
+                        borderColor = stateBorder,
+                        contentPadding = PaddingValues(16.dp)
                     ) {
                         Column(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             when (actionState) {
                                 AlarmActionState.PROCESSING -> {
-                                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(28.dp),
+                                        color = NothingDarkText,
+                                        strokeWidth = 2.dp
+                                    )
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Text("Processing...", style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        text = "PROCESSING...",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily),
+                                        color = NothingDarkText
+                                    )
                                 }
                                 AlarmActionState.SERVER_CONFIRMED -> {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = TaskzSuccess, modifier = Modifier.size(32.dp))
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = NothingGreen, modifier = Modifier.size(30.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = statusMessage.ifBlank { "SERVER CONFIRMED" },
                                         fontWeight = FontWeight.Bold,
-                                        color = TaskzSuccess,
+                                        fontFamily = TechMonoFontFamily,
+                                        color = NothingGreen,
                                         textAlign = TextAlign.Center
                                     )
-                                    Text("Synced with server", style = MaterialTheme.typography.bodySmall)
+                                    Text("Synced with server", style = MaterialTheme.typography.bodySmall, color = NothingDarkSecondaryText)
                                 }
                                 AlarmActionState.PENDING_CREATOR_CONFIRMATION -> {
-                                    Icon(Icons.Default.HourglassTop, contentDescription = null, tint = TaskzWarning, modifier = Modifier.size(32.dp))
+                                    Icon(Icons.Default.HourglassTop, contentDescription = null, tint = NothingAmber, modifier = Modifier.size(30.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    Text("PENDING CREATOR CONFIRMATION", fontWeight = FontWeight.Bold, color = TaskzWarning)
-                                    Text("Response received. Awaiting creator approval.", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        text = "PENDING CREATOR CONFIRMATION",
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = TechMonoFontFamily,
+                                        color = NothingAmber,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text("Response received. Awaiting creator approval.", style = MaterialTheme.typography.bodySmall, color = NothingDarkSecondaryText)
                                 }
                                 AlarmActionState.RESPONSE_SAVED_PENDING_SYNC -> {
-                                    Icon(Icons.Default.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                                    Icon(Icons.Default.Sync, contentDescription = null, tint = NothingDarkText, modifier = Modifier.size(30.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = statusMessage.ifBlank { "RESPONSE SAVED\nPENDING SYNC" },
                                         fontWeight = FontWeight.Bold,
+                                        fontFamily = TechMonoFontFamily,
+                                        color = NothingDarkText,
                                         textAlign = TextAlign.Center
                                     )
-                                    Text("Offline response stored. Will sync automatically when connected.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                                    Text("Offline response stored. Will sync automatically.", style = MaterialTheme.typography.bodySmall, color = NothingDarkSecondaryText, textAlign = TextAlign.Center)
                                 }
                                 AlarmActionState.ERROR -> {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = TaskzError, modifier = Modifier.size(32.dp))
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = NothingRed, modifier = Modifier.size(30.dp))
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    Text(statusMessage, fontWeight = FontWeight.Bold, color = TaskzError)
+                                    Text(statusMessage, fontWeight = FontWeight.Bold, color = NothingRed)
                                 }
                                 else -> {}
                             }
@@ -1268,7 +1304,6 @@ fun TaskAlarmScreen(
                 }
             }
 
-            // Action Buttons
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1278,14 +1313,18 @@ fun TaskAlarmScreen(
                 if (actionState in listOf(AlarmActionState.SERVER_CONFIRMED, AlarmActionState.PENDING_CREATOR_CONFIRMATION, AlarmActionState.RESPONSE_SAVED_PENDING_SYNC)) {
                     Button(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NothingDarkText,
+                            contentColor = NothingDarkBg
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
                     ) {
                         Icon(imageVector = Icons.Default.Close, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "DISMISS", fontWeight = FontWeight.Bold)
+                        Text(text = "DISMISS", fontWeight = FontWeight.Bold, fontFamily = TechMonoFontFamily)
                     }
                 } else {
                     val effectiveResponseType = if (taskType.equals(TaskType.PROGRESS.name, ignoreCase = true)) {
@@ -1303,10 +1342,12 @@ fun TaskAlarmScreen(
                             }
 
                             Text(
-                                text = "Select Progress (Target: ${targetPercentage}%)",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground,
+                                text = "SELECT PROGRESS (TARGET: ${targetPercentage}%)",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = NothingDarkSecondaryText,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1327,23 +1368,30 @@ fun TaskAlarmScreen(
                                                 pendingPartialPct = pct
                                             }
                                         },
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = RoundedCornerShape(999.dp),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = when {
-                                                isDoneTarget -> TaskzSuccess
-                                                isSelectedPartial -> MaterialTheme.colorScheme.primary
-                                                else -> accentColor
+                                                isDoneTarget -> NothingGreen
+                                                isSelectedPartial -> NothingDarkText
+                                                else -> NothingDarkSurfaceElevated
+                                            },
+                                            contentColor = when {
+                                                isDoneTarget -> Color.White
+                                                isSelectedPartial -> NothingDarkBg
+                                                else -> NothingDarkText
                                             }
                                         ),
-                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                                        border = if (!isDoneTarget && !isSelectedPartial) BorderStroke(1.dp, NothingDarkBorder) else null,
+                                        contentPadding = PaddingValues(horizontal = 4.dp),
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(54.dp)
+                                            .height(52.dp)
                                             .testTag("alarm_btn_pct_$pct")
                                     ) {
                                         Text(
                                             text = "$pct%",
-                                            fontWeight = FontWeight.ExtraBold,
+                                            fontFamily = DotMatrixFontFamily,
+                                            fontWeight = FontWeight.Bold,
                                             fontSize = 15.sp
                                         )
                                     }
@@ -1351,77 +1399,84 @@ fun TaskAlarmScreen(
                             }
 
                             AnimatedVisibility(visible = pendingPartialPct != null) {
-                                Card(
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                                    modifier = Modifier.fillMaxWidth()
+                                NothingHairlineCard(
+                                    containerColor = NothingDarkSurface,
+                                    borderColor = NothingDarkBorder,
+                                    contentPadding = PaddingValues(12.dp)
                                 ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    Text(
+                                        text = "Progress ${pendingPartialPct ?: 25}% \u2014 Next reminder after:",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = NothingDarkText
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text(
-                                            text = "Progress ${pendingPartialPct ?: 25}% — Next reminder after:",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            listOf(5, 10, 15, 30).forEach { mins ->
-                                                val isChosen = chosenReminderMins == mins
-                                                OutlinedButton(
-                                                    onClick = { chosenReminderMins = mins },
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    colors = ButtonDefaults.outlinedButtonColors(
-                                                        containerColor = if (isChosen) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                                        contentColor = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                                    ),
-                                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .height(48.dp)
-                                                        .testTag("alarm_remind_${mins}m")
-                                                ) {
-                                                    Text("${mins}m", fontWeight = FontWeight.Bold)
-                                                }
+                                        listOf(5, 10, 15, 30).forEach { mins ->
+                                            val isChosen = chosenReminderMins == mins
+                                            OutlinedButton(
+                                                onClick = { chosenReminderMins = mins },
+                                                shape = RoundedCornerShape(999.dp),
+                                                colors = ButtonDefaults.outlinedButtonColors(
+                                                    containerColor = if (isChosen) NothingDarkText else Color.Transparent,
+                                                    contentColor = if (isChosen) NothingDarkBg else NothingDarkText
+                                                ),
+                                                border = BorderStroke(1.dp, NothingDarkBorder),
+                                                contentPadding = PaddingValues(horizontal = 4.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(48.dp)
+                                                    .testTag("alarm_remind_${mins}m")
+                                            ) {
+                                                Text(
+                                                    text = "${mins}m",
+                                                    fontFamily = TechMonoFontFamily,
+                                                    fontWeight = FontWeight.Bold
+                                                )
                                             }
                                         }
-                                        Button(
-                                            onClick = {
-                                                val pctToSave = pendingPartialPct ?: return@Button
-                                                onPercentageResponse(pctToSave, chosenReminderMins)
-                                            },
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(50.dp)
-                                                .testTag("alarm_btn_confirm_partial")
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Save ${pendingPartialPct ?: 25}% & Remind in ${chosenReminderMins}m",
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Button(
+                                        onClick = {
+                                            val pctToSave = pendingPartialPct ?: return@Button
+                                            onPercentageResponse(pctToSave, chosenReminderMins)
+                                        },
+                                        shape = RoundedCornerShape(999.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = NothingDarkText,
+                                            contentColor = NothingDarkBg
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(50.dp)
+                                            .testTag("alarm_btn_confirm_partial")
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Save ${pendingPartialPct ?: 25}% \u00B7 Remind ${chosenReminderMins}m",
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
                         }
 
                         ResponseType.YES_NO -> {
-                            // YES/NO tasks use direct confirmation instead of Acknowledge Alarm
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Button(
                                     onClick = { onYesNoResponse("YES") },
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
+                                    shape = RoundedCornerShape(999.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NothingGreen,
+                                        contentColor = Color.White
+                                    ),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(54.dp)
@@ -1434,8 +1489,11 @@ fun TaskAlarmScreen(
 
                                 Button(
                                     onClick = { onYesNoResponse("NO") },
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = TaskzError),
+                                    shape = RoundedCornerShape(999.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NothingRed,
+                                        contentColor = Color.White
+                                    ),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(54.dp)
@@ -1449,11 +1507,13 @@ fun TaskAlarmScreen(
                         }
 
                         else -> {
-                            // Other non-percentage tasks: direct Response / Completion without Acknowledge button
                             Button(
                                 onClick = if (responseType == ResponseType.COMPLETED_NOT_COMPLETED) onMarkCompleted else onOpenTask,
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess),
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = NothingGreen,
+                                    contentColor = Color.White
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(52.dp)
@@ -1469,14 +1529,15 @@ fun TaskAlarmScreen(
                         }
                     }
 
-                    // Snooze & Open Task row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
                             onClick = { showSnoozeOptions = !showSnoozeOptions },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, NothingDarkBorder),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingDarkText),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
@@ -1489,8 +1550,12 @@ fun TaskAlarmScreen(
 
                         Button(
                             onClick = onOpenTask,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = NothingDarkSurfaceElevated,
+                                contentColor = NothingDarkText
+                            ),
+                            border = BorderStroke(1.dp, NothingDarkBorder),
+                            shape = RoundedCornerShape(999.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
@@ -1499,43 +1564,47 @@ fun TaskAlarmScreen(
                             Icon(
                                 imageVector = Icons.Default.OpenInNew,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Open Task", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = "Open Task")
                         }
                     }
 
-                    // Snooze options selector
                     AnimatedVisibility(visible = showSnoozeOptions) {
-                        Card(
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            modifier = Modifier.fillMaxWidth()
+                        NothingHairlineCard(
+                            containerColor = NothingDarkSurface,
+                            borderColor = NothingDarkBorder,
+                            contentPadding = PaddingValues(12.dp)
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "Select Snooze Duration:",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    listOf(2, 5, 10).forEach { mins ->
-                                        Button(
-                                            onClick = { onSnooze(mins) },
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .testTag("snooze_${mins}m")
-                                        ) {
-                                            Text("${mins}m")
-                                        }
+                            Text(
+                                text = "SNOOZE DURATION",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = NothingDarkSecondaryText
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf(2, 5, 10).forEach { mins ->
+                                    Button(
+                                        onClick = { onSnooze(mins) },
+                                        shape = RoundedCornerShape(999.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = NothingDarkSurfaceElevated,
+                                            contentColor = NothingDarkText
+                                        ),
+                                        border = BorderStroke(1.dp, NothingDarkBorder),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("snooze_${mins}m")
+                                    ) {
+                                        Text("${mins}m", fontFamily = TechMonoFontFamily, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }

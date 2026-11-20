@@ -1,9 +1,8 @@
 package com.example.ui.common
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,15 +23,12 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,12 +57,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.model.SyncMetadata
 import com.example.core.model.SyncStatus
-import com.example.ui.theme.TaskzCyanBright
-import com.example.ui.theme.TaskzCyanPrimary
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzInfo
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.theme.DotMatrixFontFamily
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -84,21 +80,21 @@ fun TaskzPrimaryButton(
     Button(
         onClick = onClick,
         enabled = enabled && !isLoading,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(999.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary
         ),
         modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(50.dp)
             .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier)
     ) {
         if (isLoading) {
             CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(22.dp),
                 color = MaterialTheme.colorScheme.onPrimary,
-                strokeWidth = 2.5.dp
+                strokeWidth = 2.dp
             )
         } else {
             Row(
@@ -109,14 +105,14 @@ fun TaskzPrimaryButton(
                     Icon(
                         imageVector = leadingIcon,
                         contentDescription = null,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 Text(
                     text = text,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
                         letterSpacing = 0.3.sp
                     )
                 )
@@ -137,10 +133,11 @@ fun TaskzOutlinedButton(
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(1.dp, NothingTheme.colors.border),
         modifier = modifier
             .fillMaxWidth()
-            .height(50.dp)
+            .height(48.dp)
             .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier)
     ) {
         Row(
@@ -157,7 +154,7 @@ fun TaskzOutlinedButton(
             }
             Text(
                 text = text,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
             )
         }
     }
@@ -191,7 +188,7 @@ fun TaskzTextField(
             singleLine = singleLine,
             maxLines = maxLines,
             leadingIcon = leadingIcon?.let {
-                { Icon(imageVector = it, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                { Icon(imageVector = it, contentDescription = null, tint = NothingTheme.colors.textSecondary) }
             },
             trailingIcon = if (isPassword) {
                 {
@@ -202,7 +199,7 @@ fun TaskzTextField(
                         Icon(
                             imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                             contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = NothingTheme.colors.textSecondary
                         )
                     }
                 }
@@ -213,7 +210,9 @@ fun TaskzTextField(
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                unfocusedBorderColor = NothingTheme.colors.border,
+                focusedContainerColor = NothingTheme.colors.surface,
+                unfocusedContainerColor = NothingTheme.colors.surface
             ),
             modifier = Modifier
                 .fillMaxWidth()
@@ -223,7 +222,7 @@ fun TaskzTextField(
         AnimatedVisibility(visible = !errorMessage.isNullOrBlank()) {
             Text(
                 text = errorMessage.orEmpty(),
-                color = MaterialTheme.colorScheme.error,
+                color = NothingRed,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(start = 8.dp, top = 4.dp)
             )
@@ -238,63 +237,67 @@ fun TaskzStatusBadge(
 ) {
     val (bgColor, textColor, label, icon) = when (status) {
         SyncStatus.SYNCED -> Quad(
-            TaskzSuccess.copy(alpha = 0.15f),
-            TaskzSuccess,
-            "Synced",
+            NothingGreen.copy(alpha = 0.14f),
+            NothingGreen,
+            "SYNCED",
             Icons.Default.CloudDone
         )
         SyncStatus.OFFLINE -> Quad(
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-            MaterialTheme.colorScheme.onSurfaceVariant,
-            "Offline",
+            NothingTheme.colors.surfaceElevated,
+            NothingTheme.colors.textSecondary,
+            "OFFLINE",
             Icons.Default.CloudOff
         )
         SyncStatus.SYNCING -> Quad(
-            TaskzInfo.copy(alpha = 0.15f),
-            TaskzInfo,
-            "Syncing...",
+            NothingTheme.colors.surfaceElevated,
+            MaterialTheme.colorScheme.onSurface,
+            "SYNCING",
             Icons.Default.CloudSync
         )
         SyncStatus.PENDING -> Quad(
-            TaskzWarning.copy(alpha = 0.15f),
-            TaskzWarning,
-            "Pending",
+            NothingAmber.copy(alpha = 0.14f),
+            NothingAmber,
+            "PENDING",
             Icons.Default.HourglassEmpty
         )
         SyncStatus.PENDING_VERIFICATION -> Quad(
-            TaskzWarning.copy(alpha = 0.2f),
-            TaskzWarning,
-            "Pending Verification",
+            NothingAmber.copy(alpha = 0.16f),
+            NothingAmber,
+            "PENDING CHECK",
             Icons.Default.Warning
         )
         SyncStatus.ERROR -> Quad(
-            TaskzError.copy(alpha = 0.15f),
-            TaskzError,
-            "Sync Error",
+            NothingRed.copy(alpha = 0.14f),
+            NothingRed,
+            "SYNC ERROR",
             Icons.Default.ErrorOutline
         )
     }
 
     Surface(
         color = bgColor,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(1.dp, textColor.copy(alpha = 0.35f)),
         modifier = modifier
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 tint = textColor,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(13.dp)
             )
             Spacer(modifier = Modifier.width(5.dp))
             Text(
                 text = label,
                 color = textColor,
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = TechMonoFontFamily,
+                    fontWeight = FontWeight.Bold
+                )
             )
         }
     }
@@ -311,159 +314,171 @@ fun SyncStatusCard(
     isRefreshing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val dateFormatter = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
+    val dateFormatter = remember { SimpleDateFormat("dd MMM · HH:mm", Locale.getDefault()) }
 
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    NothingHairlineCard(modifier = modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (syncMetadata.status) {
+                                SyncStatus.SYNCED -> NothingGreen
+                                SyncStatus.SYNCING -> MaterialTheme.colorScheme.onSurface
+                                SyncStatus.OFFLINE -> NothingTheme.colors.textSecondary
+                                SyncStatus.PENDING, SyncStatus.PENDING_VERIFICATION -> NothingAmber
+                                SyncStatus.ERROR -> NothingRed
+                            }
+                        )
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "DATA SYNC",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    ),
+                    color = NothingTheme.colors.textSecondary
+                )
+            }
+
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = NothingTheme.colors.surfaceElevated,
+                border = BorderStroke(1.dp, NothingTheme.colors.border),
+                modifier = Modifier.testTag("auto_sync_status_pill")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.8.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "SYNCING",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = "Automatic synchronization active",
+                            tint = NothingGreen,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "AUTO-SYNC",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "STATUS",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                TaskzStatusBadge(status = syncMetadata.status)
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "PENDING QUEUE",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${syncMetadata.pendingSyncCount}",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontFamily = DotMatrixFontFamily,
+                        fontSize = 22.sp
+                    ),
+                    color = if (syncMetadata.pendingSyncCount > 0) NothingAmber else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        NothingDivider()
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "LAST FETCH",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Text(
+                    text = syncMetadata.lastServerFetch?.let { dateFormatter.format(Date(it)) } ?: "NEVER",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "LAST SYNC",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
+                Text(
+                    text = syncMetadata.lastSuccessfulSync?.let { dateFormatter.format(Date(it)) } ?: "NEVER",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+
+        val effectiveMessage = externalErrorMessage?.takeIf { it.isNotBlank() }
+            ?: syncMetadata.statusMessage?.takeIf { it.isNotBlank() && syncMetadata.status != SyncStatus.SYNCED }
+        if (!effectiveMessage.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when (syncMetadata.status) {
-                                    SyncStatus.SYNCED -> TaskzSuccess
-                                    SyncStatus.SYNCING -> TaskzCyanBright
-                                    SyncStatus.OFFLINE -> Color.Gray
-                                    SyncStatus.PENDING, SyncStatus.PENDING_VERIFICATION -> TaskzWarning
-                                    SyncStatus.ERROR -> TaskzError
-                                }
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Data Synchronization",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-                    modifier = Modifier.testTag("auto_sync_status_pill")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Auto-Syncing",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.CloudDone,
-                                contentDescription = "Automatic synchronization active",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "Auto-Sync",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "Current Status",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    TaskzStatusBadge(status = syncMetadata.status)
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Pending Sync",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "${syncMetadata.pendingSyncCount}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = if (syncMetadata.pendingSyncCount > 0) TaskzWarning else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Last Server Fetch",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = syncMetadata.lastServerFetch?.let { dateFormatter.format(Date(it)) } ?: "Never",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Last Successful Sync",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = syncMetadata.lastSuccessfulSync?.let { dateFormatter.format(Date(it)) } ?: "Never",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            val effectiveMessage = externalErrorMessage?.takeIf { it.isNotBlank() }
-                ?: syncMetadata.statusMessage?.takeIf { it.isNotBlank() && syncMetadata.status != SyncStatus.SYNCED }
-            if (!effectiveMessage.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = effectiveMessage,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (syncMetadata.status == SyncStatus.ERROR || !externalErrorMessage.isNullOrBlank()) TaskzError else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (syncMetadata.status == SyncStatus.ERROR && onClearFailedClick != null) {
-                        TextButton(onClick = onClearFailedClick) {
-                            Text("Clear", style = MaterialTheme.typography.labelSmall)
-                        }
+                Text(
+                    text = effectiveMessage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (syncMetadata.status == SyncStatus.ERROR || !externalErrorMessage.isNullOrBlank()) NothingRed else NothingTheme.colors.textSecondary,
+                    modifier = Modifier.weight(1f)
+                )
+                if (syncMetadata.status == SyncStatus.ERROR && onClearFailedClick != null) {
+                    TextButton(onClick = onClearFailedClick) {
+                        Text("Clear", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -477,6 +492,7 @@ fun AccountInactiveDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
         title = {
             Text(
                 text = "Account Inactive",
@@ -491,6 +507,7 @@ fun AccountInactiveDialog(
         confirmButton = {
             Button(
                 onClick = onDismiss,
+                shape = RoundedCornerShape(999.dp),
                 modifier = Modifier.testTag("inactive_dialog_ok_button")
             ) {
                 Text("Understood")

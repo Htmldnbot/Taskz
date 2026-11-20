@@ -1,15 +1,20 @@
 package com.example.ui.home
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,37 +23,32 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
-import androidx.compose.material.icons.filled.Lan
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.WorkOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -60,22 +60,42 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
-import com.example.core.model.DailyDutyCheckin
-import com.example.core.model.TaskGroup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.example.core.model.DailyDutyCheckin
+import com.example.core.model.OrgCentre
+import com.example.core.model.OrgHierarchyData
+import com.example.core.model.OrgScope
+import com.example.core.model.TaskGroup
+import com.example.core.model.TaskItem
+import com.example.core.model.TaskzRole
 import com.example.ui.common.AccountInactiveDialog
+import com.example.ui.common.NothingDivider
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingStatTile
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
 import com.example.ui.common.SyncStatusCard
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -87,6 +107,8 @@ fun HomeScreen(
     onNavigateToIncidents: () -> Unit = {},
     onNavigateToAlarmSettings: () -> Unit = {},
     onSignedOut: () -> Unit,
+    tasks: List<TaskItem> = emptyList(),
+    onTaskClick: (TaskItem) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val profile by viewModel.profileFlow.collectAsStateWithLifecycle()
@@ -102,6 +124,7 @@ fun HomeScreen(
     val isAccountInactive by viewModel.isAccountInactive.collectAsStateWithLifecycle()
     val isSavingLocation by viewModel.isSavingLocation.collectAsStateWithLifecycle()
     val locationSaveError by viewModel.locationSaveError.collectAsStateWithLifecycle()
+    val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
 
     LaunchedEffect(authContext.activeRole, authContext.scope) {
         viewModel.loadDashboardStats()
@@ -115,14 +138,13 @@ fun HomeScreen(
         )
     }
 
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val incidentRepo = remember { com.example.TaskzApplication.instance.systemIncidentRepository }
 
     var todayDutyCheckin by remember { mutableStateOf<DailyDutyCheckin?>(null) }
     var showDutyCheckinModal by remember { mutableStateOf(false) }
-
-    val isTogglingLeave by viewModel.isTogglingLeave.collectAsStateWithLifecycle()
+    var alarmBannerExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(profile?.id, authContext.activeRole, authContext.scope, authContext.isOnLeave) {
         val uid = profile?.id
@@ -131,18 +153,18 @@ fun HomeScreen(
             val checkin = incidentRepo.getTodayDutyCheckin(uid)
             todayDutyCheckin = checkin
             val missingServerLocation = !authContext.isOnLeave && when (authContext.activeRole) {
-                com.example.core.model.TaskzRole.ZOM -> authContext.scope.zoneId.isNullOrBlank()
-                com.example.core.model.TaskzRole.ROM -> authContext.scope.stateId.isNullOrBlank()
-                com.example.core.model.TaskzRole.CITY_HEAD -> authContext.scope.cityId.isNullOrBlank()
-                com.example.core.model.TaskzRole.VCO ->
+                TaskzRole.ZOM -> authContext.scope.zoneId.isNullOrBlank()
+                TaskzRole.ROM -> authContext.scope.stateId.isNullOrBlank()
+                TaskzRole.CITY_HEAD -> authContext.scope.cityId.isNullOrBlank()
+                TaskzRole.VCO ->
                     authContext.scope.centreId.isNullOrBlank() && authContext.scope.cityId.isNullOrBlank()
-                com.example.core.model.TaskzRole.IT_MANAGER ->
+                TaskzRole.IT_MANAGER ->
                     authContext.scope.centreId.isNullOrBlank() || authContext.scope.assignedLan.isNullOrBlank()
-                com.example.core.model.TaskzRole.COMMAND_CENTER,
-                com.example.core.model.TaskzRole.SUPER_ADMIN -> false
+                TaskzRole.COMMAND_CENTER,
+                TaskzRole.SUPER_ADMIN -> false
             }
             val needsCheckin = !authContext.isOnLeave &&
-                authContext.activeRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank &&
+                authContext.activeRole.hierarchyRank <= TaskzRole.VCO.hierarchyRank &&
                 checkin == null
             if (missingServerLocation || needsCheckin) {
                 showDutyCheckinModal = true
@@ -168,20 +190,11 @@ fun HomeScreen(
         return androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
-    var hasNotificationsPermission by remember {
-        mutableStateOf(checkNotificationsEnabled())
-    }
-    var hasOverlayPermission by remember {
-        mutableStateOf(android.provider.Settings.canDrawOverlays(context))
-    }
-    var hasFullScreenIntentPermission by remember {
-        mutableStateOf(checkFullScreenIntentGranted())
-    }
-    var hasExactAlarmPermission by remember {
-        mutableStateOf(checkExactAlarmGranted())
-    }
+    var hasNotificationsPermission by remember { mutableStateOf(checkNotificationsEnabled()) }
+    var hasOverlayPermission by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
+    var hasFullScreenIntentPermission by remember { mutableStateOf(checkFullScreenIntentGranted()) }
+    var hasExactAlarmPermission by remember { mutableStateOf(checkExactAlarmGranted()) }
 
-    // Refresh alarm permission states whenever screen resumes
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
         hasNotificationsPermission = checkNotificationsEnabled()
         hasOverlayPermission = android.provider.Settings.canDrawOverlays(context)
@@ -190,207 +203,222 @@ fun HomeScreen(
         onPauseOrDispose {}
     }
 
+    val liveTimelineTasks = remember(tasks) {
+        tasks
+            .filter { !it.status.equals("completed", ignoreCase = true) }
+            .sortedBy { it.executionTime ?: it.dueAt ?: it.startsAt ?: "9999" }
+            .take(4)
+    }
+    val nextDueTask = liveTimelineTasks.firstOrNull()
+
     Column(
         modifier = modifier
             .fillMaxSize()
+            .background(NothingTheme.colors.background)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Scope / Duty Station Card
-        val isFieldLevel = authContext.activeRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank
-        if (!isFieldLevel) {
-            if (authContext.activeRole != com.example.core.model.TaskzRole.COMMAND_CENTER &&
-                authContext.activeRole != com.example.core.model.TaskzRole.SUPER_ADMIN
+        // 1. Compact Operator Identity & Duty Station Strip
+        val isFieldLevel = authContext.activeRole.hierarchyRank <= TaskzRole.VCO.hierarchyRank
+        NothingHairlineCard(contentPadding = PaddingValues(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp)
-                        .testTag("active_duty_station_card")
-                ) {
-                    Row(
+                val photoUrl = profile?.avatarSignedUrl
+                if (!photoUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = photoUrl,
+                        contentDescription = "Profile Photo",
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .border(1.dp, NothingTheme.colors.border, CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(NothingTheme.colors.surfaceElevated)
+                            .border(1.dp, NothingTheme.colors.border, CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Business,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = "${authContext.activeRole.displayName} • ${authContext.scope.summaryLabel()}",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                Text(
-                                    text = "${authContext.activeRole.defaultScope.label} Scope",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { showDutyCheckinModal = true },
-                            modifier = Modifier.testTag("btn_change_duty_station")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Edit Scope",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        NothingDotMatrixText(
+                            text = profile?.fullName?.take(2)?.uppercase() ?: "TZ",
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = profile?.fullName?.ifBlank { "Employee" } ?: "Employee",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        NothingTagChip(text = profile?.employeeId?.ifBlank { "EMP" } ?: "EMP")
+                        NothingTagChip(
+                            text = authContext.activeRole.displayName,
+                            containerColor = NothingTheme.colors.accentPrimary,
+                            contentColor = NothingTheme.colors.onAccentPrimary,
+                            borderColor = NothingTheme.colors.accentPrimary,
+                            modifier = Modifier.testTag("home_active_role_badge")
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onNavigateToProfile,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Open Profile",
+                        tint = NothingTheme.colors.textSecondary
+                    )
+                }
             }
-        } else if (todayDutyCheckin != null) {
-            val duty = todayDutyCheckin!!
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .testTag("active_duty_station_card")
+
+            if (!isFieldLevel &&
+                authContext.activeRole != TaskzRole.COMMAND_CENTER &&
+                authContext.activeRole != TaskzRole.SUPER_ADMIN
             ) {
+                Spacer(modifier = Modifier.height(10.dp))
+                NothingDivider()
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
+                        .testTag("active_duty_station_card"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Business,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "${duty.centreCode} · ${duty.centreName}",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = if (duty.role == "VCO") "VCO" else "IT Manager (${duty.lan ?: "All LANs"})",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                            )
-                        }
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Business,
+                            contentDescription = null,
+                            tint = NothingTheme.colors.textSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${authContext.activeRole.displayName} · ${authContext.scope.summaryLabel()}",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-
                     IconButton(
                         onClick = { showDutyCheckinModal = true },
-                        modifier = Modifier.testTag("btn_change_duty_station")
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("btn_change_duty_station")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit Scope",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            } else if (isFieldLevel && todayDutyCheckin != null) {
+                val duty = todayDutyCheckin!!
+                Spacer(modifier = Modifier.height(10.dp))
+                NothingDivider()
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("active_duty_station_card"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${duty.centreCode} · ${duty.centreName}",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (duty.role == "VCO") "VCO" else "IT Manager · ${duty.lan ?: "All LANs"}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
+                        )
+                    }
+                    IconButton(
+                        onClick = { showDutyCheckinModal = true },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("btn_change_duty_station")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "Change Station",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
-            }
-        } else {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .clickable { showDutyCheckinModal = true }
-                    .testTag("prompt_duty_checkin_card")
-            ) {
+            } else if (isFieldLevel) {
+                Spacer(modifier = Modifier.height(10.dp))
+                NothingDivider()
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
+                        .clickable { showDutyCheckinModal = true }
+                        .testTag("prompt_duty_checkin_card"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Today,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(24.dp)
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        NothingStatusDot(color = NothingAmber, size = 7.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Select Duty Station (Centre & LAN)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = NothingAmber
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Select Duty Station",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                            Text(
-                                text = "Set your Centre & LAN",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
                     }
-                    Button(
-                        onClick = { showDutyCheckinModal = true },
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Set")
-                    }
+                    NothingTagChip(
+                        text = "SET",
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary,
+                        borderColor = NothingTheme.colors.accentPrimary
+                    )
                 }
             }
         }
 
-        // On Leave Status Toggle Card
-        Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (authContext.isOnLeave) {
-                    com.example.ui.theme.TaskzWarning.copy(alpha = 0.16f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                }
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .testTag("home_on_leave_card")
+        // 2. Compact Duty / On-Leave Strip
+        NothingHairlineCard(
+            containerColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.08f) else NothingTheme.colors.surface,
+            borderColor = if (authContext.isOnLeave) NothingAmber.copy(alpha = 0.45f) else NothingTheme.colors.border,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.testTag("home_on_leave_card")
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -398,25 +426,25 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    NothingStatusDot(
+                        color = if (authContext.isOnLeave) NothingAmber else NothingGreen,
+                        size = 7.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         imageVector = Icons.Default.EventBusy,
                         contentDescription = null,
-                        tint = if (authContext.isOnLeave) com.example.ui.theme.TaskzWarning else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp)
+                        tint = if (authContext.isOnLeave) NothingAmber else NothingTheme.colors.textSecondary,
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = if (authContext.isOnLeave) "On Leave" else "On Duty",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = if (authContext.isOnLeave) com.example.ui.theme.TaskzWarning else MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = if (authContext.isOnLeave) "No new tasks or alarms assigned" else "Available for duty tasks",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (authContext.isOnLeave) "On Leave · No alarms/tasks" else "On Duty · Active for assignments",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (authContext.isOnLeave) NothingAmber else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 Switch(
                     checked = authContext.isOnLeave,
@@ -427,561 +455,459 @@ fun HomeScreen(
             }
         }
 
-        // Alarm Permissions Banner for Full Screen Alerts & Ringing when closed
+        // 3. Compact Collapsible Alarm Permissions Warning
         if (!hasNotificationsPermission || !hasOverlayPermission || !hasFullScreenIntentPermission || !hasExactAlarmPermission) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 14.dp)
-                    .testTag("overlay_permission_banner")
+            NothingHairlineCard(
+                containerColor = NothingRed.copy(alpha = 0.08f),
+                borderColor = NothingRed.copy(alpha = 0.45f),
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier.testTag("overlay_permission_banner")
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { alarmBannerExpanded = !alarmBannerExpanded },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(24.dp)
+                            tint = NothingRed,
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Full-Screen Alarm Permissions Needed",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onErrorContainer
+                            text = "Alarm permissions required",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = NothingRed
                         )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = buildString {
-                            append("Enable the permissions below so high-priority alarms ring and open full-screen even when the app is closed:")
-                            if (!hasNotificationsPermission) append("\n• Notifications (Required to post & ring alarms)")
-                            if (!hasFullScreenIntentPermission) append("\n• Full-Screen Intent (Lock-screen & urgent popups)")
-                            if (!hasOverlayPermission) append("\n• Display Over Other Apps (Immediate popup when unlocked)")
-                            if (!hasExactAlarmPermission) append("\n• Exact Alarms (Exact trigger timing)")
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                    Icon(
+                        imageVector = if (alarmBannerExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Toggle details",
+                        tint = NothingRed,
+                        modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                }
+
+                AnimatedVisibility(visible = alarmBannerExpanded) {
+                    Column(modifier = Modifier.padding(top = 6.dp)) {
+                        Text(
+                            text = buildString {
+                                if (!hasNotificationsPermission) append("• Notifications (ring alarms)\n")
+                                if (!hasFullScreenIntentPermission) append("• Full-Screen Intent (lock-screen popup)\n")
+                                if (!hasOverlayPermission) append("• Display Over Other Apps\n")
+                                if (!hasExactAlarmPermission) append("• Exact Alarms (precise timing)")
+                            }.trimEnd(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (!hasFullScreenIntentPermission &&
+                        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
                     ) {
-                        if (!hasFullScreenIntentPermission &&
-                            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                        ) {
-                            androidx.compose.material3.Button(
-                                onClick = {
-                                    try {
-                                        val intent = android.content.Intent(
+                        Button(
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        android.content.Intent(
                                             android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
                                             android.net.Uri.parse("package:${context.packageName}")
                                         )
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {}
-                                },
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Full-Screen", maxLines = 1)
-                            }
-                        } else if (!hasOverlayPermission) {
-                            androidx.compose.material3.Button(
-                                onClick = {
-                                    try {
-                                        val intent = android.content.Intent(
+                                    )
+                                } catch (_: Exception) {}
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                            shape = RoundedCornerShape(999.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 38.dp)
+                        ) {
+                            Text("Grant Full-Screen", maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                        }
+                    } else if (!hasOverlayPermission) {
+                        Button(
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        android.content.Intent(
                                             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                             android.net.Uri.parse("package:${context.packageName}")
                                         )
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {}
-                                },
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Grant Overlay", maxLines = 1)
-                            }
-                        }
-
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = onNavigateToAlarmSettings,
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.weight(1f)
+                                    )
+                                } catch (_: Exception) {}
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = Color.White),
+                            shape = RoundedCornerShape(999.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 38.dp)
                         ) {
-                            Text("Alarm Settings", maxLines = 1)
+                            Text("Grant Overlay", maxLines = 1, style = MaterialTheme.typography.labelSmall)
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = onNavigateToAlarmSettings,
+                        shape = RoundedCornerShape(999.dp),
+                        border = BorderStroke(1.dp, NothingRed.copy(alpha = 0.45f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 38.dp)
+                    ) {
+                        Text("Alarm Settings", maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
         }
 
-        // User Greeting Card
-        Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            modifier = Modifier.fillMaxWidth()
+        // 4. Role-Aware KPI Command Grid
+        val overviewHeading = when (authContext.activeRole) {
+            TaskzRole.IT_MANAGER -> "CENTRE TELEMETRY"
+            TaskzRole.VCO -> "VENUE TELEMETRY"
+            TaskzRole.CITY_HEAD -> "CITY TELEMETRY"
+            TaskzRole.ROM -> "STATE TELEMETRY"
+            TaskzRole.ZOM -> "ZONE TELEMETRY"
+            TaskzRole.COMMAND_CENTER -> "SPOC TELEMETRY"
+            TaskzRole.SUPER_ADMIN -> "ADMIN TELEMETRY"
+        }
+        NothingSectionHeader(
+            title = overviewHeading,
+            trailingText = authContext.scope.summaryLabel(),
+            onTrailingClick = if (isFieldLevel) ({ showDutyCheckinModal = true }) else null,
+            useDotMatrix = true
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically
+            NothingStatTile(
+                value = maxOf(scopedSummary.assignedTasks, dashboardStats.myTasksToday).toString(),
+                label = "Assigned / Scope",
+                statusDotColor = NothingGreen,
+                onClick = onNavigateToTasks,
+                modifier = Modifier.weight(1f)
+            )
+            NothingStatTile(
+                value = maxOf(scopedSummary.pendingTasks, dashboardStats.upcomingTasks).toString(),
+                label = "Pending Tasks",
+                onClick = onNavigateToTasks,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            NothingStatTile(
+                value = scopedSummary.overdueTasks.toString(),
+                label = "Overdue",
+                statusDotColor = if (scopedSummary.overdueTasks > 0) NothingRed else null,
+                onClick = onNavigateToTasks,
+                modifier = Modifier.weight(1f)
+            )
+            NothingStatTile(
+                value = if (scopedSummary.escalatedIncidents > 0) "${scopedSummary.openIncidents}+${scopedSummary.escalatedIncidents}" else scopedSummary.openIncidents.toString(),
+                label = "Open Incidents",
+                statusDotColor = if (scopedSummary.openIncidents > 0) NothingAmber else null,
+                onClick = onNavigateToIncidents,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            NothingStatTile(
+                value = maxOf(scopedSummary.unreadNotifications, unreadNotifications).toString(),
+                label = "Unread Alerts",
+                onClick = onNavigateToTasks,
+                modifier = Modifier.weight(1f)
+            )
+            NothingStatTile(
+                value = dashboardStats.vacancies.toString(),
+                label = "Open Vacancies",
+                onClick = onNavigateToTasks,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        // 5. Next Due Task & Live Today Timeline
+        NothingSectionHeader(
+            title = "LIVE TIMELINE",
+            trailingText = "ALL TASKS ›",
+            onTrailingClick = onNavigateToTasks,
+            useDotMatrix = true
+        )
+
+        if (nextDueTask != null) {
+            val nextTime = (nextDueTask.executionTime ?: nextDueTask.dueAt ?: nextDueTask.startsAt)?.let {
+                TaskItem.formatForDisplay(it) ?: it
+            } ?: "SCHEDULED"
+            NothingHairlineCard(
+                onClick = { onTaskClick(nextDueTask) },
+                containerColor = NothingTheme.colors.surfaceElevated,
+                contentPadding = PaddingValues(12.dp)
             ) {
-                val photoUrl = profile?.avatarSignedUrl
-                if (!photoUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = photoUrl,
-                        contentDescription = "Profile Photo",
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = profile?.fullName?.take(2)?.uppercase() ?: "TZ",
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Welcome back,",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    NothingTagChip(
+                        text = "NEXT DUE",
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary,
+                        borderColor = NothingTheme.colors.accentPrimary
                     )
                     Text(
-                        text = profile?.fullName?.ifBlank { "Employee" } ?: "Employee",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        text = nextTime,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        ),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = nextDueTask.title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val meta = listOfNotNull(nextDueTask.groupTitle, nextDueTask.shiftName, nextDueTask.location).joinToString(" · ")
+                if (meta.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingTheme.colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (liveTimelineTasks.size > 1) {
+                NothingHairlineCard(contentPadding = PaddingValues(0.dp)) {
+                    liveTimelineTasks.drop(1).forEachIndexed { idx, item ->
+                        if (idx > 0) NothingDivider()
+                        val itemTime = (item.executionTime ?: item.dueAt ?: item.startsAt)?.let {
+                            TaskItem.formatForDisplay(it) ?: it
+                        } ?: "--:--"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onTaskClick(item) }
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            NothingStatusDot(
+                                color = if (item.priority.equals("urgent", ignoreCase = true)) NothingRed else NothingTheme.colors.textSecondary,
+                                size = 6.dp
+                            )
                             Text(
-                                text = profile?.employeeId?.ifBlank { "EMP" } ?: "EMP",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                text = item.title,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = itemTime,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontSize = 10.sp
+                                ),
+                                color = NothingTheme.colors.textSecondary
                             )
                         }
-
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                            modifier = Modifier.testTag("home_active_role_badge")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Security,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = authContext.activeRole.displayName,
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Scope: ${authContext.scope.summaryLabel()} • Assigned Roles: ${authContext.assignedRoles.size.coerceAtLeast(1)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Synchronization Status Card
+        // 6. Sync Status Strip
         SyncStatusCard(
             syncMetadata = syncMetadata,
             onRefreshClick = { viewModel.triggerAutomaticRefresh() },
-            onClearFailedClick = {
-                viewModel.clearFailedSyncItems()
-            },
+            onClearFailedClick = { viewModel.clearFailedSyncItems() },
             externalErrorMessage = syncErrorMessage,
             isRefreshing = isRefreshing || syncManagerSyncing
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        // 7. Compact Operations Modules
+        NothingSectionHeader(title = "MODULES", useDotMatrix = true)
 
-        // Role-Aware Dashboard Summary Statistics
-        val overviewHeading = when (authContext.activeRole) {
-            com.example.core.model.TaskzRole.IT_MANAGER -> "Centre Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.VCO -> "Venue Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.CITY_HEAD -> "City Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.ROM -> "State Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.ZOM -> "Zone Overview (${authContext.scope.summaryLabel()})"
-            com.example.core.model.TaskzRole.COMMAND_CENTER -> "SPOC Overview"
-            com.example.core.model.TaskzRole.SUPER_ADMIN -> "Admin Overview"
-        }
-        Text(
-            text = overviewHeading,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            StatCard(
-                title = "Assigned / Scope Tasks",
-                value = maxOf(scopedSummary.assignedTasks, dashboardStats.myTasksToday).toString(),
-                icon = Icons.Default.Today,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToTasks
+        NothingHairlineCard(contentPadding = PaddingValues(0.dp)) {
+            HomeModuleRow(
+                title = "Tasks",
+                subtitle = "${authContext.scope.summaryLabel()} · ${authContext.activeRole.displayName}",
+                icon = Icons.Default.Assignment,
+                tag = "ACTIVE",
+                onClick = onNavigateToTasks,
+                testTag = "home_module_tasks"
             )
-            StatCard(
-                title = "Pending Tasks",
-                value = maxOf(scopedSummary.pendingTasks, dashboardStats.upcomingTasks).toString(),
-                icon = Icons.Default.EventNote,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToTasks
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            StatCard(
-                title = "Overdue Tasks",
-                value = scopedSummary.overdueTasks.toString(),
-                icon = Icons.Default.HourglassTop,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToTasks
-            )
-            StatCard(
-                title = if (scopedSummary.escalatedIncidents > 0) "Open / Escalated" else "Open Incidents",
-                value = if (scopedSummary.escalatedIncidents > 0) "${scopedSummary.openIncidents} (${scopedSummary.escalatedIncidents}↑)" else scopedSummary.openIncidents.toString(),
-                icon = Icons.Default.Lan,
-                color = MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToIncidents
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            StatCard(
-                title = "Unread Alerts",
-                value = maxOf(scopedSummary.unreadNotifications, unreadNotifications).toString(),
-                icon = Icons.Default.Warning,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToTasks
-            )
-            StatCard(
-                title = "Open Vacancies",
-                value = dashboardStats.vacancies.toString(),
-                icon = Icons.Default.WorkOutline,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.weight(1f),
-                onClick = onNavigateToTasks
-            )
-        }
-
-        Spacer(modifier = Modifier.height(22.dp))
-
-        Text(
-            text = "Modules",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        ModuleTile(
-            title = "Tasks",
-            subtitle = "${authContext.scope.summaryLabel()} • ${authContext.activeRole.displayName}",
-            icon = Icons.Default.Assignment,
-            tag = "Active",
-            onClick = onNavigateToTasks,
-            testTag = "home_module_tasks"
-        )
-
-        if (viewModel.permissionManager.canSelfJoinGroups()) {
-            Spacer(modifier = Modifier.height(10.dp))
-
-            ModuleTile(
-                title = "Exam Groups & Shifts",
-                subtitle = "Exam groups, shifts & 1-click task join",
-                icon = Icons.Default.Groups,
-                tag = if (viewModel.permissionManager.canManageGroups()) "Manage" else "Join",
-                onClick = onNavigateToGroups,
-                testTag = "home_module_groups"
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        ModuleTile(
-            title = "Incident Register",
-            subtitle = "System failures & LAN logs",
-            icon = Icons.Default.DesktopWindows,
-            tag = "Technical",
-            onClick = onNavigateToIncidents,
-            testTag = "home_module_incidents"
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        ModuleTile(
-            title = "Profile & Role",
-            subtitle = "Roles, scope & leave status",
-            icon = Icons.Default.Person,
-            tag = "Profile",
-            onClick = onNavigateToProfile,
-            testTag = "home_module_profile"
-        )
-
-        if (viewModel.permissionManager.canManageUsers()) {
-            Spacer(modifier = Modifier.height(10.dp))
-            ModuleTile(
-                title = "Admin Console",
-                subtitle = "Users, roles & scope controls",
-                icon = Icons.Default.AdminPanelSettings,
-                tag = "Admin",
-                isHighlighted = true,
-                onClick = onNavigateToAdmin,
-                testTag = "home_module_admin"
-            )
-        }
-
-        if (showDutyCheckinModal) {
-            DailyDutyCheckinDialog(
-                orgHierarchy = orgHierarchy,
-                currentScope = authContext.scope,
-                currentActiveRole = authContext.activeRole,
-                currentCheckin = todayDutyCheckin,
-                isSaving = isSavingLocation,
-                errorMessage = locationSaveError,
-                onDismiss = {
-                    viewModel.clearLocationError()
-                    showDutyCheckinModal = false
-                },
-                onConfirm = { zoneId, stateId, cityId, centreId, centreCode, centreName, role, lan ->
-                    val user = profile ?: return@DailyDutyCheckinDialog
-                    viewModel.updateOperationalLocation(
-                        roleCode = role,
-                        zoneId = zoneId,
-                        stateId = stateId,
-                        cityId = cityId,
-                        centreId = centreId,
-                        centreCode = centreCode,
-                        lanNumber = lan
-                    ) {
-                        coroutineScope.launch {
-                            val saved = incidentRepo.saveDailyDutyCheckin(
-                                userId = user.id,
-                                userName = user.fullName,
-                                employeeId = user.employeeId,
-                                centreCode = centreCode,
-                                centreName = centreName,
-                                role = role,
-                                lan = lan
-                            )
-                            todayDutyCheckin = saved
-                            showDutyCheckinModal = false
-                        }
-                    }
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun StatCard(
-    title: String,
-    value: String,
-    icon: ImageVector,
-    color: androidx.compose.ui.graphics.Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(color.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = color,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = color
-                    )
+            if (viewModel.permissionManager.canSelfJoinGroups()) {
+                NothingDivider()
+                HomeModuleRow(
+                    title = "Exam Groups & Shifts",
+                    subtitle = "1-click group join & shift workflows",
+                    icon = Icons.Default.Groups,
+                    tag = if (viewModel.permissionManager.canManageGroups()) "MANAGE" else "JOIN",
+                    onClick = onNavigateToGroups,
+                    testTag = "home_module_groups"
                 )
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            NothingDivider()
+            HomeModuleRow(
+                title = "Incident Register",
+                subtitle = "System locks & LAN telemetry",
+                icon = Icons.Default.DesktopWindows,
+                tag = "LOG",
+                onClick = onNavigateToIncidents,
+                testTag = "home_module_incidents"
             )
+            NothingDivider()
+            HomeModuleRow(
+                title = "Profile & Role",
+                subtitle = "Roles, scope & leave state",
+                icon = Icons.Default.Person,
+                tag = "PROFILE",
+                onClick = onNavigateToProfile,
+                testTag = "home_module_profile"
+            )
+            if (viewModel.permissionManager.canManageUsers()) {
+                NothingDivider()
+                HomeModuleRow(
+                    title = "Admin Console",
+                    subtitle = "Users, roles & scope controls",
+                    icon = Icons.Default.AdminPanelSettings,
+                    tag = "ADMIN",
+                    onClick = onNavigateToAdmin,
+                    testTag = "home_module_admin"
+                )
+            }
         }
+
+        Spacer(modifier = Modifier.height(96.dp))
+    }
+
+    if (showDutyCheckinModal) {
+        DailyDutyCheckinDialog(
+            orgHierarchy = orgHierarchy,
+            currentScope = authContext.scope,
+            currentActiveRole = authContext.activeRole,
+            currentCheckin = todayDutyCheckin,
+            isSaving = isSavingLocation,
+            errorMessage = locationSaveError,
+            onDismiss = {
+                viewModel.clearLocationError()
+                showDutyCheckinModal = false
+            },
+            onConfirm = { zoneId, stateId, cityId, centreId, centreCode, centreName, role, lan ->
+                val user = profile ?: return@DailyDutyCheckinDialog
+                viewModel.updateOperationalLocation(
+                    roleCode = role,
+                    zoneId = zoneId,
+                    stateId = stateId,
+                    cityId = cityId,
+                    centreId = centreId,
+                    centreCode = centreCode,
+                    lanNumber = lan
+                ) {
+                    coroutineScope.launch {
+                        val saved = incidentRepo.saveDailyDutyCheckin(
+                            userId = user.id,
+                            userName = user.fullName,
+                            employeeId = user.employeeId,
+                            centreCode = centreCode,
+                            centreName = centreName,
+                            role = role,
+                            lan = lan
+                        )
+                        todayDutyCheckin = saved
+                        showDutyCheckinModal = false
+                    }
+                }
+            }
+        )
     }
 }
 
 @Composable
-private fun ModuleTile(
+private fun HomeModuleRow(
     title: String,
     subtitle: String,
     icon: ImageVector,
     tag: String,
     onClick: () -> Unit,
-    isHighlighted: Boolean = false,
-    testTag: String = ""
+    testTag: String
 ) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        ),
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .testTag(testTag)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = if (isHighlighted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(16.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = if (isHighlighted) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (isHighlighted) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        Text(
-                            text = tag,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isHighlighted) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = if (isHighlighted) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
+        Icon(
+            imageVector = icon,
+            contentDescription = title,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingTheme.colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
+        NothingTagChip(text = tag)
+        Spacer(modifier = Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = NothingTheme.colors.textSecondary,
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
 
 @Composable
 fun DailyDutyCheckinDialog(
-    orgHierarchy: com.example.core.model.OrgHierarchyData,
-    currentScope: com.example.core.model.OrgScope,
-    currentActiveRole: com.example.core.model.TaskzRole,
+    orgHierarchy: OrgHierarchyData,
+    currentScope: OrgScope,
+    currentActiveRole: TaskzRole,
     currentCheckin: DailyDutyCheckin?,
     isSaving: Boolean = false,
     errorMessage: String? = null,
@@ -1007,26 +933,23 @@ fun DailyDutyCheckinDialog(
         fallbackCentres = incidentRepo.getAvailableCentres()
     }
 
-    val canSwitchOnboardingRole = currentActiveRole.hierarchyRank <= com.example.core.model.TaskzRole.VCO.hierarchyRank
+    val canSwitchOnboardingRole = currentActiveRole.hierarchyRank <= TaskzRole.VCO.hierarchyRank
     var selectedRole by remember(currentCheckin, currentActiveRole) {
         mutableStateOf(
             if (canSwitchOnboardingRole) {
-                com.example.core.model.TaskzRole.fromCode(currentCheckin?.role ?: currentActiveRole.code).code
+                TaskzRole.fromCode(currentCheckin?.role ?: currentActiveRole.code).code
             } else {
                 currentActiveRole.code
             }
         )
     }
     val effectiveRole = remember(selectedRole, currentActiveRole, canSwitchOnboardingRole) {
-        if (canSwitchOnboardingRole) com.example.core.model.TaskzRole.fromCode(selectedRole) else currentActiveRole
+        if (canSwitchOnboardingRole) TaskzRole.fromCode(selectedRole) else currentActiveRole
     }
 
     val zones = orgHierarchy.zones.sortedBy { it.name }
     var selectedZoneId by remember(zones, currentScope.zoneId) {
-        mutableStateOf(
-            zones.firstOrNull { it.id == currentScope.zoneId }?.id
-                ?: zones.firstOrNull()?.id
-        )
+        mutableStateOf(zones.firstOrNull { it.id == currentScope.zoneId }?.id ?: zones.firstOrNull()?.id)
     }
 
     val states = orgHierarchy.states.sortedBy { it.name }
@@ -1039,9 +962,7 @@ fun DailyDutyCheckinDialog(
     }
 
     val citiesForState = remember(orgHierarchy.cities, selectedStateId) {
-        orgHierarchy.cities
-            .filter { selectedStateId == null || it.stateId == selectedStateId }
-            .sortedBy { it.name }
+        orgHierarchy.cities.filter { selectedStateId == null || it.stateId == selectedStateId }.sortedBy { it.name }
     }
     var selectedCityId by remember(citiesForState, currentScope.cityId) {
         mutableStateOf(
@@ -1059,9 +980,7 @@ fun DailyDutyCheckinDialog(
     }
 
     val centresForCity = remember(orgHierarchy.centres, selectedCityId) {
-        orgHierarchy.centres
-            .filter { selectedCityId == null || it.cityId == selectedCityId }
-            .sortedBy { it.code }
+        orgHierarchy.centres.filter { selectedCityId == null || it.cityId == selectedCityId }.sortedBy { it.code }
     }
     var selectedOrgCentreId by remember(centresForCity, currentScope.centreId, currentCheckin?.centreCode) {
         mutableStateOf(
@@ -1099,7 +1018,7 @@ fun DailyDutyCheckinDialog(
 
     val availableLans = remember(selectedOrgCentre, fallbackCentre) {
         selectedOrgCentre?.resolvedLans()
-            ?: com.example.core.model.OrgCentre.defaultLansForCode(fallbackCentre?.code)
+            ?: OrgCentre.defaultLansForCode(fallbackCentre?.code)
     }
     var selectedLan by remember(currentCheckin, currentScope.assignedLan) {
         mutableStateOf(
@@ -1115,38 +1034,27 @@ fun DailyDutyCheckinDialog(
     }
     var lanDropdownExpanded by remember { mutableStateOf(false) }
 
-    val showZoneField = effectiveRole == com.example.core.model.TaskzRole.ZOM
-    val showStateField = effectiveRole in setOf(
-        com.example.core.model.TaskzRole.ROM,
-        com.example.core.model.TaskzRole.CITY_HEAD,
-        com.example.core.model.TaskzRole.VCO,
-        com.example.core.model.TaskzRole.IT_MANAGER
-    )
-    val showCityField = effectiveRole in setOf(
-        com.example.core.model.TaskzRole.CITY_HEAD,
-        com.example.core.model.TaskzRole.VCO,
-        com.example.core.model.TaskzRole.IT_MANAGER
-    )
-    val showCentreField = effectiveRole in setOf(
-        com.example.core.model.TaskzRole.VCO,
-        com.example.core.model.TaskzRole.IT_MANAGER
-    )
-    val showLanField = effectiveRole == com.example.core.model.TaskzRole.IT_MANAGER
+    val showZoneField = effectiveRole == TaskzRole.ZOM
+    val showStateField = effectiveRole in setOf(TaskzRole.ROM, TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER)
+    val showCityField = effectiveRole in setOf(TaskzRole.CITY_HEAD, TaskzRole.VCO, TaskzRole.IT_MANAGER)
+    val showCentreField = effectiveRole in setOf(TaskzRole.VCO, TaskzRole.IT_MANAGER)
+    val showLanField = effectiveRole == TaskzRole.IT_MANAGER
 
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
+        containerColor = NothingTheme.colors.surface,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.Business,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "${effectiveRole.displayName} Scope",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                NothingDotMatrixText(
+                    text = "${effectiveRole.displayName.uppercase()} SCOPE",
+                    fontSize = 16.sp
                 )
             }
         },
@@ -1155,54 +1063,101 @@ fun DailyDutyCheckinDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (canSwitchOnboardingRole) {
                     Text(
                         text = "Role",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
-                            selected = selectedRole == "IT_MANAGER",
+                        val isItm = selectedRole == "IT_MANAGER"
+                        Surface(
                             onClick = { selectedRole = "IT_MANAGER" },
-                            label = { Text("IT Manager", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.Lan, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("role_chip_it_manager")
-                        )
-                        FilterChip(
-                            selected = selectedRole == "VCO",
+                            shape = RoundedCornerShape(999.dp),
+                            color = if (isItm) NothingTheme.colors.accentPrimary else NothingTheme.colors.surfaceElevated,
+                            border = BorderStroke(1.dp, if (isItm) NothingTheme.colors.accentPrimary else NothingTheme.colors.border),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 38.dp)
+                                .testTag("role_chip_it_manager")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Lan,
+                                    contentDescription = null,
+                                    tint = if (isItm) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "IT Manager",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isItm) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        val isVco = selectedRole == "VCO"
+                        Surface(
                             onClick = { selectedRole = "VCO" },
-                            label = { Text("VCO", fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            modifier = Modifier.weight(1f).testTag("role_chip_vco")
-                        )
+                            shape = RoundedCornerShape(999.dp),
+                            color = if (isVco) NothingTheme.colors.accentPrimary else NothingTheme.colors.surfaceElevated,
+                            border = BorderStroke(1.dp, if (isVco) NothingTheme.colors.accentPrimary else NothingTheme.colors.border),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 38.dp)
+                                .testTag("role_chip_vco")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = if (isVco) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "VCO",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isVco) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
                     }
                 }
 
                 if (showZoneField) {
-                    Text(
-                        text = "Zone",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Text(text = "Zone", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { zoneDropdownExpanded = true },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("daily_zone_dropdown")
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier.testTag("daily_zone_dropdown")
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
                                     text = selectedZone?.let { "${it.name} (${it.code})" } ?: "Select Zone",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                                 Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
                             }
@@ -1226,25 +1181,23 @@ fun DailyDutyCheckinDialog(
                 }
 
                 if (showStateField && states.isNotEmpty()) {
-                    Text(
-                        text = "State",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Text(text = "State", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { stateDropdownExpanded = true },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("daily_state_dropdown")
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier.testTag("daily_state_dropdown")
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
                                     text = selectedState?.name ?: "Select State",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                                 Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
                             }
@@ -1268,25 +1221,23 @@ fun DailyDutyCheckinDialog(
                 }
 
                 if (showCityField && citiesForState.isNotEmpty()) {
-                    Text(
-                        text = "City",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Text(text = "City", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { cityDropdownExpanded = true },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("daily_city_dropdown")
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier.testTag("daily_city_dropdown")
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
                                     text = selectedCity?.let { "${it.name} (${it.code})" } ?: "Select City",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                                 Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
                             }
@@ -1310,21 +1261,17 @@ fun DailyDutyCheckinDialog(
                 }
 
                 if (showCentreField) {
-                    Text(
-                        text = "Centre",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-
+                    Text(text = "Centre", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { centreDropdownExpanded = true },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("daily_centre_dropdown")
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier.testTag("daily_centre_dropdown")
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
@@ -1337,21 +1284,19 @@ fun DailyDutyCheckinDialog(
                                         ?: ""
                                     Text(
                                         text = titleText,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.primary
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                                     )
                                     if (subText.isNotBlank()) {
                                         Text(
                                             text = subText,
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = NothingTheme.colors.textSecondary
                                         )
                                     }
                                 }
                                 Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
                             }
                         }
-
                         DropdownMenu(
                             expanded = centreDropdownExpanded,
                             onDismissRequest = { centreDropdownExpanded = false },
@@ -1366,7 +1311,7 @@ fun DailyDutyCheckinDialog(
                                                 Text(
                                                     text = "${selectedCity?.name ?: centre.districtName.orEmpty()}, ${selectedState?.name ?: ""}",
                                                     style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    color = NothingTheme.colors.textSecondary
                                                 )
                                             }
                                         },
@@ -1382,7 +1327,11 @@ fun DailyDutyCheckinDialog(
                                         text = {
                                             Column {
                                                 Text(text = centre.title, fontWeight = FontWeight.SemiBold)
-                                                Text(text = centre.description ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text(
+                                                    text = centre.description ?: "",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = NothingTheme.colors.textSecondary
+                                                )
                                             }
                                         },
                                         onClick = {
@@ -1397,36 +1346,34 @@ fun DailyDutyCheckinDialog(
                 }
 
                 if (showLanField) {
-                    Text(
-                        text = "Assigned LAN",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-
+                    Text(text = "Assigned LAN", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { lanDropdownExpanded = true },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("daily_lan_dropdown")
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(12.dp),
+                            modifier = Modifier.testTag("daily_lan_dropdown")
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Lan, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Lan, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = selectedLan,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = TechMonoFontFamily,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     )
                                 }
                                 Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null)
                             }
                         }
-
                         DropdownMenu(
                             expanded = lanDropdownExpanded,
                             onDismissRequest = { lanDropdownExpanded = false },
@@ -1449,7 +1396,7 @@ fun DailyDutyCheckinDialog(
                     Text(
                         text = "Global scope active for ${effectiveRole.displayName}.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
 
@@ -1457,7 +1404,7 @@ fun DailyDutyCheckinDialog(
                     Text(
                         text = errorMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
+                        color = NothingRed
                     )
                 }
             }
@@ -1467,28 +1414,28 @@ fun DailyDutyCheckinDialog(
                 enabled = !isSaving,
                 onClick = {
                     val outZoneId = when (effectiveRole) {
-                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.id
+                        TaskzRole.ZOM -> selectedZone?.id
                         else -> selectedState?.zoneId ?: selectedZone?.id
                     }
                     val outStateId = if (showStateField) selectedState?.id else null
                     val outCityId = if (showCityField) selectedCity?.id else null
                     val outCentreId = if (showCentreField) selectedOrgCentre?.id else null
                     val outCode = when (effectiveRole) {
-                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.code.orEmpty()
-                        com.example.core.model.TaskzRole.ROM -> selectedState?.code.orEmpty()
-                        com.example.core.model.TaskzRole.CITY_HEAD -> selectedCity?.code.orEmpty()
-                        com.example.core.model.TaskzRole.COMMAND_CENTER,
-                        com.example.core.model.TaskzRole.SUPER_ADMIN -> "GLOBAL"
+                        TaskzRole.ZOM -> selectedZone?.code.orEmpty()
+                        TaskzRole.ROM -> selectedState?.code.orEmpty()
+                        TaskzRole.CITY_HEAD -> selectedCity?.code.orEmpty()
+                        TaskzRole.COMMAND_CENTER,
+                        TaskzRole.SUPER_ADMIN -> "GLOBAL"
                         else -> selectedOrgCentre?.code
                             ?: fallbackCentre?.code?.ifBlank { "141" }
                             ?: "141"
                     }
                     val outName = when (effectiveRole) {
-                        com.example.core.model.TaskzRole.ZOM -> selectedZone?.name.orEmpty()
-                        com.example.core.model.TaskzRole.ROM -> selectedState?.name.orEmpty()
-                        com.example.core.model.TaskzRole.CITY_HEAD -> selectedCity?.name.orEmpty()
-                        com.example.core.model.TaskzRole.COMMAND_CENTER,
-                        com.example.core.model.TaskzRole.SUPER_ADMIN -> "Global"
+                        TaskzRole.ZOM -> selectedZone?.name.orEmpty()
+                        TaskzRole.ROM -> selectedState?.name.orEmpty()
+                        TaskzRole.CITY_HEAD -> selectedCity?.name.orEmpty()
+                        TaskzRole.COMMAND_CENTER,
+                        TaskzRole.SUPER_ADMIN -> "Global"
                         else -> selectedOrgCentre?.name
                             ?: fallbackCentre?.title?.removePrefix("$outCode ·")?.removePrefix("$outCode -")?.trim()
                             ?: selectedCity?.name.orEmpty()
@@ -1505,14 +1452,13 @@ fun DailyDutyCheckinDialog(
                         outLan
                     )
                 },
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(999.dp),
                 modifier = Modifier.testTag("confirm_daily_checkin_btn")
             ) {
                 if (isSaving) {
                     androidx.compose.material3.CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        strokeWidth = 2.dp
                     )
                 } else {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))

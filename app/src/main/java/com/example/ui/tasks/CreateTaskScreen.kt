@@ -2,12 +2,16 @@ package com.example.ui.tasks
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,8 +35,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.AssistChip
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.LocationCity
@@ -48,8 +50,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,7 +64,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -73,6 +73,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -92,9 +93,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import com.example.core.model.AlarmType
 import com.example.core.model.CompletionPolicy
 import com.example.core.model.OrgCentre
@@ -111,6 +111,14 @@ import com.example.core.model.TaskType
 import com.example.core.model.TaskzRole
 import com.example.core.model.TimeUrgency
 import com.example.core.model.UserProfile
+import com.example.ui.common.NothingDivider
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingTagChip
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.launch
 
 enum class TaskScopeLevel(val label: String, val icon: ImageVector, val mappedScope: ScopeLevel) {
@@ -519,56 +527,87 @@ fun CreateTaskScreen(
         }
     }
 
+    val chipColors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = NothingTheme.colors.accentPrimary,
+        selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+        containerColor = NothingTheme.colors.surfaceElevated,
+        labelColor = MaterialTheme.colorScheme.onSurface
+    )
+
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                ),
                 title = {
                     Column {
-                        Text("Create Task", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        NothingDotMatrixText(
+                            text = "CREATE TASK",
+                            fontSize = 19.sp
+                        )
                         Text(
-                            text = "Simplified & Fast Task Assignment",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "FAST OPERATIONAL ASSIGNMENT",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                letterSpacing = 0.8.sp
+                            ),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             )
         },
         bottomBar = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(16.dp)
+            Surface(
+                color = NothingTheme.colors.surface,
+                border = BorderStroke(1.dp, NothingTheme.colors.borderSubtle),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Button(
-                    onClick = { submitTask() },
-                    enabled = !isLoading,
-                    shape = RoundedCornerShape(12.dp),
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("btn_create_task_now")
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Create Task",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                    Button(
+                        onClick = { submitTask() },
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NothingTheme.colors.accentPrimary,
+                            contentColor = NothingTheme.colors.onAccentPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("btn_create_task_now")
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                color = NothingTheme.colors.onAccentPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Create Task",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
                     }
                 }
             }
@@ -580,22 +619,17 @@ fun CreateTaskScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // ==========================================
             // 1. BASIC INFORMATION
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "1. Task Essentials",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NothingSectionHeader(title = "01 · TASK ESSENTIALS", useDotMatrix = true)
 
                     OutlinedTextField(
                         value = title,
@@ -606,7 +640,7 @@ fun CreateTaskScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("task_title_input"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
 
                     OutlinedTextField(
@@ -619,7 +653,7 @@ fun CreateTaskScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("task_desc_input"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
                 }
             }
@@ -627,16 +661,14 @@ fun CreateTaskScreen(
             // ==========================================
             // 2. OPERATIONAL LEVEL / SCOPE
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "2. Scope Level (${authContext.activeRole.displayName})",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NothingSectionHeader(
+                        title = "02 · SCOPE LEVEL (${authContext.activeRole.displayName.uppercase()})",
+                        useDotMatrix = true
                     )
 
                     LazyRow(
@@ -656,7 +688,14 @@ fun CreateTaskScreen(
                                         modifier = Modifier.size(16.dp)
                                     )
                                 },
-                                shape = RoundedCornerShape(20.dp),
+                                colors = chipColors,
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isSelected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                ),
+                                shape = RoundedCornerShape(999.dp),
                                 modifier = Modifier.testTag("create_scope_${scope.name.lowercase()}")
                             )
                         }
@@ -675,7 +714,7 @@ fun CreateTaskScreen(
                             }
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 centreLans.forEach { lan ->
                                     val currentTokens = lanText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -690,7 +729,15 @@ fun CreateTaskScreen(
                                             }
                                             lanText = if (updated.isEmpty()) lan else updated.joinToString(", ")
                                         },
-                                        label = { Text(lan) }
+                                        shape = RoundedCornerShape(999.dp),
+                                        colors = chipColors,
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = selected,
+                                            borderColor = NothingTheme.colors.border,
+                                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                                        ),
+                                        label = { Text(lan, fontFamily = TechMonoFontFamily) }
                                     )
                                 }
                             }
@@ -701,7 +748,7 @@ fun CreateTaskScreen(
                                 placeholder = { Text("e.g., ${centreLans.take(2).joinToString(", ")}") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(12.dp)
                             )
                         }
                         TaskScopeLevel.TEST_CENTRE -> {
@@ -901,17 +948,22 @@ fun CreateTaskScreen(
                             }
                         }
                         TaskScopeLevel.NATIONAL -> {
-                            OutlinedCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
+                            NothingHairlineCard(
+                                shape = RoundedCornerShape(12.dp),
+                                containerColor = NothingTheme.colors.surfaceElevated,
+                                contentPadding = PaddingValues(12.dp)
                             ) {
-                                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Public, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Public,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = "Global Scope: Propagates across all zones and centres via single canonical task record.",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = NothingTheme.colors.textSecondary
                                     )
                                 }
                             }
@@ -923,37 +975,24 @@ fun CreateTaskScreen(
             // ==========================================
             // 3. TASK PRIORITY & ALERT NOTIFICATION
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "3. Priority & Notification Alert",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NothingSectionHeader(title = "03 · PRIORITY & ALERT", useDotMatrix = true)
 
                     SimpleTaskPriority.values().forEach { priority ->
                         val isSelected = selectedPriority == priority
-                        OutlinedCard(
+                        NothingHairlineCard(
                             onClick = { selectedPriority = priority },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = CardDefaults.outlinedCardColors(
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface
-                            ),
-                            border = CardDefaults.outlinedCardBorder().copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(
-                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                )
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = if (isSelected) NothingTheme.colors.surfaceElevated else NothingTheme.colors.surface,
+                            borderColor = if (isSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border,
+                            contentPadding = PaddingValues(12.dp)
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 RadioButton(selected = isSelected, onClick = { selectedPriority = priority })
@@ -961,8 +1000,8 @@ fun CreateTaskScreen(
                                 Icon(
                                     imageVector = priority.icon,
                                     contentDescription = null,
-                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(22.dp)
+                                    tint = if (isSelected) MaterialTheme.colorScheme.onSurface else NothingTheme.colors.textSecondary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
@@ -971,12 +1010,12 @@ fun CreateTaskScreen(
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
                                         ),
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
                                         text = priority.subtitle,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = NothingTheme.colors.textSecondary
                                     )
                                 }
                             }
@@ -988,17 +1027,12 @@ fun CreateTaskScreen(
             // ==========================================
             // 4. TASK TYPE (YES/NO vs PROGRESSIVE)
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "4. Task Type",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NothingSectionHeader(title = "04 · TASK TYPE", useDotMatrix = true)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1006,37 +1040,30 @@ fun CreateTaskScreen(
                     ) {
                         SimpleTaskType.values().forEach { type ->
                             val isSelected = selectedTaskType == type
-                            OutlinedCard(
+                            NothingHairlineCard(
                                 onClick = { selectedTaskType = type },
                                 modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = CardDefaults.outlinedCardColors(
-                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface
-                                ),
-                                border = CardDefaults.outlinedCardBorder().copy(
-                                    brush = androidx.compose.ui.graphics.SolidColor(
-                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                    )
-                                )
+                                shape = RoundedCornerShape(12.dp),
+                                containerColor = if (isSelected) NothingTheme.colors.surfaceElevated else NothingTheme.colors.surface,
+                                borderColor = if (isSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border,
+                                contentPadding = PaddingValues(12.dp)
                             ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    RadioButton(
-                                        selected = isSelected,
-                                        onClick = { selectedTaskType = type }
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = type.title,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = type.subtitle,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedTaskType = type }
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = type.title,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = type.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NothingTheme.colors.textSecondary
+                                )
                             }
                         }
                     }
@@ -1045,16 +1072,27 @@ fun CreateTaskScreen(
                     AnimatedVisibility(visible = selectedTaskType == SimpleTaskType.PROGRESSIVE) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "Target Completion Percentage: $targetPercentage%",
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                                text = "TARGET COMPLETION: $targetPercentage%",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = NothingTheme.colors.textSecondary
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 listOf(25, 50, 75, 100).forEach { pct ->
                                     FilterChip(
                                         selected = targetPercentage == pct,
                                         onClick = { targetPercentage = pct },
-                                        label = { Text("$pct%") },
-                                        shape = RoundedCornerShape(16.dp)
+                                        label = { Text("$pct%", fontFamily = TechMonoFontFamily) },
+                                        colors = chipColors,
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = targetPercentage == pct,
+                                            borderColor = NothingTheme.colors.border,
+                                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                                        ),
+                                        shape = RoundedCornerShape(999.dp)
                                     )
                                 }
                             }
@@ -1066,39 +1104,41 @@ fun CreateTaskScreen(
             // ==========================================
             // 5. ALARM TIME / EXECUTION TIME (Kb Alarm Bajega)
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Alarm, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            Icons.Default.Alarm,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "5. Alarm Time (Alarm Kb Bajega)",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                        NothingSectionHeader(
+                            title = "05 · ALARM TIME",
+                            useDotMatrix = true,
+                            modifier = Modifier.weight(1f)
                         )
                     }
 
                     Text(
                         text = "Set the exact time (Hour & Minute) when this task alarm will ring on assignee devices:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NothingTheme.colors.textSecondary
                     )
 
                     val context = androidx.compose.ui.platform.LocalContext.current
 
                     // Exact Time Display & Picker Card
-                    OutlinedCard(
+                    NothingHairlineCard(
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        contentPadding = PaddingValues(14.dp)
                     ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             val displayHour12 = when {
                                 alarmHour == 0 -> 12
                                 alarmHour > 12 -> alarmHour - 12
@@ -1114,17 +1154,14 @@ fun CreateTaskScreen(
                             ) {
                                 Column {
                                     Text(
-                                        text = "Target Alarm Time",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = "TARGET ALARM TIME",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                        color = NothingTheme.colors.textSecondary
                                     )
-                                    Text(
+                                    NothingDotMatrixText(
                                         text = formattedTimeStr,
-                                        style = MaterialTheme.typography.headlineMedium.copy(
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontFamily = FontFamily.Monospace
-                                        ),
-                                        color = MaterialTheme.colorScheme.primary
+                                        fontSize = 26.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
 
@@ -1148,15 +1185,20 @@ fun CreateTaskScreen(
                                             false
                                         ).show()
                                     },
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = RoundedCornerShape(999.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NothingTheme.colors.accentPrimary,
+                                        contentColor = NothingTheme.colors.onAccentPrimary
+                                    ),
+                                    modifier = Modifier.heightIn(min = 48.dp)
                                 ) {
-                                    Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Pick Exact Time")
+                                    Text("Pick Time", fontWeight = FontWeight.Bold)
                                 }
                             }
 
-                            HorizontalDivider()
+                            NothingDivider()
 
                             // Interactive Hour, Minute & AM/PM Controls
                             Row(
@@ -1164,7 +1206,6 @@ fun CreateTaskScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Hour Input
                                 OutlinedTextField(
                                     value = hourText,
                                     onValueChange = { input ->
@@ -1200,12 +1241,17 @@ fun CreateTaskScreen(
                                             }
                                             isHourFocused = focusState.isFocused
                                         },
-                                    shape = RoundedCornerShape(8.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
 
-                                Text(":", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
+                                Text(
+                                    ":",
+                                    style = MaterialTheme.typography.headlineMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = TechMonoFontFamily
+                                    )
+                                )
 
-                                // Minute Input
                                 OutlinedTextField(
                                     value = minuteText,
                                     onValueChange = { input ->
@@ -1229,10 +1275,9 @@ fun CreateTaskScreen(
                                             }
                                             isMinuteFocused = focusState.isFocused
                                         },
-                                    shape = RoundedCornerShape(8.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
 
-                                // AM/PM Toggle
                                 Row(
                                     modifier = Modifier.weight(1.2f),
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1242,7 +1287,15 @@ fun CreateTaskScreen(
                                         onClick = {
                                             if (isPm) alarmHour = (alarmHour - 12).coerceAtLeast(0)
                                         },
-                                        label = { Text("AM") },
+                                        shape = RoundedCornerShape(999.dp),
+                                        colors = chipColors,
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = !isPm,
+                                            borderColor = NothingTheme.colors.border,
+                                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                                        ),
+                                        label = { Text("AM", fontFamily = TechMonoFontFamily) },
                                         modifier = Modifier.weight(1f)
                                     )
                                     FilterChip(
@@ -1250,17 +1303,24 @@ fun CreateTaskScreen(
                                         onClick = {
                                             if (!isPm) alarmHour = (alarmHour + 12).coerceAtMost(23)
                                         },
-                                        label = { Text("PM") },
+                                        shape = RoundedCornerShape(999.dp),
+                                        colors = chipColors,
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = isPm,
+                                            borderColor = NothingTheme.colors.border,
+                                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                                        ),
+                                        label = { Text("PM", fontFamily = TechMonoFontFamily) },
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
                             }
 
-                            // Quick Time Shortcuts
                             Text(
-                                text = "Quick Shortcuts from Now:",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "QUICK SHORTCUTS FROM NOW:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textSecondary
                             )
 
                             Row(
@@ -1273,7 +1333,7 @@ fun CreateTaskScreen(
                                     "+30m" to 30,
                                     "+1 Hr" to 60
                                 ).forEach { (label, mins) ->
-                                    AssistChip(
+                                    OutlinedButton(
                                         onClick = {
                                             val t = java.time.LocalTime.now().plusMinutes(mins.toLong())
                                             alarmHour = t.hour
@@ -1286,29 +1346,40 @@ fun CreateTaskScreen(
                                             hourText = h12.toString().padStart(2, '0')
                                             minuteText = t.minute.toString().padStart(2, '0')
                                         },
-                                        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.weight(1f)
-                                    )
+                                        shape = RoundedCornerShape(999.dp),
+                                        border = BorderStroke(1.dp, NothingTheme.colors.border),
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 40.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = TechMonoFontFamily,
+                                                fontWeight = FontWeight.SemiBold
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    NothingHairlineCard(
+                        shape = RoundedCornerShape(10.dp),
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -1322,8 +1393,11 @@ fun CreateTaskScreen(
                             val dayLabel = if (chosenLocal.isBefore(java.time.LocalTime.now())) "Tomorrow" else "Today"
                             Text(
                                 text = String.format("Alarm set for exact time: %02d:%02d %s %s", displayH, alarmMinute, amPm, dayLabel),
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -1333,36 +1407,62 @@ fun CreateTaskScreen(
             // ==========================================
             // 6. UNFINISHED SNOOZE / REMINDER
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Snooze, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "5. Snooze & Unfinished Reminder",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Snooze,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
                         )
+                        NothingSectionHeader(title = "06 · SNOOZE & REMINDER")
                     }
 
                     Text(
-                        text = "If task is not done, repeat reminder alert after:",
+                        text = "Repeat reminder interval if task remains incomplete:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NothingTheme.colors.textSecondary
                     )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         listOf("5", "10", "20", "custom").forEach { opt ->
                             val label = if (opt == "custom") "Custom Mins" else "$opt Mins"
+                            val isSelected = selectedSnoozeOption == opt
                             FilterChip(
-                                selected = selectedSnoozeOption == opt,
+                                selected = isSelected,
                                 onClick = { selectedSnoozeOption = opt },
-                                label = { Text(label) },
-                                shape = RoundedCornerShape(16.dp)
+                                label = {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontFamily = TechMonoFontFamily,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    )
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                    selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                    containerColor = NothingTheme.colors.surfaceElevated,
+                                    labelColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isSelected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                )
                             )
                         }
                     }
@@ -1376,34 +1476,40 @@ fun CreateTaskScreen(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(12.dp)
                         )
                     }
                 }
             }
 
             // ==========================================
-            // 6. WHO CAN JOIN & MEMBER INVITES
+            // 7. WHO CAN JOIN & MEMBER INVITES
             // ==========================================
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.People, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "6. Who Can Join & Invite Access",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.People,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
                         )
+                        NothingSectionHeader(title = "07 · ACCESS & INVITES")
                     }
 
                     Text(
                         text = "Target Roles (Optional)",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
                     )
 
                     FlowRow(
@@ -1426,8 +1532,25 @@ fun CreateTaskScreen(
                                     if (isSelected) selectedTargetRoles.remove(role.code)
                                     else selectedTargetRoles.add(role.code)
                                 },
-                                label = { Text(role.displayName) },
-                                shape = RoundedCornerShape(16.dp),
+                                label = {
+                                    Text(
+                                        text = role.displayName,
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                                    )
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                    selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                    containerColor = NothingTheme.colors.surfaceElevated,
+                                    labelColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isSelected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                ),
                                 modifier = Modifier.testTag("target_role_chip_${role.code.lowercase()}")
                             )
                         }
@@ -1436,8 +1559,8 @@ fun CreateTaskScreen(
                     if (selectedScope == TaskScopeLevel.STATE) {
                         Text(
                             text = "State-Wide: All VCO & IT Managers in ${selectedState?.name ?: stateName.ifBlank { "selected State" }}.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
 
@@ -1452,9 +1575,9 @@ fun CreateTaskScreen(
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                             )
                             Text(
-                                text = "Eligible personnel in this scope can join the task directly",
+                                text = "Eligible personnel in this scope can join directly",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = NothingTheme.colors.textSecondary
                             )
                         }
                         Switch(
@@ -1464,37 +1587,42 @@ fun CreateTaskScreen(
                     }
 
                     if (!autoAssignedNotice.isNullOrBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        NothingHairlineCard(
+                            shape = RoundedCornerShape(10.dp),
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = autoAssignedNotice ?: "",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = TechMonoFontFamily,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
                     }
 
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    NothingDivider()
 
                     Text(
-                        text = "Invite Scoped Members (Name, Role, Emp ID, Email, or Mobile)",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        text = "Invite Scoped Members",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.Bold
+                        )
                     )
 
                     OutlinedTextField(
@@ -1525,7 +1653,7 @@ fun CreateTaskScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("create_task_member_search"),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
 
                     val availableScopedMembers = scopedSearchResults.filter { !it.isOnLeave }
@@ -1554,7 +1682,8 @@ fun CreateTaskScreen(
                                     }
                                 }
                             },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, NothingTheme.colors.border),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -1562,7 +1691,11 @@ fun CreateTaskScreen(
                         ) {
                             Icon(Icons.Default.People, contentDescription = "Add all members in scope", modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Add All Available (${availableScopedMembers.size})", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = "Add All Available (${availableScopedMembers.size})",
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         }
                     }
 
@@ -1570,15 +1703,23 @@ fun CreateTaskScreen(
                     if (selectedInvitees.isNotEmpty()) {
                         Text(
                             text = "Assigned Members (${selectedInvitees.size}):",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(selectedInvitees) { user ->
                                 FilterChip(
                                     selected = true,
                                     onClick = { selectedInvitees.remove(user) },
-                                    label = { Text("${user.fullName} (${user.employeeId})") },
+                                    label = {
+                                        Text(
+                                            text = "${user.fullName} (${user.employeeId})",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily)
+                                        )
+                                    },
                                     trailingIcon = {
                                         Icon(
                                             Icons.Default.Close,
@@ -1586,7 +1727,12 @@ fun CreateTaskScreen(
                                             modifier = Modifier.size(16.dp)
                                         )
                                     },
-                                    shape = RoundedCornerShape(16.dp)
+                                    shape = RoundedCornerShape(999.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                        selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                                        selectedTrailingIconColor = NothingTheme.colors.onAccentPrimary
+                                    )
                                 )
                             }
                         }
@@ -1594,12 +1740,12 @@ fun CreateTaskScreen(
 
                     // Search Results List showing full scoped member identity even before typing
                     if (scopedSearchResults.isNotEmpty() || searchResults.isNotEmpty()) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
+                        NothingHairlineCard(
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            contentPadding = PaddingValues(8.dp)
                         ) {
-                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 if (scopedSearchResults.isNotEmpty()) {
                                     scopedSearchResults.take(20).forEach { member ->
                                         val asProfile = UserProfile(
@@ -1625,7 +1771,7 @@ fun CreateTaskScreen(
                                                     if (!isAdded) selectedInvitees.add(asProfile)
                                                     else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
                                                 }
-                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                .padding(horizontal = 6.dp, vertical = 6.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
@@ -1635,8 +1781,13 @@ fun CreateTaskScreen(
                                                         .size(34.dp)
                                                         .clip(CircleShape)
                                                         .background(
-                                                            if (onLeave) com.example.ui.theme.TaskzWarning.copy(alpha = 0.2f)
-                                                            else MaterialTheme.colorScheme.primaryContainer
+                                                            if (onLeave) NothingAmber.copy(alpha = 0.16f)
+                                                            else NothingTheme.colors.surface
+                                                        )
+                                                        .border(
+                                                            1.dp,
+                                                            if (onLeave) NothingAmber.copy(alpha = 0.4f) else NothingTheme.colors.border,
+                                                            CircleShape
                                                         ),
                                                     contentAlignment = Alignment.Center
                                                 ) {
@@ -1644,14 +1795,17 @@ fun CreateTaskScreen(
                                                         Icon(
                                                             imageVector = Icons.Default.EventBusy,
                                                             contentDescription = "On Leave",
-                                                            tint = com.example.ui.theme.TaskzWarning,
-                                                            modifier = Modifier.size(18.dp)
+                                                            tint = NothingAmber,
+                                                            modifier = Modifier.size(16.dp)
                                                         )
                                                     } else {
                                                         Text(
                                                             text = member.fullName.take(2).uppercase(),
-                                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontFamily = TechMonoFontFamily,
+                                                                fontWeight = FontWeight.Bold
+                                                            ),
+                                                            color = MaterialTheme.colorScheme.onSurface
                                                         )
                                                     }
                                                 }
@@ -1659,14 +1813,16 @@ fun CreateTaskScreen(
                                                 Column {
                                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                         Text(
-                                                            text = "${member.fullName} • ${TaskzRole.fromCode(member.activeRoleCode).displayName}",
-                                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                            text = "${member.fullName} · ${TaskzRole.fromCode(member.activeRoleCode).displayName}",
+                                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                            color = MaterialTheme.colorScheme.onSurface
                                                         )
                                                         if (onLeave) {
-                                                            Text(
-                                                                text = "On Leave",
-                                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                                color = com.example.ui.theme.TaskzWarning
+                                                            NothingTagChip(
+                                                                text = "LEAVE",
+                                                                contentColor = NothingAmber,
+                                                                containerColor = NothingAmber.copy(alpha = 0.14f),
+                                                                borderColor = NothingAmber.copy(alpha = 0.45f)
                                                             )
                                                         }
                                                     }
@@ -1676,31 +1832,40 @@ fun CreateTaskScreen(
                                                             member.email?.takeIf { it.isNotBlank() },
                                                             member.centreCode?.let { "Centre $it" } ?: member.cityName,
                                                             member.mobile?.takeIf { it.isNotBlank() }
-                                                        ).joinToString(" • "),
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        ).joinToString(" · "),
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                                        color = NothingTheme.colors.textSecondary
                                                     )
                                                 }
                                             }
+                                            Spacer(modifier = Modifier.width(6.dp))
                                             Button(
                                                 enabled = !onLeave,
                                                 onClick = {
                                                     if (!isAdded) selectedInvitees.add(asProfile)
                                                     else selectedInvitees.removeAll { it.id == member.id || it.employeeId == member.employeeId }
                                                 },
-                                                shape = RoundedCornerShape(8.dp),
-                                                colors = if (isAdded) androidx.compose.material3.ButtonDefaults.buttonColors(
-                                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                                ) else androidx.compose.material3.ButtonDefaults.buttonColors()
+                                                shape = RoundedCornerShape(999.dp),
+                                                colors = if (isAdded) ButtonDefaults.buttonColors(
+                                                    containerColor = NothingTheme.colors.surface,
+                                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                                ) else ButtonDefaults.buttonColors(
+                                                    containerColor = NothingTheme.colors.accentPrimary,
+                                                    contentColor = NothingTheme.colors.onAccentPrimary
+                                                ),
+                                                border = if (isAdded) BorderStroke(1.dp, NothingTheme.colors.border) else null,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                             ) {
                                                 Text(
-                                                    when {
+                                                    text = when {
                                                         onLeave -> "Leave"
                                                         isAdded -> "Added ✓"
                                                         else -> "+ Add"
                                                     },
-                                                    style = MaterialTheme.typography.labelMedium
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontFamily = TechMonoFontFamily,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
                                                 )
                                             }
                                         }
@@ -1716,34 +1881,30 @@ fun CreateTaskScreen(
                                                     if (!isAdded) selectedInvitees.add(candidate)
                                                     else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
                                                 }
-                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                .padding(horizontal = 6.dp, vertical = 6.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Text(
-                                                        text = "${candidate.fullName} • ${candidate.resolvedActiveRole.displayName}",
-                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                        text = "${candidate.fullName} · ${candidate.resolvedActiveRole.displayName}",
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onSurface
                                                     )
                                                     if (onLeave) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.EventBusy,
-                                                            contentDescription = "On Leave",
-                                                            tint = com.example.ui.theme.TaskzWarning,
-                                                            modifier = Modifier.size(14.dp)
-                                                        )
-                                                        Text(
-                                                            text = "On Leave",
-                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                            color = com.example.ui.theme.TaskzWarning
+                                                        NothingTagChip(
+                                                            text = "LEAVE",
+                                                            contentColor = NothingAmber,
+                                                            containerColor = NothingAmber.copy(alpha = 0.14f),
+                                                            borderColor = NothingAmber.copy(alpha = 0.45f)
                                                         )
                                                     }
                                                 }
                                                 Text(
-                                                    text = "${candidate.employeeId} • ${candidate.mobile}",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    text = "${candidate.employeeId} · ${candidate.mobile}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                                    color = NothingTheme.colors.textSecondary
                                                 )
                                             }
                                             Button(
@@ -1752,15 +1913,27 @@ fun CreateTaskScreen(
                                                     if (!isAdded) selectedInvitees.add(candidate)
                                                     else selectedInvitees.removeAll { it.id == candidate.id || it.employeeId == candidate.employeeId }
                                                 },
-                                                shape = RoundedCornerShape(8.dp)
+                                                shape = RoundedCornerShape(999.dp),
+                                                colors = if (isAdded) ButtonDefaults.buttonColors(
+                                                    containerColor = NothingTheme.colors.surface,
+                                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                                ) else ButtonDefaults.buttonColors(
+                                                    containerColor = NothingTheme.colors.accentPrimary,
+                                                    contentColor = NothingTheme.colors.onAccentPrimary
+                                                ),
+                                                border = if (isAdded) BorderStroke(1.dp, NothingTheme.colors.border) else null,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                             ) {
                                                 Text(
-                                                    when {
+                                                    text = when {
                                                         onLeave -> "Leave"
                                                         isAdded -> "Added ✓"
                                                         else -> "+ Add"
                                                     },
-                                                    style = MaterialTheme.typography.labelMedium
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontFamily = TechMonoFontFamily,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
                                                 )
                                             }
                                         }
@@ -1772,7 +1945,7 @@ fun CreateTaskScreen(
                         Text(
                             text = "No colleagues found in this city/scope yet.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
                 }

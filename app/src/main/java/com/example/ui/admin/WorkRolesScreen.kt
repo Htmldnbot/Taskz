@@ -1,10 +1,9 @@
 package com.example.ui.admin
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,22 +17,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,14 +35,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.model.WorkRole
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
 import com.example.ui.common.TaskzTextField
-import com.example.ui.theme.TaskzSuccess
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
 
 @Composable
 fun WorkRolesScreen(
@@ -64,14 +63,12 @@ fun WorkRolesScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var roleToEdit by remember { mutableStateOf<WorkRole?>(null) }
 
-    // Create inputs
     var newName by remember { mutableStateOf("") }
     var newCode by remember { mutableStateOf("") }
     var newDesc by remember { mutableStateOf("") }
     var newSortOrder by remember { mutableStateOf("0") }
     var createError by remember { mutableStateOf<String?>(null) }
 
-    // Edit inputs
     var editName by remember { mutableStateOf("") }
     var editCode by remember { mutableStateOf("") }
     var editDesc by remember { mutableStateOf("") }
@@ -84,13 +81,12 @@ fun WorkRolesScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text(
-                    text = "Work Roles",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-            }
-
+            NothingSectionHeader(
+                title = "WORK ROLES (${roles.size})",
+                useDotMatrix = true,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = {
                     newName = ""
@@ -100,61 +96,59 @@ fun WorkRolesScreen(
                     createError = null
                     showCreateDialog = true
                 },
+                shape = RoundedCornerShape(999.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                 modifier = Modifier.testTag("btn_create_work_role")
             ) {
                 Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Add Role")
+                Text("Add Role", fontWeight = FontWeight.Bold)
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         if (isLoading && roles.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(strokeWidth = 2.dp)
             }
         } else if (roles.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(text = "No work roles found. Click 'Add Role' above.")
-            }
+            NothingEmptyState(
+                title = "No Work Roles",
+                subtitle = "Tap Add Role to define operational roles.",
+                icon = Icons.Default.Work
+            )
         } else {
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 96.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(roles, key = { it.id }) { role ->
-                    Card(
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        modifier = Modifier.fillMaxWidth()
+                    NothingHairlineCard(
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    NothingStatusDot(
+                                        color = if (role.isActive) NothingGreen else NothingTheme.colors.textSecondary,
+                                        size = 7.dp
+                                    )
                                     Text(
                                         text = role.name,
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     if (!role.code.isNullOrBlank()) {
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = MaterialTheme.colorScheme.primaryContainer
-                                        ) {
-                                            Text(
-                                                text = role.code,
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
+                                        NothingTagChip(text = role.code, mono = true)
                                     }
                                 }
 
@@ -163,7 +157,7 @@ fun WorkRolesScreen(
                                     Text(
                                         text = role.description,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = NothingTheme.colors.textSecondary
                                     )
                                 }
                             }
@@ -187,8 +181,8 @@ fun WorkRolesScreen(
                                     Icon(
                                         imageVector = Icons.Default.Edit,
                                         contentDescription = "Edit Role",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }
@@ -199,46 +193,48 @@ fun WorkRolesScreen(
         }
     }
 
-    // Create Work Role Dialog
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("Create Work Role") },
+            containerColor = NothingTheme.colors.surface,
+            title = {
+                NothingDotMatrixText(
+                    text = "NEW WORK ROLE",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
             text = {
-                Column {
-                    OutlinedTextField(
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TaskzTextField(
                         value = newName,
                         onValueChange = { newName = it; createError = null },
-                        label = { Text("Role Name *") },
-                        placeholder = { Text("e.g., Invigilator") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Role Name *",
+                        placeholder = "e.g., Invigilator"
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = newCode,
                         onValueChange = { newCode = it },
-                        label = { Text("Role Code (Optional)") },
-                        placeholder = { Text("e.g., INV") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Role Code (Optional)",
+                        placeholder = "e.g., INV"
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = newDesc,
                         onValueChange = { newDesc = it },
-                        label = { Text("Description") },
-                        placeholder = { Text("Duties and expectations...") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Description",
+                        placeholder = "Duties and expectations..."
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = newSortOrder,
                         onValueChange = { newSortOrder = it.filter { c -> c.isDigit() } },
-                        label = { Text("Sort Order") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Sort Order"
                     )
                     if (createError != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = createError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            text = createError!!,
+                            color = NothingRed,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             },
@@ -256,9 +252,10 @@ fun WorkRolesScreen(
                             sortOrder = newSortOrder.toIntOrNull() ?: 0
                         )
                         showCreateDialog = false
-                    }
+                    },
+                    shape = RoundedCornerShape(999.dp)
                 ) {
-                    Text("Create Role")
+                    Text("Create Role", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -269,41 +266,39 @@ fun WorkRolesScreen(
         )
     }
 
-    // Edit Work Role Dialog
     if (roleToEdit != null) {
         AlertDialog(
             onDismissRequest = { roleToEdit = null },
-            title = { Text("Edit Work Role") },
+            containerColor = NothingTheme.colors.surface,
+            title = {
+                NothingDotMatrixText(
+                    text = "EDIT WORK ROLE",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
             text = {
-                Column {
-                    OutlinedTextField(
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TaskzTextField(
                         value = editName,
                         onValueChange = { editName = it },
-                        label = { Text("Role Name *") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Role Name *"
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = editCode,
                         onValueChange = { editCode = it },
-                        label = { Text("Role Code") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Role Code"
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = editDesc,
                         onValueChange = { editDesc = it },
-                        label = { Text("Description") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Description"
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    TaskzTextField(
                         value = editSortOrder,
                         onValueChange = { editSortOrder = it.filter { c -> c.isDigit() } },
-                        label = { Text("Sort Order") },
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Sort Order"
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -328,9 +323,10 @@ fun WorkRolesScreen(
                             )
                             roleToEdit = null
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(999.dp)
                 ) {
-                    Text("Save Changes")
+                    Text("Save Changes", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

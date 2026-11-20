@@ -1,15 +1,19 @@
 package com.example.ui.tasks
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,20 +23,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EventBusy
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,16 +52,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.core.model.TaskJoinRequest
 import com.example.core.model.TaskParticipant
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 
 @Composable
 fun TaskParticipantsScreen(
@@ -84,30 +93,36 @@ fun TaskParticipantsScreen(
 
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBackClick) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Task Participants",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    NothingDotMatrixText(
+                        text = "PARTICIPANTS",
+                        fontSize = 19.sp
                     )
                     Text(
-                        text = "${activeParts.size} active participants",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "${activeParts.size} ACTIVE MEMBERS",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
                 Button(
@@ -115,29 +130,39 @@ fun TaskParticipantsScreen(
                         showAddParticipantDialog = true
                         viewModel.searchEmployees("")
                     },
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary
+                    ),
+                    modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Icon(imageVector = Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Add", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             if (participants.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(text = "No participants joined this task yet")
+                    NothingEmptyState(
+                        title = "No participants yet",
+                        subtitle = "Assign personnel or allow self-join for this task.",
+                        icon = Icons.Default.Groups
+                    )
                 }
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     item {
-                        Text(
-                            text = "Active Participants (${activeParts.size})",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        NothingSectionHeader(
+                            title = "ACTIVE PARTICIPANTS (${activeParts.size})",
+                            useDotMatrix = true
                         )
                     }
 
@@ -150,10 +175,10 @@ fun TaskParticipantsScreen(
 
                     if (historicalParts.isNotEmpty()) {
                         item {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "History (${historicalParts.size})",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            NothingSectionHeader(
+                                title = "HISTORY (${historicalParts.size})",
+                                useDotMatrix = true
                             )
                         }
 
@@ -169,18 +194,19 @@ fun TaskParticipantsScreen(
         }
     }
 
-    // Add Participant Dialog
     if (showAddParticipantDialog) {
         var searchQuery by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showAddParticipantDialog = false },
-            title = { Text("Add Participant to Task", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            shape = RoundedCornerShape(16.dp),
+            title = { NothingDotMatrixText("ADD PARTICIPANT", fontSize = 17.sp) },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Search by Name, Email, or Employee ID (max 7 digits):",
+                        text = "Search by Name, Email, or Employee ID",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NothingTheme.colors.textSecondary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
@@ -189,68 +215,74 @@ fun TaskParticipantsScreen(
                             searchQuery = it
                             viewModel.searchEmployees(it)
                         },
-                        placeholder = { Text("e.g. Rahul, rahul@gmail.com, 0123456") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null)
-                        },
+                        placeholder = { Text("e.g. Rahul, 0123456") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     if (directoryEmployees.isEmpty()) {
                         Text(
-                            text = "No employees found. Type a query to search.",
+                            text = "No employees found.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary
                         )
                     } else {
-                        androidx.compose.foundation.lazy.LazyColumn(
+                        LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(200.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                .height(220.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(directoryEmployees) { emp ->
                                 val onLeave = emp.isOnLeave
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (onLeave) TaskzWarning.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier.fillMaxWidth()
+                                NothingHairlineCard(
+                                    containerColor = if (onLeave) NothingAmber.copy(alpha = 0.08f) else NothingTheme.colors.surfaceElevated,
+                                    borderColor = if (onLeave) NothingAmber.copy(alpha = 0.4f) else NothingTheme.colors.border,
+                                    contentPadding = PaddingValues(10.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(8.dp),
+                                        modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
                                                 Text(
                                                     text = emp.fullName,
-                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f, fill = false)
                                                 )
                                                 if (onLeave) {
                                                     Icon(
                                                         imageVector = Icons.Default.EventBusy,
                                                         contentDescription = "On Leave",
-                                                        tint = TaskzWarning,
+                                                        tint = NothingAmber,
                                                         modifier = Modifier.size(14.dp)
                                                     )
                                                     Text(
-                                                        text = "On Leave",
-                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                        color = TaskzWarning
+                                                        text = "ON LEAVE",
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontFamily = TechMonoFontFamily,
+                                                            fontWeight = FontWeight.Bold
+                                                        ),
+                                                        color = NothingAmber
                                                     )
                                                 }
                                             }
                                             Text(
-                                                text = "ID: ${emp.employeeId} • ${emp.resolvedActiveRole.displayName}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = "ID ${emp.employeeId} · ${emp.resolvedActiveRole.displayName}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                                color = NothingTheme.colors.textSecondary
                                             )
                                         }
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Button(
                                             enabled = !onLeave,
                                             onClick = {
@@ -260,7 +292,11 @@ fun TaskParticipantsScreen(
                                                     onSuccess = { showAddParticipantDialog = false }
                                                 )
                                             },
-                                            shape = RoundedCornerShape(6.dp)
+                                            shape = RoundedCornerShape(999.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = NothingTheme.colors.accentPrimary,
+                                                contentColor = NothingTheme.colors.onAccentPrimary
+                                            )
                                         ) {
                                             Text(if (onLeave) "Leave" else "Add")
                                         }
@@ -280,23 +316,26 @@ fun TaskParticipantsScreen(
         )
     }
 
-    // Remove Participant Dialog
     if (participantToRemove != null) {
         AlertDialog(
             onDismissRequest = { participantToRemove = null },
-            title = { Text("Remove Participant") },
+            containerColor = NothingTheme.colors.surface,
+            shape = RoundedCornerShape(16.dp),
+            title = { NothingDotMatrixText("REMOVE PARTICIPANT", fontSize = 17.sp) },
             text = {
                 Column {
                     Text(
-                        text = "Are you sure you want to remove ${participantToRemove!!.userName} from this task?",
-                        style = MaterialTheme.typography.bodySmall
+                        text = "Remove ${participantToRemove!!.userName} from this task?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textSecondary
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = removeReason,
                         onValueChange = { removeReason = it },
                         label = { Text("Reason (Optional)") },
-                        placeholder = { Text("e.g., Re-assigned or no-show") },
+                        placeholder = { Text("e.g., Re-assigned") },
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -309,7 +348,8 @@ fun TaskParticipantsScreen(
                         participantToRemove = null
                         removeReason = ""
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = TaskzError)
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed)
                 ) {
                     Text("Confirm Remove")
                 }
@@ -328,66 +368,59 @@ private fun ParticipantCard(
     participant: TaskParticipant,
     onRemoveClick: (() -> Unit)?
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth()
+    val isActive = participant.status == "active"
+    NothingHairlineCard(
+        contentPadding = PaddingValues(14.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .background(NothingTheme.colors.surfaceElevated)
+                    .border(1.dp, NothingTheme.colors.border, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = participant.userName?.take(2)?.uppercase() ?: "EM",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
 
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = participant.userName ?: "Employee",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Work,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NothingStatusDot(color = if (isActive) NothingGreen else NothingRed, size = 7.dp)
                     Text(
-                        text = participant.roleName ?: "Role",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.primary
+                        text = participant.userName ?: "Employee",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NothingTagChip(text = (participant.roleName ?: "Role").uppercase())
                     Text(
-                        text = "•  Source: ${participant.source.replace("_", " ")}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = participant.source.replace("_", " ").uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily, fontSize = 10.sp),
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
 
-                if (participant.status != "active") {
-                    Spacer(modifier = Modifier.height(2.dp))
+                if (!isActive) {
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Status: ${participant.status.uppercase()}${participant.leftReason?.let { " ($it)" } ?: ""}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
+                        text = "STATUS: ${participant.status.uppercase()}${participant.leftReason?.let { " ($it)" } ?: ""}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingRed
                     )
                 }
             }
@@ -397,7 +430,7 @@ private fun ParticipantCard(
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Remove Participant",
-                        tint = MaterialTheme.colorScheme.error,
+                        tint = NothingRed,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -421,124 +454,130 @@ fun TaskJoinRequestsScreen(
 
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBackClick) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Column {
-                    Text(
-                        text = "Task Join Requests",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    NothingDotMatrixText(
+                        text = "JOIN REQUESTS",
+                        fontSize = 19.sp
                     )
                     Text(
-                        text = "${requests.size} pending requests",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "${requests.size} PENDING REQUESTS",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingTheme.colors.textSecondary
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             if (requests.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(text = "No pending join requests for this task")
+                    NothingEmptyState(
+                        title = "No pending requests",
+                        subtitle = "Team join requests for this task will appear here.",
+                        icon = Icons.Default.Work
+                    )
                 }
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(requests, key = { it.id }) { req ->
-                        Card(
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
+                        NothingHairlineCard(contentPadding = PaddingValues(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(NothingTheme.colors.surfaceElevated)
+                                        .border(1.dp, NothingTheme.colors.border, CircleShape),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primaryContainer),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = req.userName?.take(2)?.uppercase() ?: "AP",
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = req.userName ?: "Applicant",
-                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                        Text(
-                                            text = "Requested Role: ${req.roleName ?: "General"}",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        )
-                                    }
-                                }
-
-                                if (!req.message.isNullOrBlank()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "\"${req.message}\"",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = req.userName?.take(2)?.uppercase() ?: "AP",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontFamily = TechMonoFontFamily,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = req.userName ?: "Applicant",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    NothingTagChip(text = "ROLE: ${(req.roleName ?: "General").uppercase()}")
+                                }
+                            }
+
+                            if (!req.message.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "\"${req.message}\"",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NothingTheme.colors.textSecondary
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { viewModel.reviewJoinRequest(req.id, false, taskId) },
+                                    shape = RoundedCornerShape(999.dp),
+                                    border = BorderStroke(1.dp, NothingRed),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingRed),
+                                    modifier = Modifier.heightIn(min = 48.dp)
                                 ) {
-                                    OutlinedButton(
-                                        onClick = { viewModel.reviewJoinRequest(req.id, false, taskId) },
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TaskzError)
-                                    ) {
-                                        Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Reject")
-                                    }
+                                    Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Reject")
+                                }
 
-                                    Spacer(modifier = Modifier.width(8.dp))
-
-                                    Button(
-                                        onClick = { viewModel.reviewJoinRequest(req.id, true, taskId) },
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = TaskzSuccess)
-                                    ) {
-                                        Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Approve")
-                                    }
+                                Button(
+                                    onClick = { viewModel.reviewJoinRequest(req.id, true, taskId) },
+                                    shape = RoundedCornerShape(999.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = NothingGreen),
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Approve")
                                 }
                             }
                         }

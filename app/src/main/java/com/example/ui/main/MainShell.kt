@@ -6,19 +6,25 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +33,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddTask
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Assignment
@@ -34,10 +41,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.DesktopWindows
@@ -45,11 +55,8 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,9 +64,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -88,11 +92,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.TaskzApplication
-import com.example.core.model.AppNotification
+import com.example.core.model.AssignedRoleInfo
 import com.example.core.model.NotificationCategory
 import com.example.core.model.Shift
 import com.example.core.model.SyncStatus
@@ -104,6 +109,15 @@ import com.example.ui.admin.AdminScreen
 import com.example.ui.admin.AdminViewModel
 import com.example.ui.admin.WorkRolesViewModel
 import com.example.ui.alarm.AlarmReliabilitySettingsScreen
+import com.example.ui.common.NothingCreateActionSheet
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingFloatingNavCapsule
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingNavDestination
+import com.example.ui.common.NothingQuickAction
+import com.example.ui.common.NothingStatusDot
+import com.example.ui.common.NothingTagChip
 import com.example.ui.groups.CreateGroupScreen
 import com.example.ui.groups.EditGroupScreen
 import com.example.ui.groups.GroupDetailScreen
@@ -128,8 +142,11 @@ import com.example.ui.tasks.TaskJoinRequestsScreen
 import com.example.ui.tasks.TaskParticipantsScreen
 import com.example.ui.tasks.TasksScreen
 import com.example.ui.tasks.TasksViewModel
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import kotlinx.coroutines.launch
 
 enum class MainTab(
@@ -140,7 +157,7 @@ enum class MainTab(
 ) {
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_tab_home"),
     TASKS("Tasks", Icons.Filled.Assignment, Icons.Outlined.Assignment, "nav_tab_tasks"),
-    INCIDENTS("Incident Register", Icons.Filled.DesktopWindows, Icons.Outlined.DesktopWindows, "nav_tab_incidents"),
+    INCIDENTS("Incidents", Icons.Filled.DesktopWindows, Icons.Outlined.DesktopWindows, "nav_tab_incidents"),
     PROFILE("Profile", Icons.Filled.Person, Icons.Outlined.Person, "nav_tab_profile"),
     ADMIN("Admin", Icons.Filled.AdminPanelSettings, Icons.Outlined.AdminPanelSettings, "nav_tab_admin")
 }
@@ -222,14 +239,15 @@ fun MainShell(
     val unreadCount by syncManager.unreadNotificationCount.collectAsStateWithLifecycle(initialValue = 0)
     val allShifts by tasksViewModel.allShiftsFlow.collectAsStateWithLifecycle()
     val allGroups by tasksViewModel.taskGroupsFlow.collectAsStateWithLifecycle()
+    val allTasks by tasksViewModel.allTasksFlow.collectAsStateWithLifecycle()
     val isOnline by app.networkMonitor.isOnlineFlow.collectAsStateWithLifecycle(initialValue = app.networkMonitor.isCurrentlyConnected())
     val pendingDeepLink by NotificationDeepLinkRouter.pendingTarget.collectAsStateWithLifecycle()
 
     var showRoleMenu by remember { mutableStateOf(false) }
     var showNotificationsSheet by remember { mutableStateOf(false) }
+    var showCreateActionSheet by remember { mutableStateOf(false) }
     var pendingShift1Candidates by remember { mutableStateOf<List<Shift>?>(null) }
 
-    // If active role switches away from SUPER_ADMIN while on Admin tab, redirect to HOME cleanly
     LaunchedEffect(authContext.activeRole, authContext.assignedRoles) {
         if (currentTab == MainTab.ADMIN && !permissionManager.canManageUsers()) {
             currentTab = MainTab.HOME
@@ -237,7 +255,6 @@ fun MainShell(
         }
     }
 
-    // Server-verified deep link routing from push/system notifications & notification sheet
     LaunchedEffect(pendingDeepLink, authContext.userId) {
         val target = pendingDeepLink ?: return@LaunchedEffect
         NotificationDeepLinkRouter.consume()
@@ -280,7 +297,6 @@ fun MainShell(
         }
     }
 
-    // BackHandler: pops subroute first, otherwise navigates to HOME
     BackHandler(enabled = subRouteStack.isNotEmpty() || currentTab != MainTab.HOME) {
         if (subRouteStack.isNotEmpty()) {
             subRouteStack.removeAt(subRouteStack.lastIndex)
@@ -290,418 +306,585 @@ fun MainShell(
     }
 
     val canManageUsers = permissionManager.canManageUsers()
-    val visibleTabs = remember(canManageUsers) {
-        if (canManageUsers) {
-            listOf(MainTab.HOME, MainTab.TASKS, MainTab.INCIDENTS, MainTab.PROFILE, MainTab.ADMIN)
-        } else {
-            listOf(MainTab.HOME, MainTab.TASKS, MainTab.INCIDENTS, MainTab.PROFILE)
+    val canCreateTask = permissionManager.canCreateTask()
+    val canSelfJoinGroups = permissionManager.canSelfJoinGroups()
+
+    val openRepeatShift1To2: () -> Unit = {
+        val candidates = tasksViewModel.findShift1Candidates(allShifts)
+        when {
+            candidates.isEmpty() -> {
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Create an Exam Group & Shift 1 first")
+                }
+            }
+            candidates.size == 1 -> {
+                subRouteStack.add(SubRoute.CopyShift(candidates.first()))
+            }
+            else -> {
+                pendingShift1Candidates = candidates
+            }
         }
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            if (currentSubRoute == SubRoute.None) {
-                TopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Image(
-                                painter = painterResource(id = R.drawable.taskz_launcher_icon_1791997779230),
-                                contentDescription = "Taskz",
-                                modifier = Modifier.size(26.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = when (currentTab) {
-                                    MainTab.HOME -> "Taskz"
-                                    MainTab.INCIDENTS -> "Incidents"
-                                    else -> currentTab.title
-                                },
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    },
-                    actions = {
-                        if (authContext.isOnLeave) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = TaskzWarning.copy(alpha = 0.18f),
-                                modifier = Modifier
-                                    .padding(end = 4.dp)
-                                    .testTag("topbar_on_leave_badge")
-                            ) {
-                                Text(
-                                    text = "On Leave",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = TaskzWarning,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                        // Active Role Selector (shows ONLY server-assigned roles)
-                        Box {
-                            AssistChip(
-                                onClick = { showRoleMenu = true },
-                                label = {
-                                    Text(
-                                        text = authContext.activeRole.displayName,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
-                                    )
-                                },
-                                trailingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Switch Active Role",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                },
-                                modifier = Modifier.testTag("topbar_role_switcher")
-                            )
-                            DropdownMenu(
-                                expanded = showRoleMenu,
-                                onDismissRequest = { showRoleMenu = false }
-                            ) {
-                                val assigned = authContext.assignedRoles.ifEmpty {
-                                    listOf(
-                                        com.example.core.model.AssignedRoleInfo(
-                                            roleId = "",
-                                            roleCode = authContext.activeRole.code,
-                                            roleName = authContext.activeRole.displayName,
-                                            isPrimary = true
-                                        )
-                                    )
-                                }
-                                assigned.forEach { role ->
-                                    val isCurrent = role.roleCode.equals(authContext.activeRole.code, ignoreCase = true)
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = role.roleName,
-                                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-                                            )
-                                        },
-                                        leadingIcon = if (isCurrent) {
-                                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                                        } else null,
-                                        onClick = {
-                                            showRoleMenu = false
-                                            if (!isCurrent) {
-                                                coroutineScope.launch {
-                                                    val res = syncManager.switchActiveRole(role.roleCode)
-                                                    res.onFailure { err ->
-                                                        snackbarHostState.showSnackbar(err.message ?: "Unable to switch role")
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.testTag("role_option_${role.roleCode}")
-                                    )
-                                }
-                            }
-                        }
+    val leftNavItems = remember {
+        listOf(
+            NothingNavDestination(
+                id = MainTab.HOME.name,
+                label = MainTab.HOME.title,
+                selectedIcon = MainTab.HOME.selectedIcon,
+                unselectedIcon = MainTab.HOME.unselectedIcon,
+                testTag = MainTab.HOME.testTag
+            ),
+            NothingNavDestination(
+                id = MainTab.TASKS.name,
+                label = MainTab.TASKS.title,
+                selectedIcon = MainTab.TASKS.selectedIcon,
+                unselectedIcon = MainTab.TASKS.unselectedIcon,
+                testTag = MainTab.TASKS.testTag
+            )
+        )
+    }
 
-                        Spacer(modifier = Modifier.width(4.dp))
+    val rightNavItems = remember {
+        listOf(
+            NothingNavDestination(
+                id = MainTab.INCIDENTS.name,
+                label = MainTab.INCIDENTS.title,
+                selectedIcon = MainTab.INCIDENTS.selectedIcon,
+                unselectedIcon = MainTab.INCIDENTS.unselectedIcon,
+                testTag = MainTab.INCIDENTS.testTag
+            ),
+            NothingNavDestination(
+                id = MainTab.PROFILE.name,
+                label = MainTab.PROFILE.title,
+                selectedIcon = MainTab.PROFILE.selectedIcon,
+                unselectedIcon = MainTab.PROFILE.unselectedIcon,
+                testTag = MainTab.PROFILE.testTag
+            )
+        )
+    }
 
-                        // Unobtrusive Sync Status Pill (no manual sync needed)
-                        val syncBadgeColor = when {
-                            !isOnline -> Color.Gray
-                            isSyncing || syncMetadata.status == SyncStatus.SYNCING -> MaterialTheme.colorScheme.primary
-                            syncMetadata.pendingSyncCount > 0 || syncMetadata.status == SyncStatus.PENDING -> TaskzWarning
-                            else -> TaskzSuccess
-                        }
-                        val syncIcon = when {
-                            !isOnline -> Icons.Default.CloudOff
-                            isSyncing || syncMetadata.status == SyncStatus.SYNCING -> Icons.Default.CloudSync
-                            else -> Icons.Default.CloudDone
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = syncBadgeColor.copy(alpha = 0.14f),
-                            modifier = Modifier.testTag("topbar_sync_status")
-                        ) {
-                            Icon(
-                                imageVector = syncIcon,
-                                contentDescription = when {
-                                    !isOnline -> "Offline"
-                                    isSyncing -> "Syncing"
-                                    syncMetadata.pendingSyncCount > 0 -> "Pending Sync"
-                                    else -> "Synced"
-                                },
-                                tint = syncBadgeColor,
-                                modifier = Modifier
-                                    .padding(6.dp)
-                                    .size(16.dp)
-                            )
-                        }
-
-                        // Notifications Bell with unread count badge
-                        IconButton(
-                            onClick = { showNotificationsSheet = true },
-                            modifier = Modifier.testTag("topbar_notifications_bell")
-                        ) {
-                            BadgedBox(
-                                badge = {
-                                    if (unreadCount > 0) {
-                                        Badge {
-                                            Text(if (unreadCount > 99) "99+" else unreadCount.toString())
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(
-                                    imageVector = if (unreadCount > 0) Icons.Filled.Notifications else Icons.Outlined.Notifications,
-                                    contentDescription = "Notifications"
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        titleContentColor = MaterialTheme.colorScheme.onBackground
+    val quickActions = remember(canCreateTask, canSelfJoinGroups, canManageUsers, allShifts) {
+        buildList {
+            if (canCreateTask) {
+                add(
+                    NothingQuickAction(
+                        title = "Create Task",
+                        subtitle = "Schedule centre, shift or progressive task",
+                        icon = Icons.Default.AddTask,
+                        testTag = "quick_action_create_task",
+                        onClick = { subRouteStack.add(SubRoute.CreateTask()) }
                     )
                 )
             }
-        },
-        bottomBar = {
-            if (currentSubRoute == SubRoute.None) {
-                NavigationBar(
-                    windowInsets = WindowInsets.navigationBars,
-                    containerColor = MaterialTheme.colorScheme.surface
-                ) {
-                    visibleTabs.forEach { tab ->
-                        val isSelected = currentTab == tab
-                        NavigationBarItem(
-                            selected = isSelected,
-                            onClick = {
-                                currentTab = tab
-                                subRouteStack.clear()
-                            },
-                            icon = {
-                                Icon(
-                                    imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                                    contentDescription = tab.title
+            add(
+                NothingQuickAction(
+                    title = "Report System Incident",
+                    subtitle = "Fast lock / LAN failure entry",
+                    icon = Icons.Default.ReportProblem,
+                    testTag = "quick_action_create_incident",
+                    onClick = {
+                        currentTab = MainTab.INCIDENTS
+                        subRouteStack.clear()
+                        systemIncidentViewModel.selectTab(0)
+                    }
+                )
+            )
+            if (canSelfJoinGroups) {
+                add(
+                    NothingQuickAction(
+                        title = "Exam Groups & Shifts",
+                        subtitle = "1-click group join or shift management",
+                        icon = Icons.Default.Groups,
+                        testTag = "quick_action_groups",
+                        onClick = { subRouteStack.add(SubRoute.GroupsList) }
+                    )
+                )
+            }
+            if (canCreateTask || permissionManager.canManageGroups()) {
+                add(
+                    NothingQuickAction(
+                        title = "Repeat Shift 1 → Shift 2",
+                        subtitle = "Copy selected tasks with relative timing",
+                        icon = Icons.Default.ContentCopy,
+                        testTag = "quick_action_repeat_shift",
+                        onClick = openRepeatShift1To2
+                    )
+                )
+            }
+            if (canManageUsers) {
+                add(
+                    NothingQuickAction(
+                        title = "Admin Console",
+                        subtitle = "Users, work roles & reset requests",
+                        icon = Icons.Default.AdminPanelSettings,
+                        testTag = "quick_action_admin",
+                        onClick = {
+                            currentTab = MainTab.ADMIN
+                            subRouteStack.clear()
+                        }
+                    )
+                )
+            }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = NothingTheme.colors.background,
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.padding(
+                        bottom = if (currentSubRoute == SubRoute.None) 84.dp else 8.dp
+                    )
+                )
+            },
+            topBar = {
+                if (currentSubRoute == SubRoute.None) {
+                    TopAppBar(
+                        title = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.taskz_launcher_icon_1791997779230),
+                                    contentDescription = "Taskz",
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(RoundedCornerShape(6.dp))
                                 )
-                            },
-                            label = { Text(tab.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            modifier = Modifier.testTag(tab.testTag)
+                                NothingDotMatrixText(
+                                    text = "TASKZ",
+                                    fontSize = 18.sp,
+                                    letterSpacing = 1.6.sp,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                if (currentTab != MainTab.HOME) {
+                                    Text(
+                                        text = "/ ${currentTab.title.uppercase()}",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = TechMonoFontFamily,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        color = NothingTheme.colors.textSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        },
+                        actions = {
+                            if (authContext.isOnLeave) {
+                                NothingTagChip(
+                                    text = "LEAVE",
+                                    containerColor = NothingAmber.copy(alpha = 0.14f),
+                                    contentColor = NothingAmber,
+                                    borderColor = NothingAmber.copy(alpha = 0.45f),
+                                    modifier = Modifier
+                                        .padding(end = 4.dp)
+                                        .testTag("topbar_on_leave_badge")
+                                )
+                            }
+
+                            Box {
+                                Surface(
+                                    onClick = { showRoleMenu = true },
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = NothingTheme.colors.surface,
+                                    border = BorderStroke(1.dp, NothingTheme.colors.border),
+                                    modifier = Modifier
+                                        .heightIn(min = 34.dp)
+                                        .testTag("topbar_role_switcher")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(start = 9.dp, end = 5.dp, top = 5.dp, bottom = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = authContext.activeRole.displayName,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = TechMonoFontFamily,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 10.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = "Switch Active Role",
+                                            tint = NothingTheme.colors.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                DropdownMenu(
+                                    expanded = showRoleMenu,
+                                    onDismissRequest = { showRoleMenu = false }
+                                ) {
+                                    val assigned = authContext.assignedRoles.ifEmpty {
+                                        listOf(
+                                            AssignedRoleInfo(
+                                                roleId = "",
+                                                roleCode = authContext.activeRole.code,
+                                                roleName = authContext.activeRole.displayName,
+                                                isPrimary = true
+                                            )
+                                        )
+                                    }
+                                    assigned.forEach { role ->
+                                        val isCurrent = role.roleCode.equals(authContext.activeRole.code, ignoreCase = true)
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = role.roleName,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            },
+                                            leadingIcon = if (isCurrent) {
+                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                            } else null,
+                                            onClick = {
+                                                showRoleMenu = false
+                                                if (!isCurrent) {
+                                                    coroutineScope.launch {
+                                                        val res = syncManager.switchActiveRole(role.roleCode)
+                                                        res.onFailure { err ->
+                                                            snackbarHostState.showSnackbar(err.message ?: "Unable to switch role")
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("role_option_${role.roleCode}")
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            val syncBadgeColor = when {
+                                !isOnline -> NothingTheme.colors.textSecondary
+                                isSyncing || syncMetadata.status == SyncStatus.SYNCING -> MaterialTheme.colorScheme.onSurface
+                                syncMetadata.pendingSyncCount > 0 || syncMetadata.status == SyncStatus.PENDING -> NothingAmber
+                                else -> NothingGreen
+                            }
+                            val syncIcon = when {
+                                !isOnline -> Icons.Default.CloudOff
+                                isSyncing || syncMetadata.status == SyncStatus.SYNCING -> Icons.Default.CloudSync
+                                else -> Icons.Default.CloudDone
+                            }
+                            Surface(
+                                shape = CircleShape,
+                                color = NothingTheme.colors.surface,
+                                border = BorderStroke(1.dp, NothingTheme.colors.border),
+                                modifier = Modifier.testTag("topbar_sync_status")
+                            ) {
+                                Icon(
+                                    imageVector = syncIcon,
+                                    contentDescription = when {
+                                        !isOnline -> "Offline"
+                                        isSyncing -> "Syncing"
+                                        syncMetadata.pendingSyncCount > 0 -> "Pending Sync"
+                                        else -> "Synced"
+                                    },
+                                    tint = syncBadgeColor,
+                                    modifier = Modifier
+                                        .padding(6.dp)
+                                        .size(14.dp)
+                                )
+                            }
+
+                            if (canManageUsers) {
+                                IconButton(
+                                    onClick = {
+                                        currentTab = MainTab.ADMIN
+                                        subRouteStack.clear()
+                                    },
+                                    modifier = Modifier.testTag("nav_tab_admin")
+                                ) {
+                                    Icon(
+                                        imageVector = if (currentTab == MainTab.ADMIN) Icons.Filled.AdminPanelSettings else Icons.Outlined.AdminPanelSettings,
+                                        contentDescription = "Admin Console",
+                                        tint = if (currentTab == MainTab.ADMIN) MaterialTheme.colorScheme.onBackground else NothingTheme.colors.textSecondary
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { showNotificationsSheet = true },
+                                modifier = Modifier.testTag("topbar_notifications_bell")
+                            ) {
+                                BadgedBox(
+                                    badge = {
+                                        if (unreadCount > 0) {
+                                            Badge(
+                                                containerColor = NothingRed,
+                                                contentColor = Color.White
+                                            ) {
+                                                Text(
+                                                    text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontFamily = TechMonoFontFamily,
+                                                        fontSize = 9.sp
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = if (unreadCount > 0) Icons.Filled.Notifications else Icons.Outlined.Notifications,
+                                        contentDescription = "Notifications",
+                                        tint = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = NothingTheme.colors.background,
+                            titleContentColor = MaterialTheme.colorScheme.onBackground
                         )
+                    )
+                }
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                when (val route = currentSubRoute) {
+                    is SubRoute.GroupsList -> {
+                        GroupsScreen(
+                            viewModel = groupsViewModel,
+                            onCreateGroupClick = { subRouteStack.add(SubRoute.CreateGroup) },
+                            onGroupClick = { group -> subRouteStack.add(SubRoute.GroupDetail(group)) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.CreateGroup -> {
+                        CreateGroupScreen(
+                            viewModel = groupsViewModel,
+                            onSuccess = { createdGroup ->
+                                subRouteStack.removeAt(subRouteStack.lastIndex)
+                                subRouteStack.add(SubRoute.GroupDetail(createdGroup))
+                            },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.EditGroup -> {
+                        EditGroupScreen(
+                            group = route.group,
+                            viewModel = groupsViewModel,
+                            onSuccess = { subRouteStack.removeAt(subRouteStack.lastIndex) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.GroupDetail -> {
+                        GroupDetailScreen(
+                            group = route.group,
+                            groupsViewModel = groupsViewModel,
+                            shiftsViewModel = shiftsViewModel,
+                            tasksViewModel = tasksViewModel,
+                            onEditGroupClick = { grp -> subRouteStack.add(SubRoute.EditGroup(grp)) },
+                            onAddShiftClick = { gid -> subRouteStack.add(SubRoute.CreateShift(gid)) },
+                            onViewMembersClick = { gid -> subRouteStack.add(SubRoute.GroupMembers(gid)) },
+                            onViewJoinRequestsClick = { gid -> subRouteStack.add(SubRoute.GroupJoinRequests(gid)) },
+                            onShiftClick = { shf -> subRouteStack.add(SubRoute.ShiftDetail(shf)) },
+                            onTaskClick = { tsk -> subRouteStack.add(SubRoute.TaskDetail(tsk)) },
+                            onCreateTaskClick = { gid -> subRouteStack.add(SubRoute.CreateTask(groupId = gid)) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.GroupMembers -> {
+                        GroupMembersScreen(
+                            groupId = route.groupId,
+                            viewModel = groupsViewModel,
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.GroupJoinRequests -> {
+                        GroupJoinRequestsScreen(
+                            groupId = route.groupId,
+                            viewModel = groupsViewModel,
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.CreateShift -> {
+                        CreateShiftScreen(
+                            groupId = route.groupId,
+                            viewModel = shiftsViewModel,
+                            onSuccess = { createdShift ->
+                                subRouteStack.removeAt(subRouteStack.lastIndex)
+                                subRouteStack.add(SubRoute.ShiftDetail(createdShift))
+                            },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.EditShift -> {
+                        EditShiftScreen(
+                            shift = route.shift,
+                            viewModel = shiftsViewModel,
+                            onSuccess = { subRouteStack.removeAt(subRouteStack.lastIndex) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.ShiftDetail -> {
+                        ShiftDetailScreen(
+                            shift = route.shift,
+                            shiftsViewModel = shiftsViewModel,
+                            tasksViewModel = tasksViewModel,
+                            onEditShiftClick = { shf -> subRouteStack.add(SubRoute.EditShift(shf)) },
+                            onCopyShiftClick = { shf -> subRouteStack.add(SubRoute.CopyShift(shf)) },
+                            onAddTaskClick = { gid, sid -> subRouteStack.add(SubRoute.CreateTask(groupId = gid, shiftId = sid)) },
+                            onTaskClick = { tsk -> subRouteStack.add(SubRoute.TaskDetail(tsk)) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.CopyShift -> {
+                        CopyShiftScreen(
+                            sourceShift = route.shift,
+                            shiftsViewModel = shiftsViewModel,
+                            tasksViewModel = tasksViewModel,
+                            onSuccess = { copiedShift ->
+                                subRouteStack.removeAt(subRouteStack.lastIndex)
+                                subRouteStack.add(SubRoute.ShiftDetail(copiedShift))
+                            },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.CreateTask -> {
+                        CreateTaskScreen(
+                            preselectedGroupId = route.groupId,
+                            preselectedShiftId = route.shiftId,
+                            tasksViewModel = tasksViewModel,
+                            groupsViewModel = groupsViewModel,
+                            shiftsViewModel = shiftsViewModel,
+                            onSuccess = { createdTask ->
+                                subRouteStack.removeAt(subRouteStack.lastIndex)
+                                subRouteStack.add(SubRoute.TaskDetail(createdTask))
+                            },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.TaskDetail -> {
+                        TaskDetailScreen(
+                            task = route.task,
+                            viewModel = tasksViewModel,
+                            onViewParticipantsClick = { tid -> subRouteStack.add(SubRoute.TaskParticipants(tid)) },
+                            onViewJoinRequestsClick = { tid -> subRouteStack.add(SubRoute.TaskJoinRequests(tid)) },
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.TaskParticipants -> {
+                        TaskParticipantsScreen(
+                            taskId = route.taskId,
+                            viewModel = tasksViewModel,
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.TaskJoinRequests -> {
+                        TaskJoinRequestsScreen(
+                            taskId = route.taskId,
+                            viewModel = tasksViewModel,
+                            onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.AlarmReliabilitySettings -> {
+                        AlarmReliabilitySettingsScreen(
+                            onNavigateBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    SubRoute.None -> {
+                        AnimatedContent(
+                            targetState = currentTab,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(160)) togetherWith fadeOut(animationSpec = tween(120))
+                            },
+                            label = "main_tab_transition"
+                        ) { activeTab ->
+                            when (activeTab) {
+                                MainTab.HOME -> HomeScreen(
+                                    viewModel = homeViewModel,
+                                    onNavigateToTasks = { currentTab = MainTab.TASKS },
+                                    onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
+                                    onNavigateToProfile = { currentTab = MainTab.PROFILE },
+                                    onNavigateToAdmin = { currentTab = MainTab.ADMIN },
+                                    onNavigateToIncidents = { currentTab = MainTab.INCIDENTS },
+                                    onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
+                                    onSignedOut = onLogoutSuccess,
+                                    tasks = allTasks,
+                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) }
+                                )
+                                MainTab.TASKS -> TasksScreen(
+                                    viewModel = tasksViewModel,
+                                    onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
+                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
+                                    onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) },
+                                    onRepeatShiftClick = openRepeatShift1To2
+                                )
+                                MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
+                                    viewModel = systemIncidentViewModel
+                                )
+                                MainTab.PROFILE -> ProfileScreen(
+                                    viewModel = profileViewModel,
+                                    onLogoutSuccess = onLogoutSuccess,
+                                    onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
+                                    onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
+                                    onNavigateToAdmin = { currentTab = MainTab.ADMIN },
+                                    canManageUsers = canManageUsers,
+                                    canSelfJoinGroups = canSelfJoinGroups
+                                )
+                                MainTab.ADMIN -> AdminScreen(
+                                    viewModel = adminViewModel,
+                                    workRolesViewModel = workRolesViewModel
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (val route = currentSubRoute) {
-                is SubRoute.GroupsList -> {
-                    GroupsScreen(
-                        viewModel = groupsViewModel,
-                        onCreateGroupClick = { subRouteStack.add(SubRoute.CreateGroup) },
-                        onGroupClick = { group -> subRouteStack.add(SubRoute.GroupDetail(group)) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.CreateGroup -> {
-                    CreateGroupScreen(
-                        viewModel = groupsViewModel,
-                        onSuccess = { createdGroup ->
-                            subRouteStack.removeAt(subRouteStack.lastIndex)
-                            subRouteStack.add(SubRoute.GroupDetail(createdGroup))
-                        },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.EditGroup -> {
-                    EditGroupScreen(
-                        group = route.group,
-                        viewModel = groupsViewModel,
-                        onSuccess = { subRouteStack.removeAt(subRouteStack.lastIndex) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.GroupDetail -> {
-                    GroupDetailScreen(
-                        group = route.group,
-                        groupsViewModel = groupsViewModel,
-                        shiftsViewModel = shiftsViewModel,
-                        tasksViewModel = tasksViewModel,
-                        onEditGroupClick = { grp -> subRouteStack.add(SubRoute.EditGroup(grp)) },
-                        onAddShiftClick = { gid -> subRouteStack.add(SubRoute.CreateShift(gid)) },
-                        onViewMembersClick = { gid -> subRouteStack.add(SubRoute.GroupMembers(gid)) },
-                        onViewJoinRequestsClick = { gid -> subRouteStack.add(SubRoute.GroupJoinRequests(gid)) },
-                        onShiftClick = { shf -> subRouteStack.add(SubRoute.ShiftDetail(shf)) },
-                        onTaskClick = { tsk -> subRouteStack.add(SubRoute.TaskDetail(tsk)) },
-                        onCreateTaskClick = { gid -> subRouteStack.add(SubRoute.CreateTask(groupId = gid)) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.GroupMembers -> {
-                    GroupMembersScreen(
-                        groupId = route.groupId,
-                        viewModel = groupsViewModel,
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.GroupJoinRequests -> {
-                    GroupJoinRequestsScreen(
-                        groupId = route.groupId,
-                        viewModel = groupsViewModel,
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.CreateShift -> {
-                    CreateShiftScreen(
-                        groupId = route.groupId,
-                        viewModel = shiftsViewModel,
-                        onSuccess = { createdShift ->
-                            subRouteStack.removeAt(subRouteStack.lastIndex)
-                            subRouteStack.add(SubRoute.ShiftDetail(createdShift))
-                        },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.EditShift -> {
-                    EditShiftScreen(
-                        shift = route.shift,
-                        viewModel = shiftsViewModel,
-                        onSuccess = { subRouteStack.removeAt(subRouteStack.lastIndex) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.ShiftDetail -> {
-                    ShiftDetailScreen(
-                        shift = route.shift,
-                        shiftsViewModel = shiftsViewModel,
-                        tasksViewModel = tasksViewModel,
-                        onEditShiftClick = { shf -> subRouteStack.add(SubRoute.EditShift(shf)) },
-                        onCopyShiftClick = { shf -> subRouteStack.add(SubRoute.CopyShift(shf)) },
-                        onAddTaskClick = { gid, sid -> subRouteStack.add(SubRoute.CreateTask(groupId = gid, shiftId = sid)) },
-                        onTaskClick = { tsk -> subRouteStack.add(SubRoute.TaskDetail(tsk)) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.CopyShift -> {
-                    CopyShiftScreen(
-                        sourceShift = route.shift,
-                        shiftsViewModel = shiftsViewModel,
-                        tasksViewModel = tasksViewModel,
-                        onSuccess = { copiedShift ->
-                            subRouteStack.removeAt(subRouteStack.lastIndex)
-                            subRouteStack.add(SubRoute.ShiftDetail(copiedShift))
-                        },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.CreateTask -> {
-                    CreateTaskScreen(
-                        preselectedGroupId = route.groupId,
-                        preselectedShiftId = route.shiftId,
-                        tasksViewModel = tasksViewModel,
-                        groupsViewModel = groupsViewModel,
-                        shiftsViewModel = shiftsViewModel,
-                        onSuccess = { createdTask ->
-                            subRouteStack.removeAt(subRouteStack.lastIndex)
-                            subRouteStack.add(SubRoute.TaskDetail(createdTask))
-                        },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.TaskDetail -> {
-                    TaskDetailScreen(
-                        task = route.task,
-                        viewModel = tasksViewModel,
-                        onViewParticipantsClick = { tid -> subRouteStack.add(SubRoute.TaskParticipants(tid)) },
-                        onViewJoinRequestsClick = { tid -> subRouteStack.add(SubRoute.TaskJoinRequests(tid)) },
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.TaskParticipants -> {
-                    TaskParticipantsScreen(
-                        taskId = route.taskId,
-                        viewModel = tasksViewModel,
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.TaskJoinRequests -> {
-                    TaskJoinRequestsScreen(
-                        taskId = route.taskId,
-                        viewModel = tasksViewModel,
-                        onBackClick = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                is SubRoute.AlarmReliabilitySettings -> {
-                    AlarmReliabilitySettingsScreen(
-                        onNavigateBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
-                    )
-                }
-                SubRoute.None -> {
-                    when (currentTab) {
-                        MainTab.HOME -> HomeScreen(
-                            viewModel = homeViewModel,
-                            onNavigateToTasks = { currentTab = MainTab.TASKS },
-                            onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
-                            onNavigateToProfile = { currentTab = MainTab.PROFILE },
-                            onNavigateToAdmin = { currentTab = MainTab.ADMIN },
-                            onNavigateToIncidents = { currentTab = MainTab.INCIDENTS },
-                            onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
-                            onSignedOut = onLogoutSuccess
-                        )
-                        MainTab.TASKS -> TasksScreen(
-                            viewModel = tasksViewModel,
-                            onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
-                            onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
-                            onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) },
-                            onRepeatShiftClick = {
-                                val candidates = tasksViewModel.findShift1Candidates(allShifts)
-                                when {
-                                    candidates.isEmpty() -> {
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar("Create an Exam Group & Shift 1 first")
-                                        }
-                                    }
-                                    candidates.size == 1 -> {
-                                        subRouteStack.add(SubRoute.CopyShift(candidates.first()))
-                                    }
-                                    else -> {
-                                        pendingShift1Candidates = candidates
-                                    }
-                                }
-                            }
-                        )
-                        MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
-                            viewModel = systemIncidentViewModel
-                        )
-                        MainTab.PROFILE -> ProfileScreen(
-                            viewModel = profileViewModel,
-                            onLogoutSuccess = onLogoutSuccess
-                        )
-                        MainTab.ADMIN -> AdminScreen(
-                            viewModel = adminViewModel,
-                            workRolesViewModel = workRolesViewModel
-                        )
-                    }
-                }
-            }
+
+        if (currentSubRoute == SubRoute.None) {
+            NothingFloatingNavCapsule(
+                leftItems = leftNavItems,
+                rightItems = rightNavItems,
+                selectedId = currentTab.name,
+                isActionSheetOpen = showCreateActionSheet,
+                onSelect = { dest ->
+                    currentTab = MainTab.valueOf(dest.id)
+                    subRouteStack.clear()
+                },
+                onCreateClick = { showCreateActionSheet = !showCreateActionSheet },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+
+        if (showCreateActionSheet) {
+            NothingCreateActionSheet(
+                actions = quickActions,
+                onDismiss = { showCreateActionSheet = false }
+            )
         }
 
         if (showNotificationsSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showNotificationsSheet = false },
+                containerColor = NothingTheme.colors.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.testTag("notifications_bottom_sheet")
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -709,15 +892,15 @@ fun MainShell(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text(
-                                text = "Notifications",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                            NothingDotMatrixText(
+                                text = "NOTIFICATIONS",
+                                fontSize = 18.sp,
+                                letterSpacing = 1.4.sp
                             )
                             Text(
-                                text = "${unreadCount} unread in ${authContext.activeRole.displayName}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "$unreadCount unread · ${authContext.activeRole.displayName}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textSecondary
                             )
                         }
                         if (unreadCount > 0) {
@@ -727,42 +910,23 @@ fun MainShell(
                                 },
                                 modifier = Modifier.testTag("mark_all_notifications_read")
                             ) {
-                                Text("Mark all read")
+                                Text(
+                                    text = "MARK ALL READ",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = TechMonoFontFamily,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
                             }
                         }
                     }
 
                     if (notifications.isEmpty()) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Notifications,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "You're all caught up",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "Task assignments, overdue alerts, incident escalations, and access updates appear here.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        NothingEmptyState(
+                            title = "ALL CAUGHT UP",
+                            subtitle = "Task alerts, escalations and access updates appear here.",
+                            icon = Icons.Outlined.Notifications
+                        )
                     } else {
                         LazyColumn(
                             modifier = Modifier
@@ -772,52 +936,47 @@ fun MainShell(
                         ) {
                             items(notifications, key = { it.id }) { item ->
                                 val category = NotificationCategory.fromRaw(item.category, item.type)
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            coroutineScope.launch {
-                                                syncManager.markNotificationRead(item.id)
-                                            }
-                                            showNotificationsSheet = false
-                                            val target = NotificationDeepLinkRouter.parse(
-                                                deepLink = item.deepLink,
-                                                taskId = item.taskId,
-                                                incidentId = item.incidentId,
-                                                category = item.category,
-                                                notificationId = item.id
-                                            )
-                                            if (target != null) {
-                                                NotificationDeepLinkRouter.route(target)
-                                            }
+                                NothingHairlineCard(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            syncManager.markNotificationRead(item.id)
                                         }
-                                        .testTag("notification_item_${item.id}"),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (item.isRead) {
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                                        } else {
-                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+                                        showNotificationsSheet = false
+                                        val target = NotificationDeepLinkRouter.parse(
+                                            deepLink = item.deepLink,
+                                            taskId = item.taskId,
+                                            incidentId = item.incidentId,
+                                            category = item.category,
+                                            notificationId = item.id
+                                        )
+                                        if (target != null) {
+                                            NotificationDeepLinkRouter.route(target)
                                         }
-                                    )
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    containerColor = if (item.isRead) {
+                                        NothingTheme.colors.surface
+                                    } else {
+                                        NothingTheme.colors.surfaceElevated
+                                    },
+                                    borderColor = if (!item.isRead && category.urgent) {
+                                        NothingRed.copy(alpha = 0.55f)
+                                    } else {
+                                        NothingTheme.colors.border
+                                    },
+                                    contentPadding = PaddingValues(12.dp),
+                                    modifier = Modifier.testTag("notification_item_${item.id}")
                                 ) {
                                     Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(14.dp),
+                                        modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.Top,
                                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
                                         if (!item.isRead) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .padding(top = 6.dp)
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(
-                                                        if (category.urgent) MaterialTheme.colorScheme.error
-                                                        else MaterialTheme.colorScheme.primary
-                                                    )
+                                            NothingStatusDot(
+                                                color = if (category.urgent) NothingRed else MaterialTheme.colorScheme.onSurface,
+                                                size = 7.dp,
+                                                modifier = Modifier.padding(top = 5.dp)
                                             )
                                         }
                                         Column(
@@ -829,42 +988,29 @@ fun MainShell(
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = if (category.urgent) {
-                                                        MaterialTheme.colorScheme.errorContainer
-                                                    } else {
-                                                        MaterialTheme.colorScheme.secondaryContainer
-                                                    }
-                                                ) {
-                                                    Text(
-                                                        text = category.displayName,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = if (category.urgent) {
-                                                            MaterialTheme.colorScheme.onErrorContainer
-                                                        } else {
-                                                            MaterialTheme.colorScheme.onSecondaryContainer
-                                                        },
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                                    )
-                                                }
+                                                NothingTagChip(
+                                                    text = category.displayName.uppercase(),
+                                                    containerColor = if (category.urgent) NothingRed.copy(alpha = 0.14f) else NothingTheme.colors.surface,
+                                                    contentColor = if (category.urgent) NothingRed else MaterialTheme.colorScheme.onSurface,
+                                                    borderColor = if (category.urgent) NothingRed.copy(alpha = 0.4f) else NothingTheme.colors.border
+                                                )
                                                 Text(
                                                     text = item.createdAt.take(16).replace("T", " "),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                                    color = NothingTheme.colors.textSecondary
                                                 )
                                             }
                                             Text(
                                                 text = item.title,
                                                 style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = if (item.isRead) FontWeight.Medium else FontWeight.Bold
+                                                fontWeight = if (item.isRead) FontWeight.Medium else FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
                                             if (!item.body.isNullOrBlank()) {
                                                 Text(
                                                     text = item.body,
                                                     style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    color = NothingTheme.colors.textSecondary,
                                                     maxLines = 2,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
@@ -876,7 +1022,7 @@ fun MainShell(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                 }
             }
         }
@@ -885,13 +1031,16 @@ fun MainShell(
             val candidates = pendingShift1Candidates.orEmpty()
             AlertDialog(
                 onDismissRequest = { pendingShift1Candidates = null },
-                title = { Text("Select Exam Shift 1", fontWeight = FontWeight.Bold) },
+                containerColor = NothingTheme.colors.surface,
+                title = {
+                    NothingDotMatrixText(text = "SELECT SHIFT 1", fontSize = 16.sp)
+                },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Choose which exam's Shift 1 to copy:",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NothingTheme.colors.textSecondary
                         )
                         candidates.forEach { shiftCandidate ->
                             val group = allGroups.firstOrNull { it.id == shiftCandidate.groupId }
@@ -900,34 +1049,27 @@ fun MainShell(
                                 group?.code?.takeIf { it.isNotBlank() }
                             ).joinToString(" · ")
                             val timeLabel = TaskItem.formatForDisplay(shiftCandidate.startsAt) ?: shiftCandidate.startsAt
-                            OutlinedButton(
+                            NothingHairlineCard(
                                 onClick = {
                                     pendingShift1Candidates = null
                                     subRouteStack.add(SubRoute.CopyShift(shiftCandidate))
                                 },
                                 shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("pick_shift1_candidate_${shiftCandidate.id}")
+                                containerColor = NothingTheme.colors.surfaceElevated,
+                                contentPadding = PaddingValues(12.dp),
+                                modifier = Modifier.testTag("pick_shift1_candidate_${shiftCandidate.id}")
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    Text(
-                                        text = if (groupLabel.isNotBlank()) "$groupLabel · ${shiftCandidate.name}" else shiftCandidate.name,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "$timeLabel (${shiftCandidate.taskCount} tasks)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                Text(
+                                    text = if (groupLabel.isNotBlank()) "$groupLabel · ${shiftCandidate.name}" else shiftCandidate.name,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "$timeLabel (${shiftCandidate.taskCount} tasks)",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                    color = NothingTheme.colors.textSecondary
+                                )
                             }
                         }
                     }
@@ -942,4 +1084,3 @@ fun MainShell(
         }
     }
 }
-

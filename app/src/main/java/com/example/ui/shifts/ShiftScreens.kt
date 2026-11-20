@@ -3,12 +3,15 @@ package com.example.ui.shifts
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,12 +42,10 @@ import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +53,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,17 +73,26 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.TaskzApplication
 import com.example.core.model.OrgCentre
 import com.example.core.model.Shift
 import com.example.core.model.TaskItem
+import com.example.ui.common.NothingDivider
+import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.NothingSectionHeader
+import com.example.ui.common.NothingTagChip
 import com.example.ui.common.TaskzTextField
 import com.example.ui.tasks.TaskCard
 import com.example.ui.tasks.TasksViewModel
-import com.example.ui.theme.TaskzError
-import com.example.ui.theme.TaskzSuccess
-import com.example.ui.theme.TaskzWarning
+import com.example.ui.theme.NothingAmber
+import com.example.ui.theme.NothingGreen
+import com.example.ui.theme.NothingRed
+import com.example.ui.theme.NothingTheme
+import com.example.ui.theme.TechMonoFontFamily
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Calendar
@@ -164,16 +173,12 @@ fun ShiftCard(
     isOnLeave: Boolean = false,
     onDeleteClick: (() -> Unit)? = null
 ) {
-    Card(
+    NothingHairlineCard(
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .testTag("shift_card_${shift.id}")
+        onClick = onClick,
+        modifier = modifier.testTag("shift_card_${shift.id}")
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -182,39 +187,30 @@ fun ShiftCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = shift.name,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     if (shift.shiftNumber != null) {
                         Text(
-                            text = "Shift #${shift.shiftNumber}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            text = "SHIFT #${shift.shiftNumber}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = when (shift.status) {
-                            "active" -> TaskzSuccess.copy(alpha = 0.15f)
-                            "completed" -> MaterialTheme.colorScheme.surfaceVariant
-                            else -> MaterialTheme.colorScheme.secondaryContainer
-                        }
-                    ) {
-                        Text(
-                            text = shift.status.uppercase(),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = when (shift.status) {
-                                    "active" -> TaskzSuccess
-                                    "completed" -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    else -> MaterialTheme.colorScheme.onSecondaryContainer
-                                }
-                            ),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                    val statusColor = when (shift.status) {
+                        "active" -> NothingGreen
+                        "completed" -> NothingTheme.colors.textSecondary
+                        else -> MaterialTheme.colorScheme.onSurface
                     }
+                    NothingTagChip(
+                        text = shift.status.uppercase(),
+                        contentColor = statusColor,
+                        containerColor = if (shift.status == "active") NothingGreen.copy(alpha = 0.14f) else NothingTheme.colors.surfaceElevated,
+                        borderColor = if (shift.status == "active") NothingGreen.copy(alpha = 0.45f) else NothingTheme.colors.border
+                    )
                     if (onDeleteClick != null) {
                         IconButton(
                             onClick = onDeleteClick,
@@ -223,7 +219,7 @@ fun ShiftCard(
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Delete Shift",
-                                tint = MaterialTheme.colorScheme.error
+                                tint = NothingRed
                             )
                         }
                     }
@@ -236,13 +232,16 @@ fun ShiftCard(
                 Icon(
                     imageVector = Icons.Default.AccessTime,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    tint = NothingTheme.colors.textSecondary,
+                    modifier = Modifier.size(14.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = formatShiftRange(shift.startsAt, shift.endsAt),
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = TechMonoFontFamily,
+                        fontWeight = FontWeight.Medium
+                    ),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -252,7 +251,7 @@ fun ShiftCard(
                 Text(
                     text = shift.notes,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = NothingTheme.colors.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -265,51 +264,22 @@ fun ShiftCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Text(
-                        text = "${shift.taskCount} Tasks",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Text(
-                        text = "${shift.requiredManpower} Required",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = TaskzSuccess.copy(alpha = 0.15f)
-                ) {
-                    Text(
-                        text = "${shift.assignedManpower} Assigned",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TaskzSuccess),
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
-                }
+                NothingTagChip(text = "${shift.taskCount} TASKS")
+                NothingTagChip(text = "${shift.requiredManpower} REQ")
+                NothingTagChip(
+                    text = "${shift.assignedManpower} ASGN",
+                    contentColor = NothingGreen,
+                    containerColor = NothingGreen.copy(alpha = 0.14f),
+                    borderColor = NothingGreen.copy(alpha = 0.45f)
+                )
 
                 if (shift.vacantManpower > 0) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = TaskzError.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            text = "${shift.vacantManpower} Vacant",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TaskzError),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
-                    }
+                    NothingTagChip(
+                        text = "${shift.vacantManpower} VAC",
+                        contentColor = NothingRed,
+                        containerColor = NothingRed.copy(alpha = 0.14f),
+                        borderColor = NothingRed.copy(alpha = 0.45f)
+                    )
                 }
             }
 
@@ -318,7 +288,8 @@ fun ShiftCard(
                 OutlinedButton(
                     onClick = onJoinAllTasksClick,
                     enabled = !isOnLeave,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    border = BorderStroke(1.dp, NothingTheme.colors.border),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
@@ -381,7 +352,9 @@ fun CreateShiftScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -397,9 +370,9 @@ fun CreateShiftScreen(
                     Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Create Shift",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                NothingDotMatrixText(
+                    text = "CREATE SHIFT",
+                    fontSize = 20.sp
                 )
             }
 
@@ -478,12 +451,9 @@ fun CreateShiftScreen(
                 timeButtonTag = "btn_create_shift_end_time"
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            Text(
-                text = "LANs (Optional)",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-            )
+            NothingSectionHeader(title = "LANS (OPTIONAL)")
             Spacer(modifier = Modifier.height(6.dp))
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -496,7 +466,25 @@ fun CreateShiftScreen(
                         onClick = {
                             if (checked) selectedLans.remove(lan) else selectedLans.add(lan)
                         },
-                        label = { Text(lan) },
+                        label = {
+                            Text(
+                                text = lan,
+                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = TechMonoFontFamily)
+                            )
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NothingTheme.colors.accentPrimary,
+                            selectedLabelColor = NothingTheme.colors.onAccentPrimary,
+                            containerColor = NothingTheme.colors.surfaceElevated,
+                            labelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = checked,
+                            borderColor = NothingTheme.colors.border,
+                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                        ),
                         modifier = Modifier.testTag("chip_shift_${lan.lowercase().replace(" ", "_")}")
                     )
                 }
@@ -517,22 +505,25 @@ fun CreateShiftScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Optional 11-Milestone Standard Exam Checklist
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            NothingHairlineCard(
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Exam Shift Checklist", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Exam Shift Checklist",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            )
                             Text(
                                 text = "Auto-create ${STANDARD_EXAM_CHECKLIST.size} exam tasks from T0",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = NothingTheme.colors.textSecondary
                             )
                         }
                         Switch(
@@ -555,7 +546,7 @@ fun CreateShiftScreen(
 
                     if (loadStandardChecklist) {
                         Spacer(modifier = Modifier.height(10.dp))
-                        HorizontalDivider()
+                        NothingDivider()
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Row(
@@ -566,14 +557,16 @@ fun CreateShiftScreen(
                             Column {
                                 Text(
                                     text = "Drive Download Anchor (T0)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                    color = NothingTheme.colors.textSecondary
                                 )
                                 Text(
                                     text = formatPickerTime(checklistAnchorMillis),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontFamily = TechMonoFontFamily,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             OutlinedButton(
@@ -582,11 +575,13 @@ fun CreateShiftScreen(
                                         checklistAnchorMillis = picked
                                     }
                                 },
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(1.dp, NothingTheme.colors.border),
                                 modifier = Modifier.heightIn(min = 48.dp)
                             ) {
                                 Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Set T0")
+                                Text("Set T0", color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
 
@@ -634,16 +629,18 @@ fun CreateShiftScreen(
                                     if (item.shift1Only) {
                                         Text(
                                             text = "Shift 1 only",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = TaskzWarning
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                            color = NothingAmber
                                         )
                                     }
                                 }
                                 Text(
                                     text = itemTime,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = TechMonoFontFamily,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -655,7 +652,7 @@ fun CreateShiftScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = errorMessage!!,
-                    color = MaterialTheme.colorScheme.error,
+                    color = NothingRed,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -675,7 +672,7 @@ fun CreateShiftScreen(
                     val combinedNotes = buildList {
                         if (selectedLans.isNotEmpty()) add("LAN: ${selectedLans.joinToString(", ")}")
                         if (notes.isNotBlank()) add(notes.trim())
-                    }.joinToString(" • ").takeIf { it.isNotBlank() }
+                    }.joinToString(" · ").takeIf { it.isNotBlank() }
 
                     val startsIso = Instant.ofEpochMilli(startMillis).toString()
                     val endsIso = Instant.ofEpochMilli(endMillis).toString()
@@ -706,20 +703,30 @@ fun CreateShiftScreen(
                     )
                 },
                 enabled = !isLoading,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
+                    .heightIn(min = 50.dp)
                     .testTag("submit_create_shift")
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = NothingTheme.colors.onAccentPrimary
+                    )
                 } else {
                     Text(
-                        if (loadStandardChecklist && selectedChecklistKeys.isNotEmpty()) {
+                        text = if (loadStandardChecklist && selectedChecklistKeys.isNotEmpty()) {
                             "Create Shift & ${selectedChecklistKeys.size} Tasks"
                         } else {
                             "Create Shift"
-                        }
+                        },
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -727,6 +734,7 @@ fun CreateShiftScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditShiftScreen(
     shift: Shift,
@@ -751,7 +759,7 @@ fun EditShiftScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(containerColor = NothingTheme.colors.background) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -764,12 +772,18 @@ fun EditShiftScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBackClick) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = NothingTheme.colors.textPrimary
+                    )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Edit Shift",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                NothingDotMatrixText(
+                    text = "EDIT SHIFT",
+                    fontSize = 18.sp,
+                    letterSpacing = 1.2.sp,
+                    color = NothingTheme.colors.textPrimary
                 )
             }
 
@@ -848,21 +862,44 @@ fun EditShiftScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("Status", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+            NothingSectionHeader(title = "STATUS")
             Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("scheduled", "active", "completed", "cancelled").forEach { s ->
+                    val selected = status == s
                     FilterChip(
-                        selected = status == s,
+                        selected = selected,
                         onClick = { status = s },
-                        label = { Text(s.replaceFirstChar { it.uppercase() }) }
+                        label = {
+                            Text(
+                                text = s.uppercase(),
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily)
+                            )
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = NothingTheme.colors.surface,
+                            labelColor = NothingTheme.colors.textSecondary,
+                            selectedContainerColor = NothingTheme.colors.accentPrimary,
+                            selectedLabelColor = NothingTheme.colors.onAccentPrimary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = selected,
+                            borderColor = NothingTheme.colors.border,
+                            selectedBorderColor = NothingTheme.colors.accentPrimary
+                        )
                     )
                 }
             }
 
             if (errorMessage != null) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(text = errorMessage!!, color = MaterialTheme.colorScheme.error)
+                Text(
+                    text = errorMessage!!,
+                    color = NothingRed,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -889,14 +926,23 @@ fun EditShiftScreen(
                     )
                 },
                 enabled = !isLoading,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
+                    .heightIn(min = 50.dp)
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = NothingTheme.colors.onAccentPrimary
+                    )
                 } else {
-                    Text("Save Changes")
+                    Text("Save Changes", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -946,6 +992,7 @@ fun ShiftDetailScreen(
     BackHandler(onBack = onBackClick)
 
     Scaffold(
+        containerColor = NothingTheme.colors.background,
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Column(
@@ -961,12 +1008,18 @@ fun ShiftDetailScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onBackClick) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NothingTheme.colors.textPrimary
+                        )
                     }
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Shift Details",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    NothingDotMatrixText(
+                        text = "SHIFT DETAILS",
+                        fontSize = 18.sp,
+                        letterSpacing = 1.2.sp,
+                        color = NothingTheme.colors.textPrimary
                     )
                 }
 
@@ -978,7 +1031,11 @@ fun ShiftDetailScreen(
                                 onClick = { onEditShiftClick(activeShift) },
                                 modifier = Modifier.testTag("btn_edit_shift")
                             ) {
-                                Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit Shift",
+                                    tint = NothingTheme.colors.textPrimary
+                                )
                             }
                         }
                         if (canDeleteShift) {
@@ -989,7 +1046,7 @@ fun ShiftDetailScreen(
                                 Icon(
                                     imageVector = Icons.Default.Delete,
                                     contentDescription = "Delete Shift",
-                                    tint = MaterialTheme.colorScheme.error
+                                    tint = NothingRed
                                 )
                             }
                         }
@@ -999,97 +1056,115 @@ fun ShiftDetailScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
-                modifier = Modifier.fillMaxWidth()
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                containerColor = NothingTheme.colors.surface,
+                contentPadding = PaddingValues(16.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = activeShift.name,
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer
-                        ) {
-                            Text(
-                                text = activeShift.status.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = activeShift.name,
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = NothingTheme.colors.textPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    NothingTagChip(
+                        text = activeShift.status.uppercase(),
+                        containerColor = if (activeShift.status == "active") NothingGreen.copy(alpha = 0.14f) else NothingTheme.colors.surfaceElevated,
+                        contentColor = if (activeShift.status == "active") NothingGreen else NothingTheme.colors.textPrimary,
+                        borderColor = if (activeShift.status == "active") NothingGreen.copy(alpha = 0.45f) else NothingTheme.colors.border
+                    )
+                }
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.AccessTime,
+                        contentDescription = null,
+                        tint = NothingTheme.colors.textSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = formatShiftRange(activeShift.startsAt, activeShift.endsAt),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = TechMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = NothingTheme.colors.textPrimary
+                    )
+                }
+
+                if (!activeShift.notes.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = activeShift.notes!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textSecondary
+                    )
+                }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.AccessTime,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
+                Spacer(modifier = Modifier.height(14.dp))
+                NothingDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NothingDotMatrixText(
+                            text = shiftTasks.size.toString(),
+                            fontSize = 20.sp,
+                            color = NothingTheme.colors.textPrimary
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = formatShiftRange(activeShift.startsAt, activeShift.endsAt),
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                            text = "TASKS",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
-
-                    if (!activeShift.notes.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NothingDotMatrixText(
+                            text = activeShift.requiredManpower.toString(),
+                            fontSize = 20.sp,
+                            color = NothingTheme.colors.textPrimary
+                        )
                         Text(
-                            text = activeShift.notes!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "REQUIRED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = shiftTasks.size.toString(),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(text = "Tasks", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = activeShift.requiredManpower.toString(),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            )
-                            Text(text = "Required", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = activeShift.assignedManpower.toString(),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = TaskzSuccess)
-                            )
-                            Text(text = "Assigned", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = activeShift.vacantManpower.toString(),
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (activeShift.vacantManpower > 0) TaskzError else MaterialTheme.colorScheme.onSurface
-                                )
-                            )
-                            Text(text = "Vacancies", style = MaterialTheme.typography.labelSmall)
-                        }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NothingDotMatrixText(
+                            text = activeShift.assignedManpower.toString(),
+                            fontSize = 20.sp,
+                            color = NothingGreen
+                        )
+                        Text(
+                            text = "ASSIGNED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NothingDotMatrixText(
+                            text = activeShift.vacantManpower.toString(),
+                            fontSize = 20.sp,
+                            color = if (activeShift.vacantManpower > 0) NothingRed else NothingTheme.colors.textPrimary
+                        )
+                        Text(
+                            text = "VACANCIES",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
+                        )
                     }
                 }
             }
@@ -1100,7 +1175,11 @@ fun ShiftDetailScreen(
                 Button(
                     onClick = { shiftsViewModel.joinShiftTasksBulk(activeShift.id) },
                     enabled = !authContext.isOnLeave,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
@@ -1123,6 +1202,9 @@ fun ShiftDetailScreen(
                 ) {
                     OutlinedButton(
                         onClick = { onCopyShiftClick(activeShift) },
+                        shape = RoundedCornerShape(999.dp),
+                        border = BorderStroke(1.dp, NothingTheme.colors.border),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                         modifier = Modifier
                             .weight(1f)
                             .heightIn(min = 48.dp)
@@ -1135,6 +1217,11 @@ fun ShiftDetailScreen(
 
                     Button(
                         onClick = { onAddTaskClick(activeShift.groupId, activeShift.id) },
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NothingTheme.colors.accentPrimary,
+                            contentColor = NothingTheme.colors.onAccentPrimary
+                        ),
                         modifier = Modifier
                             .weight(1f)
                             .heightIn(min = 48.dp)
@@ -1142,7 +1229,7 @@ fun ShiftDetailScreen(
                     ) {
                         Icon(imageVector = Icons.Default.Add, contentDescription = "Add Task", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add Task")
+                        Text("Add Task", fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -1151,6 +1238,9 @@ fun ShiftDetailScreen(
                 OutlinedButton(
                     onClick = { showChecklistDialog = true },
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(999.dp),
+                    border = BorderStroke(1.dp, NothingTheme.colors.border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
@@ -1165,6 +1255,9 @@ fun ShiftDetailScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { onCopyShiftClick(activeShift) },
+                        shape = RoundedCornerShape(999.dp),
+                        border = BorderStroke(1.dp, NothingTheme.colors.border),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
@@ -1179,9 +1272,9 @@ fun ShiftDetailScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text(
-                text = "Shift Tasks (${shiftTasks.size})",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            NothingSectionHeader(
+                title = "SHIFT TASKS (${shiftTasks.size})",
+                useDotMatrix = true
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1189,11 +1282,22 @@ fun ShiftDetailScreen(
             if (shiftTasks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "No tasks in this shift yet", style = MaterialTheme.typography.bodyMedium)
+                        NothingEmptyState(
+                            icon = Icons.Default.Checklist,
+                            title = "NO SHIFT TASKS",
+                            subtitle = "Load a standard checklist or create tasks for this shift."
+                        )
                         if (canManage) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = { showChecklistDialog = true }) {
-                                Text("Load ${STANDARD_EXAM_CHECKLIST.size} Exam Tasks")
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { showChecklistDialog = true },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = NothingTheme.colors.accentPrimary,
+                                    contentColor = NothingTheme.colors.onAccentPrimary
+                                )
+                            ) {
+                                Text("Load ${STANDARD_EXAM_CHECKLIST.size} Exam Tasks", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1201,6 +1305,7 @@ fun ShiftDetailScreen(
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(shiftTasks, key = { it.id }) { task ->
@@ -1240,7 +1345,16 @@ fun ShiftDetailScreen(
 
         AlertDialog(
             onDismissRequest = { showChecklistDialog = false },
-            title = { Text("Exam Shift Checklist", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            shape = RoundedCornerShape(16.dp),
+            title = {
+                NothingDotMatrixText(
+                    text = "EXAM CHECKLIST",
+                    fontSize = 16.sp,
+                    letterSpacing = 1.sp,
+                    color = NothingTheme.colors.textPrimary
+                )
+            },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Row(
@@ -1249,17 +1363,28 @@ fun ShiftDetailScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("Drive Download (T0)", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = "DRIVE DOWNLOAD (T0)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textSecondary
+                            )
                             Text(
                                 text = formatPickerTime(anchorMillis),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = NothingTheme.colors.textPrimary
                             )
                         }
-                        OutlinedButton(onClick = {
-                            showTimePicker(context, anchorMillis) { picked -> anchorMillis = picked }
-                        }) {
+                        OutlinedButton(
+                            onClick = {
+                                showTimePicker(context, anchorMillis) { picked -> anchorMillis = picked }
+                            },
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, NothingTheme.colors.border),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary)
+                        ) {
                             Text("Change")
                         }
                     }
@@ -1274,7 +1399,25 @@ fun ShiftDetailScreen(
                                 onClick = {
                                     if (selected) selectedLans.remove(lan) else selectedLans.add(lan)
                                 },
-                                label = { Text(lan) }
+                                label = {
+                                    Text(
+                                        text = lan,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily)
+                                    )
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    containerColor = NothingTheme.colors.surfaceElevated,
+                                    labelColor = NothingTheme.colors.textSecondary,
+                                    selectedContainerColor = NothingTheme.colors.accentPrimary,
+                                    selectedLabelColor = NothingTheme.colors.onAccentPrimary
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = selected,
+                                    borderColor = NothingTheme.colors.border,
+                                    selectedBorderColor = NothingTheme.colors.accentPrimary
+                                )
                             )
                         }
                     }
@@ -1285,12 +1428,30 @@ fun ShiftDetailScreen(
                         TextButton(onClick = {
                             selectedKeys.clear()
                             selectedKeys.addAll(STANDARD_EXAM_CHECKLIST.map { it.key })
-                        }) { Text("All") }
+                        }) {
+                            Text(
+                                "ALL",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textPrimary
+                            )
+                        }
                         TextButton(onClick = {
                             selectedKeys.clear()
                             selectedKeys.addAll(STANDARD_EXAM_CHECKLIST.filter { !it.shift1Only }.map { it.key })
-                        }) { Text("Shift 2+") }
-                        TextButton(onClick = { selectedKeys.clear() }) { Text("Clear") }
+                        }) {
+                            Text(
+                                "SHIFT 2+",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textPrimary
+                            )
+                        }
+                        TextButton(onClick = { selectedKeys.clear() }) {
+                            Text(
+                                "CLEAR",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                color = NothingTheme.colors.textSecondary
+                            )
+                        }
                     }
 
                     STANDARD_EXAM_CHECKLIST.forEach { item ->
@@ -1310,19 +1471,35 @@ fun ShiftDetailScreen(
                                 onCheckedChange = { isChecked ->
                                     if (isChecked && !checked) selectedKeys.add(item.key)
                                     else if (!isChecked) selectedKeys.remove(item.key)
-                                }
+                                },
+                                colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                    checkedColor = NothingTheme.colors.accentPrimary,
+                                    checkmarkColor = NothingTheme.colors.onAccentPrimary,
+                                    uncheckedColor = NothingTheme.colors.textSecondary
+                                )
                             )
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(item.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = NothingTheme.colors.textPrimary
+                                )
                                 if (item.shift1Only) {
-                                    Text("Shift 1 only", style = MaterialTheme.typography.labelSmall, color = TaskzWarning)
+                                    Text(
+                                        text = "Shift 1 only",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                                        color = NothingAmber
+                                    )
                                 }
                             }
                             Text(
                                 text = timeText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = NothingTheme.colors.textPrimary
                             )
                         }
                     }
@@ -1342,13 +1519,25 @@ fun ShiftDetailScreen(
                             selectedTemplates = templates
                         )
                     },
-                    modifier = Modifier.testTag("confirm_load_exam_checklist")
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NothingTheme.colors.accentPrimary,
+                        contentColor = NothingTheme.colors.onAccentPrimary
+                    ),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_load_exam_checklist")
                 ) {
-                    Text("Add ${selectedKeys.size} Tasks")
+                    Text("Add ${selectedKeys.size} Tasks", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showChecklistDialog = false }) { Text("Cancel") }
+                TextButton(
+                    onClick = { showChecklistDialog = false },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", color = NothingTheme.colors.textSecondary)
+                }
             }
         )
     }
@@ -1356,9 +1545,22 @@ fun ShiftDetailScreen(
     if (showDeleteShiftDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteShiftDialog = false },
-            title = { Text("Delete Shift", fontWeight = FontWeight.Bold) },
+            containerColor = NothingTheme.colors.surface,
+            shape = RoundedCornerShape(16.dp),
+            title = {
+                NothingDotMatrixText(
+                    text = "DELETE SHIFT",
+                    fontSize = 16.sp,
+                    letterSpacing = 1.sp,
+                    color = NothingTheme.colors.textPrimary
+                )
+            },
             text = {
-                Text("Delete '${activeShift.name}' and all ${shiftTasks.size} tasks scheduled under it? Scheduled alarms will be cancelled.")
+                Text(
+                    text = "Delete '${activeShift.name}' and all ${shiftTasks.size} tasks scheduled under it? Scheduled alarms will be cancelled.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingTheme.colors.textSecondary
+                )
             },
             confirmButton = {
                 Button(
@@ -1366,15 +1568,24 @@ fun ShiftDetailScreen(
                         showDeleteShiftDialog = false
                         shiftsViewModel.deleteShift(activeShift.id) { onBackClick() }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.testTag("confirm_delete_shift_detail_btn")
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NothingRed,
+                        contentColor = androidx.compose.ui.graphics.Color.White
+                    ),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_delete_shift_detail_btn")
                 ) {
-                    Text("Delete")
+                    Text("Delete", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteShiftDialog = false }) {
-                    Text("Cancel")
+                TextButton(
+                    onClick = { showDeleteShiftDialog = false },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", color = NothingTheme.colors.textSecondary)
                 }
             }
         )
@@ -1446,7 +1657,7 @@ fun CopyShiftScreen(
 
     BackHandler(onBack = onBackClick)
 
-    Scaffold { innerPadding ->
+    Scaffold(containerColor = NothingTheme.colors.background) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -1459,34 +1670,44 @@ fun CopyShiftScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBackClick) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = NothingTheme.colors.textPrimary
+                    )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Copy Shift & Tasks",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                NothingDotMatrixText(
+                    text = "COPY SHIFT & TASKS",
+                    fontSize = 18.sp,
+                    letterSpacing = 1.2.sp,
+                    color = NothingTheme.colors.textPrimary
                 )
             }
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            NothingHairlineCard(
+                shape = RoundedCornerShape(14.dp),
+                containerColor = NothingTheme.colors.surface,
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Source: ${sourceShift.name}", fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = formatShiftRange(sourceShift.startsAt, sourceShift.endsAt),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "${sourceTasks.size} tasks available",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = "Source: ${sourceShift.name}",
+                    fontWeight = FontWeight.Bold,
+                    color = NothingTheme.colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = formatShiftRange(sourceShift.startsAt, sourceShift.endsAt),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textPrimary
+                )
+                Text(
+                    text = "${sourceTasks.size} tasks available",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -1524,127 +1745,152 @@ fun CopyShiftScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("Copy Options", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+            NothingSectionHeader(title = "COPY OPTIONS", useDotMatrix = true)
             Spacer(modifier = Modifier.height(8.dp))
 
-            Card(
+            NothingHairlineCard(
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                containerColor = NothingTheme.colors.surface,
+                contentPadding = PaddingValues(14.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Copy Manpower Quotas", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Switch(checked = copyRequirements, onCheckedChange = { copyRequirements = it })
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Copy Manpower Quotas",
+                        fontWeight = FontWeight.SemiBold,
+                        color = NothingTheme.colors.textPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(checked = copyRequirements, onCheckedChange = { copyRequirements = it })
+                }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                NothingDivider()
+                Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Copy Assigned Staff", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Switch(checked = copyAssignments, onCheckedChange = { copyAssignments = it })
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Copy Assigned Staff",
+                        fontWeight = FontWeight.SemiBold,
+                        color = NothingTheme.colors.textPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(checked = copyAssignments, onCheckedChange = { copyAssignments = it })
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Select Tasks to Copy (${selectedTaskIds.size}/${previewList.size})",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-            }
+            NothingSectionHeader(
+                title = "SELECT TASKS TO COPY (${selectedTaskIds.size}/${previewList.size})",
+                useDotMatrix = true
+            )
 
             if (previewList.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         selectedTaskIds.clear()
                         selectedTaskIds.addAll(previewList.map { it.taskId })
-                    }) { Text("All") }
+                    }) {
+                        Text(
+                            "ALL",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textPrimary
+                        )
+                    }
                     TextButton(onClick = {
                         selectedTaskIds.clear()
                         selectedTaskIds.addAll(previewList.filter { it.defaultSelected }.map { it.taskId })
-                    }) { Text("Shift 2 Default") }
-                    TextButton(onClick = { selectedTaskIds.clear() }) { Text("Clear") }
+                    }) {
+                        Text(
+                            "SHIFT 2 DEFAULT",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textPrimary
+                        )
+                    }
+                    TextButton(onClick = { selectedTaskIds.clear() }) {
+                        Text(
+                            "CLEAR",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                            color = NothingTheme.colors.textSecondary
+                        )
+                    }
                 }
             }
 
-            Card(
+            NothingHairlineCard(
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                containerColor = NothingTheme.colors.surface,
+                contentPadding = PaddingValues(12.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    if (previewList.isEmpty()) {
-                        Text(
-                            text = "No tasks in source shift. An empty shift will be created.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        previewList.forEachIndexed { idx, preview ->
-                            val isChecked = preview.taskId in selectedTaskIds
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        if (isChecked) selectedTaskIds.remove(preview.taskId)
-                                        else selectedTaskIds.add(preview.taskId)
-                                    }
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isChecked,
-                                    onCheckedChange = { checked ->
-                                        if (checked && !isChecked) selectedTaskIds.add(preview.taskId)
-                                        else if (!checked) selectedTaskIds.remove(preview.taskId)
-                                    },
-                                    modifier = Modifier.testTag("checkbox_copy_task_${preview.taskId}")
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = preview.title,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                        color = if (isChecked) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    if (preview.isShift1Only) {
-                                        Surface(
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = TaskzWarning.copy(alpha = 0.16f),
-                                            modifier = Modifier.padding(top = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = "Shift 1 only",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = TaskzWarning,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                            )
-                                        }
-                                    }
+                if (previewList.isEmpty()) {
+                    Text(
+                        text = "No tasks in source shift. An empty shift will be created.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NothingTheme.colors.textSecondary
+                    )
+                } else {
+                    previewList.forEachIndexed { idx, preview ->
+                        val isChecked = preview.taskId in selectedTaskIds
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    if (isChecked) selectedTaskIds.remove(preview.taskId)
+                                    else selectedTaskIds.add(preview.taskId)
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    if (checked && !isChecked) selectedTaskIds.add(preview.taskId)
+                                    else if (!checked) selectedTaskIds.remove(preview.taskId)
+                                },
+                                colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                    checkedColor = NothingTheme.colors.accentPrimary,
+                                    checkmarkColor = NothingTheme.colors.onAccentPrimary,
+                                    uncheckedColor = NothingTheme.colors.textSecondary
+                                ),
+                                modifier = Modifier.testTag("checkbox_copy_task_${preview.taskId}")
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "${preview.sourceTime} → ${preview.newTime}",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = if (isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = preview.title,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    color = if (isChecked) NothingTheme.colors.textPrimary else NothingTheme.colors.textSecondary
                                 )
+                                if (preview.isShift1Only) {
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    NothingTagChip(
+                                        text = "SHIFT 1 ONLY",
+                                        containerColor = NothingAmber.copy(alpha = 0.14f),
+                                        contentColor = NothingAmber,
+                                        borderColor = NothingAmber.copy(alpha = 0.45f)
+                                    )
+                                }
                             }
-                            if (idx < previewList.lastIndex) {
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${preview.sourceTime} → ${preview.newTime}",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = TechMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = if (isChecked) NothingTheme.colors.textPrimary else NothingTheme.colors.textSecondary
+                            )
+                        }
+                        if (idx < previewList.lastIndex) {
+                            NothingDivider()
                         }
                     }
                 }
@@ -1652,7 +1898,11 @@ fun CopyShiftScreen(
 
             if (errorMessage != null) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(text = errorMessage!!, color = MaterialTheme.colorScheme.error)
+                Text(
+                    text = errorMessage!!,
+                    color = NothingRed,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -1674,17 +1924,27 @@ fun CopyShiftScreen(
                     )
                 },
                 enabled = !isLoading,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
+                    .heightIn(min = 50.dp)
                     .testTag("submit_confirm_copy_shift")
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = NothingTheme.colors.onAccentPrimary
+                    )
                 } else {
                     Text(
-                        if (previewList.isEmpty()) "Create Shift"
-                        else "Copy ${selectedTaskIds.size} Task(s)"
+                        text = if (previewList.isEmpty()) "Create Shift"
+                        else "Copy ${selectedTaskIds.size} Task(s)",
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -1709,21 +1969,15 @@ private fun ShiftDateTimePickerRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                text = label.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = TechMonoFontFamily,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = NothingTheme.colors.textSecondary
             )
             if (!badgeText.isNullOrBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Text(
-                        text = badgeText,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
+                NothingTagChip(text = badgeText.uppercase())
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
@@ -1733,7 +1987,9 @@ private fun ShiftDateTimePickerRow(
         ) {
             OutlinedButton(
                 onClick = onPickDate,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, NothingTheme.colors.border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 48.dp)
@@ -1741,11 +1997,18 @@ private fun ShiftDateTimePickerRow(
             ) {
                 Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(formatPickerDate(millis), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = formatPickerDate(millis),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             OutlinedButton(
                 onClick = onPickTime,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, NothingTheme.colors.border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingTheme.colors.textPrimary),
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 48.dp)
@@ -1753,7 +2016,12 @@ private fun ShiftDateTimePickerRow(
             ) {
                 Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(formatPickerTime(millis), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = formatPickerTime(millis),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = TechMonoFontFamily),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
