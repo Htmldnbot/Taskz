@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -129,183 +130,186 @@ fun IncidentHistoryScreen(
         filterShift != null || (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
 
     Box(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-        // Search & Refresh Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Search by system, centre, reason...") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = "Search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+            // Search & Refresh Row
+            item(key = "history_search_row") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { viewModel.setSearchQuery(it) },
+                        placeholder = { Text("Search by system, centre, reason...") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Search,
+                                contentDescription = "Search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotBlank()) {
+                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                    Icon(imageVector = Icons.Filled.Clear, contentDescription = "Clear Search")
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("history_search_input")
                     )
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotBlank()) {
-                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                            Icon(imageVector = Icons.Filled.Clear, contentDescription = "Clear Search")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("history_search_input")
-            )
 
-            IconButton(
-                onClick = { viewModel.refreshIncidents() },
-                modifier = Modifier.size(44.dp).testTag("history_refresh_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Refresh,
-                    contentDescription = "Sync from Cloud",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-
-        val selectedDateLabel = when (filterDateRange?.lowercase(Locale.ROOT)) {
-            "today" -> "Today"
-            "yesterday" -> "Yesterday"
-            "last_7_days", "last 7 days" -> "Last 7 Days"
-            else -> null
-        }
-
-        OrderedCascadingFilterBar(
-            selectedState = filterState,
-            stateOptions = availableStates,
-            onStateSelected = { viewModel.setFilterState(it) },
-            selectedCity = filterCity,
-            cityOptions = availableCities,
-            onCitySelected = { viewModel.setFilterCity(it) },
-            selectedCentre = filterCentre,
-            centreOptions = availableCentres,
-            onCentreSelected = { viewModel.setFilterCentre(it) },
-            selectedLan = filterLan,
-            lanOptions = availableLans,
-            onLanSelected = { viewModel.setFilterLan(it) },
-            selectedShift = filterShift,
-            shiftOptions = availableShifts,
-            onShiftSelected = { viewModel.setFilterShift(it) },
-            selectedDate = selectedDateLabel,
-            dateOptions = listOf("Today", "Yesterday", "Last 7 Days"),
-            onDateSelected = { selected ->
-                viewModel.setFilterDateRange(
-                    when (selected) {
-                        "Today" -> "today"
-                        "Yesterday" -> "yesterday"
-                        "Last 7 Days" -> "last_7_days"
-                        else -> "all"
-                    }
-                )
-            },
-            onClearAll = { viewModel.clearAllFilters() },
-            tagPrefix = "filter_dropdown",
-            initiallyExpanded = true
-        )
-
-        // Quick Toggles: My Reports, Shifted Only, Clear
-        val primaryChipScroll = rememberScrollState()
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(primaryChipScroll),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilterChip(
-                selected = myReportsOnly,
-                onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
-                label = { Text(if (myReportsOnly) "My Reports Only ✓" else "My Reports Only") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                },
-                modifier = Modifier.testTag("filter_my_reports_chip")
-            )
-
-            FilterChip(
-                selected = !filterShiftedOnly && !hasActiveFilter,
-                onClick = { viewModel.clearAllFilters() },
-                label = { Text("All (${allIncidents.size})") },
-                modifier = Modifier.testTag("filter_all_chip")
-            )
-
-            FilterChip(
-                selected = filterShiftedOnly,
-                onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
-                label = { Text("Shifted Only") },
-                modifier = Modifier.testTag("filter_shifted_chip")
-            )
-
-            if (hasActiveFilter) {
-                AssistChip(
-                    onClick = { viewModel.clearAllFilters() },
-                    label = { Text("Clear All Filters", color = MaterialTheme.colorScheme.error) },
-                    leadingIcon = {
+                    IconButton(
+                        onClick = { viewModel.refreshIncidents() },
+                        modifier = Modifier.size(48.dp).testTag("history_refresh_btn")
+                    ) {
                         Icon(
-                            imageVector = Icons.Filled.Clear,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(14.dp)
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Sync from Cloud",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                )
-            }
-        }
-
-        // Incident Cards List
-        if (incidents.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Text(
-                        text = if (searchQuery.isNotBlank()) "No incidents match your search" else "No incidents recorded yet",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "Use Quick Entry to record technical system incidents.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+
+            item(key = "history_cascading_filters") {
+                val selectedDateLabel = when (filterDateRange?.lowercase(Locale.ROOT)) {
+                    "today" -> "Today"
+                    "yesterday" -> "Yesterday"
+                    "last_7_days", "last 7 days" -> "Last 7 Days"
+                    else -> null
+                }
+
+                OrderedCascadingFilterBar(
+                    selectedState = filterState,
+                    stateOptions = availableStates,
+                    onStateSelected = { viewModel.setFilterState(it) },
+                    selectedCity = filterCity,
+                    cityOptions = availableCities,
+                    onCitySelected = { viewModel.setFilterCity(it) },
+                    selectedCentre = filterCentre,
+                    centreOptions = availableCentres,
+                    onCentreSelected = { viewModel.setFilterCentre(it) },
+                    selectedLan = filterLan,
+                    lanOptions = availableLans,
+                    onLanSelected = { viewModel.setFilterLan(it) },
+                    selectedShift = filterShift,
+                    shiftOptions = availableShifts,
+                    onShiftSelected = { viewModel.setFilterShift(it) },
+                    selectedDate = selectedDateLabel,
+                    dateOptions = listOf("Today", "Yesterday", "Last 7 Days"),
+                    onDateSelected = { selected ->
+                        viewModel.setFilterDateRange(
+                            when (selected) {
+                                "Today" -> "today"
+                                "Yesterday" -> "yesterday"
+                                "Last 7 Days" -> "last_7_days"
+                                else -> "all"
+                            }
+                        )
+                    },
+                    onClearAll = { viewModel.clearAllFilters() },
+                    tagPrefix = "filter_dropdown",
+                    initiallyExpanded = false
+                )
+            }
+
+            // Quick Toggles: My Reports, Shifted Only, Clear
+            item(key = "history_quick_chips") {
+                val primaryChipScroll = rememberScrollState()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(primaryChipScroll),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = myReportsOnly,
+                        onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
+                        label = { Text(if (myReportsOnly) "My Reports Only ✓" else "My Reports Only") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier.testTag("filter_my_reports_chip")
+                    )
+
+                    FilterChip(
+                        selected = !filterShiftedOnly && !hasActiveFilter,
+                        onClick = { viewModel.clearAllFilters() },
+                        label = { Text("All (${allIncidents.size})") },
+                        modifier = Modifier.testTag("filter_all_chip")
+                    )
+
+                    FilterChip(
+                        selected = filterShiftedOnly,
+                        onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
+                        label = { Text("Shifted Only") },
+                        modifier = Modifier.testTag("filter_shifted_chip")
+                    )
+
+                    if (hasActiveFilter) {
+                        AssistChip(
+                            onClick = { viewModel.clearAllFilters() },
+                            label = { Text("Clear All Filters", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Clear,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Incident Cards List or Empty State
+            if (incidents.isEmpty()) {
+                item(key = "history_empty_state") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = if (searchQuery.isNotBlank()) "No incidents match your search" else "No incidents recorded yet",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Use Quick Entry to record technical system incidents.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+            } else {
                 items(incidents, key = { it.id }) { incident ->
                     IncidentItemCard(
                         incident = incident,
@@ -316,7 +320,6 @@ fun IncidentHistoryScreen(
                     )
                 }
             }
-        }
         }
 
         SnackbarHost(

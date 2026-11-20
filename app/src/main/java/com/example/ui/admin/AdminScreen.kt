@@ -15,12 +15,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LockReset
@@ -39,9 +45,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
@@ -78,6 +84,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import com.example.core.model.AdminAuditEntry
+import com.example.core.model.OrgCentre
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
 import com.example.core.model.TaskzRole
@@ -104,9 +111,12 @@ fun AdminScreen(
     val actionState by viewModel.actionState.collectAsStateWithLifecycle()
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var centreSearchQuery by rememberSaveable { mutableStateOf("") }
     var filterNeedsScopeReview by rememberSaveable { mutableStateOf(false) }
     var selectedRequestForReset by remember { mutableStateOf<PasswordResetRequest?>(null) }
     var userToManageAccess by remember { mutableStateOf<UserProfile?>(null) }
+    var centreToEdit by remember { mutableStateOf<OrgCentre?>(null) }
+    var showAddCentreDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -157,6 +167,7 @@ fun AdminScreen(
                         }
                         1 -> viewModel.loadResetRequests()
                         3 -> viewModel.loadAuditLogs()
+                        4 -> viewModel.loadOrgHierarchy()
                         else -> viewModel.loadAllUsers()
                     }
                 },
@@ -219,8 +230,9 @@ fun AdminScreen(
         }
 
         // Tabs
-        TabRow(
+        ScrollableTabRow(
             selectedTabIndex = selectedTab,
+            edgePadding = 8.dp,
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.primary,
             indicator = { tabPositions ->
@@ -265,6 +277,15 @@ fun AdminScreen(
                 },
                 text = { Text("Audit Logs", fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("admin_tab_audit_logs")
+            )
+            Tab(
+                selected = selectedTab == 4,
+                onClick = {
+                    selectedTab = 4
+                    if (orgHierarchy.centres.isEmpty()) viewModel.loadOrgHierarchy()
+                },
+                text = { Text("Centres (${orgHierarchy.centres.size})", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("admin_tab_centres")
             )
         }
 
@@ -377,7 +398,7 @@ fun AdminScreen(
         } else if (selectedTab == 2) {
             // Work Roles Tab
             WorkRolesScreen(viewModel = workRolesViewModel)
-        } else {
+        } else if (selectedTab == 3) {
             // Audit Logs Tab
             if (isLoadingAudits && auditLogs.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -395,6 +416,68 @@ fun AdminScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(auditLogs, key = { it.id }) { entry ->
                         AdminAuditLogCard(entry = entry)
+                    }
+                }
+            }
+        } else {
+            // Centres & LANs Management Tab
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = centreSearchQuery,
+                    onValueChange = { centreSearchQuery = it },
+                    placeholder = { Text("Search code, centre, city, hub...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("admin_centre_search_input")
+                )
+                Button(
+                    onClick = { showAddCentreDialog = true },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_admin_add_centre")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val filteredCentres = remember(orgHierarchy.centres, centreSearchQuery) {
+                val q = centreSearchQuery.trim()
+                orgHierarchy.centres.filter { c ->
+                    q.isBlank() ||
+                        c.code.contains(q, ignoreCase = true) ||
+                        c.name.contains(q, ignoreCase = true) ||
+                        (c.districtName?.contains(q, ignoreCase = true) == true) ||
+                        (c.subHub?.contains(q, ignoreCase = true) == true)
+                }.sortedBy { it.code.toIntOrNull() ?: Int.MAX_VALUE }
+            }
+
+            if (filteredCentres.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (centreSearchQuery.isBlank()) "No centres loaded yet." else "No centres matching '$centreSearchQuery'",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(filteredCentres, key = { it.id }) { centre ->
+                        OrgCentreAdminCard(
+                            centre = centre,
+                            onEditClick = { centreToEdit = centre }
+                        )
                     }
                 }
             }
@@ -433,6 +516,36 @@ fun AdminScreen(
                     isActive = isActive
                 )
                 userToManageAccess = null
+            }
+        )
+    }
+
+    if (showAddCentreDialog || centreToEdit != null) {
+        AddEditOrgCentreDialog(
+            existing = centreToEdit,
+            orgHierarchy = orgHierarchy,
+            onDismiss = {
+                showAddCentreDialog = false
+                centreToEdit = null
+            },
+            onSave = { code, name, cityId, districtName, subHub, address, lans ->
+                viewModel.upsertOrgCentre(
+                    id = centreToEdit?.id,
+                    code = code,
+                    name = name,
+                    cityId = cityId,
+                    districtName = districtName,
+                    address = address,
+                    subHub = subHub,
+                    availableLans = lans,
+                    stateName = orgHierarchy.cities.firstOrNull { it.id == cityId }?.stateId?.let { stId ->
+                        orgHierarchy.states.firstOrNull { it.id == stId }?.name
+                    },
+                    onSuccess = {
+                        showAddCentreDialog = false
+                        centreToEdit = null
+                    }
+                )
             }
         )
     }
@@ -1159,6 +1272,280 @@ private fun ResetPasswordModal(
                 modifier = Modifier.testTag("admin_confirm_temp_password_button")
             ) {
                 Text("Execute Server Reset")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OrgCentreAdminCard(
+    centre: OrgCentre,
+    onEditClick: () -> Unit
+) {
+    val lans = remember(centre) { centre.resolvedLans() }
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("admin_centre_card_${centre.code}")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "${centre.code} · ${centre.name}",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    val meta = listOfNotNull(
+                        centre.districtName?.takeIf { it.isNotBlank() },
+                        centre.subHub?.takeIf { it.isNotBlank() }?.let { "Hub: $it" }
+                    ).joinToString(" • ")
+                    if (meta.isNotBlank()) {
+                        Text(
+                            text = meta,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onEditClick,
+                    modifier = Modifier.testTag("btn_edit_centre_${centre.code}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Centre",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            if (!centre.address.isNullOrBlank()) {
+                Text(
+                    text = centre.address,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                lans.forEach { lan ->
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = lan,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun AddEditOrgCentreDialog(
+    existing: OrgCentre?,
+    orgHierarchy: OrgHierarchyData,
+    onDismiss: () -> Unit,
+    onSave: (
+        code: String,
+        name: String,
+        cityId: String?,
+        districtName: String?,
+        subHub: String?,
+        address: String?,
+        lans: List<String>
+    ) -> Unit
+) {
+    var code by remember(existing?.id) { mutableStateOf(existing?.code.orEmpty()) }
+    var name by remember(existing?.id) { mutableStateOf(existing?.name.orEmpty()) }
+    var selectedCityId by remember(existing?.id) { mutableStateOf(existing?.cityId ?: orgHierarchy.cities.firstOrNull()?.id) }
+    var districtName by remember(existing?.id) {
+        mutableStateOf(
+            existing?.districtName
+                ?: orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name
+                ?: ""
+        )
+    }
+    var subHub by remember(existing?.id) { mutableStateOf(existing?.subHub.orEmpty()) }
+    var address by remember(existing?.id) { mutableStateOf(existing?.address.orEmpty()) }
+    var lansInput by remember(existing?.id) {
+        mutableStateOf(
+            existing?.let { OrgCentre.formatLansCsv(it.resolvedLans()) } ?: "LAN 1, LAN 2"
+        )
+    }
+    var cityDropdownExpanded by remember { mutableStateOf(false) }
+
+    val parsedPreview = remember(lansInput) { OrgCentre.parseLansInput(lansInput) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (existing == null) "Add Exam Centre" else "Edit Exam Centre",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { if (existing == null) code = it.trim() },
+                    readOnly = existing != null,
+                    label = { Text("TC Code *") },
+                    placeholder = { Text("e.g., 41683") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_centre_code_input")
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("TC Name *") },
+                    placeholder = { Text("e.g., iON Digital Zone iDZ Sitapura 2") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_centre_name_input")
+                )
+
+                if (orgHierarchy.cities.isNotEmpty()) {
+                    ExposedDropdownMenuBox(
+                        expanded = cityDropdownExpanded,
+                        onExpandedChange = { cityDropdownExpanded = it }
+                    ) {
+                        val cityLabel = orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "Select City"
+                        OutlinedTextField(
+                            value = cityLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("City") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityDropdownExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = cityDropdownExpanded,
+                            onDismissRequest = { cityDropdownExpanded = false }
+                        ) {
+                            orgHierarchy.cities.forEach { city ->
+                                DropdownMenuItem(
+                                    text = { Text("${city.name} (${city.code})") },
+                                    onClick = {
+                                        selectedCityId = city.id
+                                        if (districtName.isBlank()) districtName = city.name
+                                        cityDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = districtName,
+                    onValueChange = { districtName = it },
+                    label = { Text("City / District") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = subHub,
+                    onValueChange = { subHub = it },
+                    label = { Text("Sub Hub") },
+                    placeholder = { Text("e.g., Jaipur 2 (Sitapura)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Address") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text(
+                    text = "Available LANs (e.g., LAN 4-11 or LAN 1, LAN 2)",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        "LAN 1" to "LAN 1",
+                        "LAN 1-2" to "LAN 1, LAN 2",
+                        "LAN 1-3" to "LAN 1, LAN 2, LAN 3",
+                        "LAN 4-11" to "LAN 4-11",
+                        "LAN 1-11" to "LAN 1-11"
+                    ).forEach { (chipLabel, presetValue) ->
+                        FilterChip(
+                            selected = lansInput.equals(presetValue, ignoreCase = true),
+                            onClick = { lansInput = presetValue },
+                            label = { Text(chipLabel) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = lansInput,
+                    onValueChange = { lansInput = it },
+                    label = { Text("LAN List / Range") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_centre_lans_input")
+                )
+                if (parsedPreview.isNotEmpty()) {
+                    Text(
+                        text = "Resolved (${parsedPreview.size}): ${parsedPreview.joinToString(", ")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = code.isNotBlank() && name.isNotBlank(),
+                onClick = {
+                    val finalLans = OrgCentre.parseLansInput(lansInput).ifEmpty { listOf("LAN 1") }
+                    onSave(
+                        code.trim(),
+                        name.trim(),
+                        selectedCityId,
+                        districtName.trim().takeIf { it.isNotBlank() },
+                        subHub.trim().takeIf { it.isNotBlank() },
+                        address.trim().takeIf { it.isNotBlank() },
+                        finalLans
+                    )
+                },
+                modifier = Modifier.testTag("confirm_save_admin_centre_btn")
+            ) {
+                Text("Save Centre")
             }
         },
         dismissButton = {

@@ -148,8 +148,8 @@ fun ReportsScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(scroll)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // Top Header: Refresh & Quick Stats
         Row(
@@ -318,7 +318,7 @@ fun ReportsScreen(
             },
             onClearAll = { viewModel.clearAllFilters() },
             tagPrefix = "reports_dropdown",
-            initiallyExpanded = true
+            initiallyExpanded = false
         )
 
         // Quick Chips Row: My Reports & Clear

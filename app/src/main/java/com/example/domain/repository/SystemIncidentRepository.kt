@@ -224,34 +224,38 @@ class SystemIncidentRepository(
     // ==========================================
 
     suspend fun getAvailableCentres(): List<TaskGroup> = withContext(Dispatchers.IO) {
-        val existing = taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
-        val jaipurSeedList = listOf(
-            TaskGroup("centre_141", "141 · Yagyavalkya Institute of Technology", "141", "Sitapura Industrial Area, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_142", "142 · Arya College of Engineering & IT", "142", "SP-42, RIICO Industrial Area, Kukas, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_143", "143 · JECRC Foundation & University", "143", "Ramchandrapura, Sitapura Extension, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_144", "144 · Poornima Institute of Engineering & Technology", "144", "ISI-2, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_145", "145 · Swami Keshvanand Institute of Technology", "145", "Ramnagaria, Jagatpura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_146", "146 · Rajasthan College of Engineering for Women", "146", "Bhankrota, Ajmer Road, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_147", "147 · Anand International College of Engineering", "147", "Near Kanota, Agra Road, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_148", "148 · Global Institute of Technology", "148", "ITS-1 & 2, IT Park, EPIP, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_149", "149 · Apex Institute of Engineering & Technology", "149", "ISI-5, RIICO Institutional Area, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_150", "150 · Maharishi Arvind Institute of Engineering", "150", "Sector 7, Madhyam Marg, Mansarovar, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_151", "151 · Jaipur Engineering College & Research Centre", "151", "Tonk Road, Sitapura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_152", "152 · Stani Memorial P.G. College", "152", "Sector 11, Tagor Path, Mansarovar, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_153", "153 · Subodh Public School & PG College", "153", "Near Rambagh Circle / Sanganer, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_154", "154 · Shankara Institute of Technology", "154", "SP-43, RIICO Kukas, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())),
-            TaskGroup("centre_155", "155 · Vivekananda Global University", "155", "Sector 36, NRI Road, Jagatpura, Jaipur, Rajasthan", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+        val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val rajasthanSeedList = listOf(
+            TaskGroup("centre_8451", "8451 · iON Digital Zone iDZ Gegal Industrial Area", "8451", "Ajmer, Rajasthan", nowStr),
+            TaskGroup("centre_8665", "8665 · iON Digital Zone iDZ Naino Ka Bas", "8665", "Bikaner, Rajasthan", nowStr),
+            TaskGroup("centre_37201", "37201 · Dr Tanveer Malawat Nursing College Bikaner", "37201", "Bikaner, Rajasthan", nowStr),
+            TaskGroup("centre_8571", "8571 · Sri Balaji College Of Engineering And Technology", "8571", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_41682", "41682 · iON Digital Zone iDZ Sitapura 1", "41682", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_41683", "41683 · iON Digital Zone iDZ Sitapura 2", "41683", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_141", "141 · Yagyavalkya Institute of Technology", "141", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_1118", "1118 · Jaipur Engineering College", "1118", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_24264", "24264 · Akashdeep Girls PG College", "24264", "Jaipur, Rajasthan", nowStr),
+            TaskGroup("centre_8450", "8450 · iON Digital Zone iDZ Laxman Nagar", "8450", "Jodhpur, Rajasthan", nowStr),
+            TaskGroup("centre_33978", "33978 · Shree Vinayak Institute", "33978", "Jodhpur, Rajasthan", nowStr),
+            TaskGroup("centre_10624", "10624 · Shiv Jyoti International School", "10624", "Kota, Rajasthan", nowStr),
+            TaskGroup("centre_42599", "42599 · iON Digital Zone iDZ Modi Kota", "42599", "Kota, Rajasthan", nowStr),
+            TaskGroup("centre_1275", "1275 · Bhartiya Institute of Engineering and Technology", "1275", "Sikar, Rajasthan", nowStr),
+            TaskGroup("centre_7850", "7850 · iON Digital Zone iDZ Chandpura", "7850", "Sikar, Rajasthan", nowStr),
+            TaskGroup("centre_24271", "24271 · Khwaja Gharib Nawaz College of Nursing", "24271", "Sikar, Rajasthan", nowStr),
+            TaskGroup("centre_8449", "8449 · iON Digital Zone iDZ Dholi Magri", "8449", "Udaipur, Rajasthan", nowStr)
         )
+        val obsoletePlaceholderIds = setOf(
+            "centre_142", "centre_143", "centre_144", "centre_145", "centre_146", "centre_147",
+            "centre_148", "centre_149", "centre_150", "centre_151", "centre_152", "centre_153",
+            "centre_154", "centre_155"
+        )
+        val existingAll = taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: emptyList()
+        val stale = existingAll.filter { it.id in obsoletePlaceholderIds }
+        stale.forEach { runCatching { taskGroupDao.deleteGroup(it.id) } }
 
-        if (existing.isEmpty() || existing.size < 10) {
-            val missing = jaipurSeedList.filter { seed -> existing.none { it.code == seed.code } }
-            if (missing.isNotEmpty()) {
-                taskGroupDao.insertGroups(missing.map { TaskGroupEntity.fromDomain(it) })
-            }
-            taskGroupDao.getAllGroupsFlow().firstOrNull()?.map { it.toDomain() } ?: jaipurSeedList
-        } else {
-            existing
-        }
+        val customCentres = existingAll.filter { it.id.startsWith("centre_") && it.id !in obsoletePlaceholderIds }
+        val customCodes = customCentres.mapNotNull { it.code?.uppercase(Locale.ROOT) }.toSet()
+        customCentres + rajasthanSeedList.filter { (it.code?.uppercase(Locale.ROOT) ?: "") !in customCodes }
     }
 
     // ==========================================
@@ -334,7 +338,25 @@ class SystemIncidentRepository(
         }
     }
 
-    suspend fun createCentre(code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
+    fun rememberCentreLans(centreCode: String, lans: List<String>) {
+        val normalized = lans.mapNotNull { com.example.core.model.OrgCentre.normalizeLanLabel(it) }.distinct()
+        if (centreCode.isNotBlank() && normalized.isNotEmpty()) {
+            sharedPrefs.edit().putString("centre_lans_${centreCode.trim()}", com.example.core.model.OrgCentre.formatLansCsv(normalized)).apply()
+        }
+    }
+
+    fun getRememberedCentreLans(centreCode: String): List<String> {
+        val csv = sharedPrefs.getString("centre_lans_${centreCode.trim()}", null)
+        return com.example.core.model.OrgCentre.parseLansCsv(csv)
+    }
+
+    suspend fun createCentre(
+        code: String,
+        name: String,
+        district: String,
+        state: String,
+        availableLans: List<String> = emptyList()
+    ): TaskGroup = withContext(Dispatchers.IO) {
         val trimmedCode = code.trim().filter { it.isDigit() || it.isLetter() || it == '-' }
         val cleanName = name.trim().removePrefix("$trimmedCode ·").removePrefix("$trimmedCode -").trim()
         val title = if (trimmedCode.isNotBlank()) "$trimmedCode · $cleanName" else cleanName
@@ -350,11 +372,21 @@ class SystemIncidentRepository(
             updatedAt = nowStr
         )
         taskGroupDao.insertGroup(TaskGroupEntity.fromDomain(newCentre))
+        if (trimmedCode.isNotBlank() && availableLans.isNotEmpty()) {
+            rememberCentreLans(trimmedCode, availableLans)
+        }
         rememberSelectedCentre(newCentre.id)
         newCentre
     }
 
-    suspend fun updateCentre(centreId: String, code: String, name: String, district: String, state: String): TaskGroup = withContext(Dispatchers.IO) {
+    suspend fun updateCentre(
+        centreId: String,
+        code: String,
+        name: String,
+        district: String,
+        state: String,
+        availableLans: List<String> = emptyList()
+    ): TaskGroup = withContext(Dispatchers.IO) {
         val trimmedCode = code.trim().filter { it.isDigit() || it.isLetter() || it == '-' }
         val cleanName = name.trim().removePrefix("$trimmedCode ·").removePrefix("$trimmedCode -").trim()
         val title = if (trimmedCode.isNotBlank()) "$trimmedCode · $cleanName" else cleanName
@@ -369,6 +401,9 @@ class SystemIncidentRepository(
             updatedAt = nowStr
         )
         taskGroupDao.updateGroup(TaskGroupEntity.fromDomain(updated))
+        if (trimmedCode.isNotBlank() && availableLans.isNotEmpty()) {
+            rememberCentreLans(trimmedCode, availableLans)
+        }
         rememberSelectedCentre(updated.id)
         updated
     }

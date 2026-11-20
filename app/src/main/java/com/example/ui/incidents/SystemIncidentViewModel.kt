@@ -111,6 +111,37 @@ class SystemIncidentViewModel(
     private val _availableCentres = MutableStateFlow<List<TaskGroup>>(emptyList())
     val availableCentres: StateFlow<List<TaskGroup>> = _availableCentres.asStateFlow()
 
+    val availableCentreLans: StateFlow<List<String>> = combine(_formState, syncManager.orgHierarchy) { state, hierarchy ->
+        resolveLansForCentre(
+            centreId = state.selectedCentre?.id,
+            centreCode = state.centreCode,
+            hierarchy = hierarchy
+        )
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        (1..11).map { "LAN $it" }
+    )
+
+    private fun resolveLansForCentre(
+        centreId: String?,
+        centreCode: String?,
+        hierarchy: com.example.core.model.OrgHierarchyData = syncManager.orgHierarchy.value
+    ): List<String> {
+        val code = centreCode?.trim().orEmpty()
+        val matched = hierarchy.centres.firstOrNull {
+            (!centreId.isNullOrBlank() && it.id == centreId) ||
+                (code.isNotBlank() && (it.code.equals(code, ignoreCase = true) || it.externalCode.equals(code, ignoreCase = true)))
+        }
+        val remembered = if (code.isNotBlank()) repository.getRememberedCentreLans(code) else emptyList()
+        return when {
+            matched != null -> matched.resolvedLans()
+            remembered.isNotEmpty() -> remembered
+            code.isNotBlank() -> com.example.core.model.OrgCentre.defaultLansForCode(code)
+            else -> (1..11).map { "LAN $it" }
+        }
+    }
+
     // User Profile context for "My Reports" filter
     val currentUserId = MutableStateFlow("")
     val currentUserName = MutableStateFlow("")
@@ -535,19 +566,92 @@ class SystemIncidentViewModel(
         }
     }
 
-    fun createAndSelectCentre(code: String, name: String, district: String, state: String) {
+    fun createAndSelectCentre(
+        code: String,
+        name: String,
+        district: String,
+        state: String,
+        subHub: String = "",
+        availableLans: List<String> = emptyList()
+    ) {
         viewModelScope.launch {
-            val newCentre = repository.createCentre(code, name, district, state)
-            loadCentresAndInitialize()
-            onCentreSelected(newCentre)
+            val cleanedLans = availableLans
+                .mapNotNull { com.example.core.model.OrgCentre.normalizeLanLabel(it) }
+                .distinct()
+                .ifEmpty { listOf("LAN 1", "LAN 2") }
+            val remoteCentre = if (com.example.core.network.SupabaseConfig.isConfigured) {
+                syncManager.upsertOrgCentre(
+                    id = null,
+                    code = code.ifBlank { "NEW" },
+                    name = name,
+                    districtName = district,
+                    subHub = subHub.takeIf { it.isNotBlank() },
+                    availableLans = cleanedLans,
+                    stateName = state
+                ).getOrNull()
+            } else null
+
+            if (remoteCentre != null) {
+                repository.rememberCentreLans(remoteCentre.code, remoteCentre.resolvedLans())
+                loadCentresAndInitialize()
+                onCentreSelected(
+                    TaskGroup(
+                        id = remoteCentre.id,
+                        title = "${remoteCentre.code} · ${remoteCentre.name}",
+                        code = remoteCentre.code,
+                        description = "${remoteCentre.districtName ?: district}, $state"
+                    )
+                )
+            } else {
+                val newCentre = repository.createCentre(code, name, district, state, cleanedLans)
+                loadCentresAndInitialize()
+                onCentreSelected(newCentre)
+            }
         }
     }
 
-    fun updateCentre(centreId: String, code: String, name: String, district: String, state: String) {
+    fun updateCentre(
+        centreId: String,
+        code: String,
+        name: String,
+        district: String,
+        state: String,
+        subHub: String = "",
+        availableLans: List<String> = emptyList()
+    ) {
         viewModelScope.launch {
-            val updated = repository.updateCentre(centreId, code, name, district, state)
-            loadCentresAndInitialize()
-            onCentreSelected(updated)
+            val cleanedLans = availableLans
+                .mapNotNull { com.example.core.model.OrgCentre.normalizeLanLabel(it) }
+                .distinct()
+                .ifEmpty { com.example.core.model.OrgCentre.defaultLansForCode(code) }
+            val remoteCentre = if (com.example.core.network.SupabaseConfig.isConfigured) {
+                syncManager.upsertOrgCentre(
+                    id = centreId.takeIf { com.example.core.network.SupabaseConfig.isValidUuid(it) },
+                    code = code,
+                    name = name,
+                    districtName = district,
+                    subHub = subHub.takeIf { it.isNotBlank() },
+                    availableLans = cleanedLans,
+                    stateName = state
+                ).getOrNull()
+            } else null
+
+            if (remoteCentre != null) {
+                repository.rememberCentreLans(remoteCentre.code, remoteCentre.resolvedLans())
+                loadCentresAndInitialize()
+                onCentreSelected(
+                    TaskGroup(
+                        id = remoteCentre.id,
+                        title = "${remoteCentre.code} · ${remoteCentre.name}",
+                        code = remoteCentre.code,
+                        description = "${remoteCentre.districtName ?: district}, $state"
+                    )
+                )
+            } else {
+                val updated = repository.updateCentre(centreId, code, name, district, state, cleanedLans)
+                loadCentresAndInitialize()
+                onCentreSelected(updated)
+            }
         }
     }
 
@@ -559,14 +663,20 @@ class SystemIncidentViewModel(
     ) {
         val (exam, shift) = repository.resolveDefaultExamAndShift(centre.id)
         val scope = permissionManager.getUserScope()
-        val defaultLan = scope.assignedLan?.takeIf { it.isNotBlank() } ?: repository.resolveDefaultLan(userId, centre.id)
-        val defaultItManager = repository.resolveDefaultItManager(userId, centre.id)
-
         val locParts = centre.description?.split(",")?.map { it.trim() } ?: emptyList()
         val district = if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: scope.cityName ?: "Jaipur"
         val state = if (locParts.isNotEmpty()) locParts.last() else scope.stateName ?: "Rajasthan"
         val code = centre.code ?: centre.title.substringBefore("·").trim().ifBlank { "141" }
         val name = if (centre.title.contains("·")) centre.title.substringAfter("·").trim() else centre.title
+
+        val centreLans = resolveLansForCentre(centre.id, code)
+        val rawDefaultLan = scope.assignedLan?.takeIf { it.isNotBlank() } ?: repository.resolveDefaultLan(userId, centre.id)
+        val defaultLan = if (centreLans.any { it.equals(rawDefaultLan, ignoreCase = true) }) {
+            centreLans.first { it.equals(rawDefaultLan, ignoreCase = true) }
+        } else {
+            centreLans.firstOrNull() ?: "LAN 1"
+        }
+        val defaultItManager = repository.resolveDefaultItManager(userId, centre.id)
 
         _formState.value = _formState.value.copy(
             selectedCentre = centre,
@@ -611,7 +721,7 @@ class SystemIncidentViewModel(
     }
 
     fun onIpAddressChanged(ip: String) {
-        _formState.value = _formState.value.copy(ipAddress = ip.trim(), validationError = null)
+        _formState.value = _formState.value.copy(ipAddress = ip, validationError = null)
     }
 
     fun onLockedSystemNumberChanged(number: String) {
@@ -750,7 +860,7 @@ class SystemIncidentViewModel(
             shiftName = state.shiftName.ifBlank { "Shift 1" },
             lanName = state.lanName.ifBlank { "LAN 1" },
             macAddress = state.macAddress.uppercase(Locale.ROOT),
-            ipAddress = state.ipAddress,
+            ipAddress = state.ipAddress.trim(),
             lockedSystemNumber = normalizedLocked,
             newlyAllocatedSystemNumber = normalizedAllocated,
             candidateShifted = state.candidateShifted,

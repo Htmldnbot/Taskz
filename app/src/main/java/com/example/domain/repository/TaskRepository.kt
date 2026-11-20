@@ -234,7 +234,9 @@ class TaskRepository(
     fun getGroupsFlow(): Flow<List<TaskGroup>> =
         taskGroupDao.getAllGroupsFlow().map { entities ->
             val userId = getActiveUserId()
-            entities.map { entity ->
+            entities
+                .filter { !it.id.startsWith("centre_") }
+                .map { entity ->
                 val domain = entity.toDomain()
                 val isMember = groupMembersStore[domain.id]?.any { it.userId == userId } == true || domain.createdBy == userId
                 val isPending = groupJoinRequestsStore[domain.id]?.any { it.userId == userId && it.status == "pending" } == true
@@ -444,6 +446,41 @@ class TaskRepository(
             }
 
             Result.success(updated)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteGroup(groupId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            if (com.example.core.network.SupabaseConfig.isValidUuid(groupId) &&
+                com.example.core.network.SupabaseConfig.isConfigured &&
+                TaskzApplication.instance.networkMonitor.isCurrentlyConnected()
+            ) {
+                var token = getActiveAccessToken()
+                if (!token.isNullOrBlank()) {
+                    var res = supabaseClient.deleteGroup(token, groupId)
+                    if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                        val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
+                        if (!refreshed.isNullOrBlank()) {
+                            token = refreshed
+                            res = supabaseClient.deleteGroup(token, groupId)
+                        }
+                    }
+                    if (res.isFailure) {
+                        return@withContext Result.failure(res.exceptionOrNull() ?: IOException("Failed to delete exam group"))
+                    }
+                }
+            }
+
+            val tasks = taskDao.getTasksForGroupFlow(groupId).firstOrNull().orEmpty()
+            removeDeletedTasksLocally(tasks.map { it.id })
+            val shifts = shiftDao.getShiftsForGroupFlow(groupId).firstOrNull().orEmpty()
+            shifts.forEach { shiftDao.deleteShift(it.id) }
+            taskGroupDao.deleteGroup(groupId)
+            groupMembersStore.remove(groupId)
+            groupJoinRequestsStore.remove(groupId)
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -918,6 +955,37 @@ class TaskRepository(
             }
 
             Result.success(updated)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteShift(shiftId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            if (com.example.core.network.SupabaseConfig.isValidUuid(shiftId) &&
+                com.example.core.network.SupabaseConfig.isConfigured &&
+                TaskzApplication.instance.networkMonitor.isCurrentlyConnected()
+            ) {
+                var token = getActiveAccessToken()
+                if (!token.isNullOrBlank()) {
+                    var res = supabaseClient.deleteShift(token, shiftId)
+                    if (res.isFailure && isAuthExpiredError(res.exceptionOrNull())) {
+                        val refreshed = TaskzApplication.instance.authRepository.forceRefreshAccessToken(token).getOrNull()
+                        if (!refreshed.isNullOrBlank()) {
+                            token = refreshed
+                            res = supabaseClient.deleteShift(token, shiftId)
+                        }
+                    }
+                    if (res.isFailure) {
+                        return@withContext Result.failure(res.exceptionOrNull() ?: IOException("Failed to delete shift"))
+                    }
+                }
+            }
+
+            val tasks = taskDao.getTasksForShiftFlow(shiftId).firstOrNull().orEmpty()
+            removeDeletedTasksLocally(tasks.map { it.id })
+            shiftDao.deleteShift(shiftId)
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }

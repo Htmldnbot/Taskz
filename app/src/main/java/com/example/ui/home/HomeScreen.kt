@@ -1092,16 +1092,28 @@ fun DailyDutyCheckinDialog(
     var cityDropdownExpanded by remember { mutableStateOf(false) }
     var centreDropdownExpanded by remember { mutableStateOf(false) }
 
-    val availableLans = remember { (1..25).map { "LAN $it" } }
-    var selectedLan by remember(currentCheckin, currentScope.assignedLan) {
-        mutableStateOf(currentScope.assignedLan ?: currentCheckin?.lan ?: "LAN 1")
-    }
-    var lanDropdownExpanded by remember { mutableStateOf(false) }
-
     val selectedZone = zones.firstOrNull { it.id == selectedZoneId }
     val selectedState = states.firstOrNull { it.id == selectedStateId }
     val selectedCity = citiesForState.firstOrNull { it.id == selectedCityId }
     val selectedOrgCentre = centresForCity.firstOrNull { it.id == selectedOrgCentreId }
+
+    val availableLans = remember(selectedOrgCentre, fallbackCentre) {
+        selectedOrgCentre?.resolvedLans()
+            ?: com.example.core.model.OrgCentre.defaultLansForCode(fallbackCentre?.code)
+    }
+    var selectedLan by remember(currentCheckin, currentScope.assignedLan) {
+        mutableStateOf(
+            (currentScope.assignedLan ?: currentCheckin?.lan)?.takeIf {
+                availableLans.any { lan -> lan.equals(it, ignoreCase = true) }
+            } ?: availableLans.firstOrNull() ?: "LAN 1"
+        )
+    }
+    LaunchedEffect(availableLans) {
+        if (availableLans.isNotEmpty() && availableLans.none { it.equals(selectedLan, ignoreCase = true) }) {
+            selectedLan = availableLans.first()
+        }
+    }
+    var lanDropdownExpanded by remember { mutableStateOf(false) }
 
     val showZoneField = effectiveRole == com.example.core.model.TaskzRole.ZOM
     val showStateField = effectiveRole in setOf(

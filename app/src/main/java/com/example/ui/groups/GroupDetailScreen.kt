@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HourglassTop
@@ -110,6 +111,8 @@ fun GroupDetailScreen(
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
     var showBatchAssignDialog by remember { mutableStateOf(false) }
+    var showDeleteGroupDialog by remember { mutableStateOf(false) }
+    var shiftToDelete by remember { mutableStateOf<Shift?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(activeGroup.id) {
@@ -156,13 +159,28 @@ fun GroupDetailScreen(
                     )
                 }
 
-                if (canManage) {
-                    Row {
-                        IconButton(
-                            onClick = { onEditGroupClick(activeGroup) },
-                            modifier = Modifier.testTag("btn_edit_group")
-                        ) {
-                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Exam Group")
+                val canDeleteGroup = canManage || groupsViewModel.canDeleteGroup(activeGroup)
+                if (canManage || canDeleteGroup) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (canManage) {
+                            IconButton(
+                                onClick = { onEditGroupClick(activeGroup) },
+                                modifier = Modifier.testTag("btn_edit_group")
+                            ) {
+                                Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Exam Group")
+                            }
+                        }
+                        if (canDeleteGroup) {
+                            IconButton(
+                                onClick = { showDeleteGroupDialog = true },
+                                modifier = Modifier.testTag("btn_delete_group_detail")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete Exam Group",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
@@ -410,7 +428,10 @@ fun GroupDetailScreen(
                                 onJoinAllTasksClick = if (canSelfJoin && activeGroup.allowSelfJoin) {
                                     { shiftsViewModel.joinShiftTasksBulk(shift.id) }
                                 } else null,
-                                isOnLeave = authContext.isOnLeave
+                                isOnLeave = authContext.isOnLeave,
+                                onDeleteClick = if (canManage || shiftsViewModel.canDeleteShift(shift)) {
+                                    { shiftToDelete = shift }
+                                } else null
                             )
                         }
                     }
@@ -553,6 +574,61 @@ fun GroupDetailScreen(
                 }
             },
             modifier = Modifier.testTag("dialog_batch_assign_tasks")
+        )
+    }
+
+    if (showDeleteGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteGroupDialog = false },
+            title = { Text("Delete Exam Group", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Delete '${activeGroup.title}' along with all shifts and tasks inside it? This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteGroupDialog = false
+                        groupsViewModel.deleteGroup(activeGroup.id) { onBackClick() }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_group_detail_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteGroupDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (shiftToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { shiftToDelete = null },
+            title = { Text("Delete Shift", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Delete '${shiftToDelete?.name}' and all tasks scheduled in it?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = shiftToDelete?.id
+                        shiftToDelete = null
+                        if (id != null) shiftsViewModel.deleteShift(id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_shift_from_group_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { shiftToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

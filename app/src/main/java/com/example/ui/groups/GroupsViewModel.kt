@@ -35,6 +35,17 @@ class GroupsViewModel(
 
     fun canManageGroups(): Boolean = permissionManager.canManageGroups()
     fun canSelfJoinGroups(): Boolean = permissionManager.canSelfJoinGroups()
+    fun canDeleteGroup(group: TaskGroup): Boolean {
+        val ctx = permissionManager.getCurrentContext()
+        return canManageGroups() || group.createdBy == ctx.userId || ctx.activeRole in setOf(
+            TaskzRole.SUPER_ADMIN,
+            TaskzRole.COMMAND_CENTER,
+            TaskzRole.ZOM,
+            TaskzRole.ROM,
+            TaskzRole.CITY_HEAD,
+            TaskzRole.VCO
+        )
+    }
 
     val allTasksFlow: StateFlow<List<TaskItem>> = taskRepository.getAllTasksFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -285,6 +296,26 @@ class GroupsViewModel(
                 },
                 onFailure = { err ->
                     _actionEvent.emit(err.message ?: "Failed to assign tasks to group")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    fun deleteGroup(groupId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.deleteGroup(groupId)
+            res.fold(
+                onSuccess = {
+                    if (_selectedGroup.value?.id == groupId) {
+                        _selectedGroup.value = null
+                    }
+                    _actionEvent.emit("Exam group deleted")
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionEvent.emit(err.message ?: "Failed to delete exam group")
                 }
             )
             _isLoading.value = false

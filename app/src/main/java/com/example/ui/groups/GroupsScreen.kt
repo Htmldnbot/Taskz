@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Groups
@@ -31,7 +32,9 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Task
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +51,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,6 +91,7 @@ fun GroupsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val canManage = viewModel.canManageGroups()
     val canSelfJoin = viewModel.canSelfJoinGroups()
+    var groupToDelete by remember { mutableStateOf<TaskGroup?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.actionEvent.collectLatest { msg ->
@@ -170,12 +175,43 @@ fun GroupsScreen(
                             canSelfJoin = canSelfJoin,
                             isOnLeave = authContext.isOnLeave,
                             onClick = { onGroupClick(group) },
-                            onJoinClick = { viewModel.joinGroupTasksBulk(group.id) }
+                            onJoinClick = { viewModel.joinGroupTasksBulk(group.id) },
+                            onDeleteClick = if (viewModel.canDeleteGroup(group)) {
+                                { groupToDelete = group }
+                            } else null
                         )
                     }
                 }
             }
         }
+    }
+
+    if (groupToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { groupToDelete = null },
+            title = { Text("Delete Exam Group", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Delete '${groupToDelete?.title}' along with its shifts and tasks? This cancels scheduled alarms and cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = groupToDelete?.id
+                        groupToDelete = null
+                        if (id != null) viewModel.deleteGroup(id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_group_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { groupToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -186,7 +222,8 @@ fun GroupCard(
     onJoinClick: () -> Unit,
     modifier: Modifier = Modifier,
     canSelfJoin: Boolean = true,
-    isOnLeave: Boolean = false
+    isOnLeave: Boolean = false,
+    onDeleteClick: (() -> Unit)? = null
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -225,18 +262,32 @@ fun GroupCard(
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (group.status == "active") TaskzSuccess.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Text(
-                        text = group.status.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = if (group.status == "active") TaskzSuccess else MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (group.status == "active") TaskzSuccess.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = group.status.uppercase(),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (group.status == "active") TaskzSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (onDeleteClick != null) {
+                        IconButton(
+                            onClick = onDeleteClick,
+                            modifier = Modifier.testTag("btn_delete_group_${group.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Exam Group",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                 }
             }
 

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.ExitToApp
@@ -86,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -139,6 +141,7 @@ fun TaskDetailScreen(
     var showAssignDialog by remember { mutableStateOf(false) }
     var showCompleteDialog by remember { mutableStateOf(false) }
     var showEditTaskDialog by remember { mutableStateOf(false) }
+    var showDeleteTaskDialog by remember { mutableStateOf(false) }
 
     // Join Task Inputs
     var selectedRoleIdToJoin by remember { mutableStateOf("") }
@@ -217,15 +220,33 @@ fun TaskDetailScreen(
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                     )
                 }
-                if (canEdit && currentTask.status !in setOf("completed", "cancelled")) {
-                    OutlinedButton(
-                        onClick = { showEditTaskDialog = true },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("btn_edit_task")
-                    ) {
-                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Task", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Edit")
+                val canDelete = viewModel.canDeleteTask(currentTask)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (canEdit && currentTask.status !in setOf("completed", "cancelled")) {
+                        OutlinedButton(
+                            onClick = { showEditTaskDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("btn_edit_task")
+                        ) {
+                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Task", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Edit")
+                        }
+                    }
+                    if (canDelete) {
+                        IconButton(
+                            onClick = { showDeleteTaskDialog = true },
+                            modifier = Modifier.testTag("btn_delete_task")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Task",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
             }
@@ -1495,6 +1516,33 @@ fun TaskDetailScreen(
             }
         )
     }
+
+    if (showDeleteTaskDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteTaskDialog = false },
+            title = { Text("Delete Task", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Are you sure you want to delete '${currentTask.title}'? All scheduled alarms will be cancelled.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteTaskDialog = false
+                        viewModel.deleteTask(currentTask.id) { onBackClick() }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_task_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteTaskDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1530,6 +1578,10 @@ private fun EditTaskDialog(
     var execDate by remember(task.id) { mutableStateOf(initialLocalDateTime.toLocalDate().toString()) }
     var execHour by remember(task.id) { mutableIntStateOf(initialLocalDateTime.hour) }
     var execMinute by remember(task.id) { mutableIntStateOf(initialLocalDateTime.minute) }
+    var execHourText by remember(task.id) { mutableStateOf(initialLocalDateTime.hour.toString().padStart(2, '0')) }
+    var execMinuteText by remember(task.id) { mutableStateOf(initialLocalDateTime.minute.toString().padStart(2, '0')) }
+    var isHourFocused by remember { mutableStateOf(false) }
+    var isMinuteFocused by remember { mutableStateOf(false) }
     var priority by remember(task.id) { mutableStateOf(task.priority) }
     var importance by remember(task.id) { mutableStateOf(task.importance) }
     var alarmType by remember(task.id) { mutableStateOf(task.alarmType) }
@@ -1584,28 +1636,52 @@ private fun EditTaskDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
-                        value = execHour.toString().padStart(2, '0'),
+                        value = execHourText,
                         onValueChange = { raw ->
-                            raw.filter { it.isDigit() }.toIntOrNull()?.let { h ->
+                            val digits = raw.filter { it.isDigit() }.take(2)
+                            execHourText = digits
+                            digits.toIntOrNull()?.let { h ->
                                 execHour = h.coerceIn(0, 23)
                             }
                         },
                         label = { Text("Hour (0-23)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.weight(1f).testTag("edit_task_hour_input")
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { focusState ->
+                                if (isHourFocused && !focusState.isFocused) {
+                                    val clamped = (execHourText.toIntOrNull() ?: execHour).coerceIn(0, 23)
+                                    execHour = clamped
+                                    execHourText = clamped.toString().padStart(2, '0')
+                                }
+                                isHourFocused = focusState.isFocused
+                            }
+                            .testTag("edit_task_hour_input")
                     )
                     OutlinedTextField(
-                        value = execMinute.toString().padStart(2, '0'),
+                        value = execMinuteText,
                         onValueChange = { raw ->
-                            raw.filter { it.isDigit() }.toIntOrNull()?.let { m ->
+                            val digits = raw.filter { it.isDigit() }.take(2)
+                            execMinuteText = digits
+                            digits.toIntOrNull()?.let { m ->
                                 execMinute = m.coerceIn(0, 59)
                             }
                         },
                         label = { Text("Min (0-59)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.weight(1f).testTag("edit_task_min_input")
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { focusState ->
+                                if (isMinuteFocused && !focusState.isFocused) {
+                                    val clamped = (execMinuteText.toIntOrNull() ?: execMinute).coerceIn(0, 59)
+                                    execMinute = clamped
+                                    execMinuteText = clamped.toString().padStart(2, '0')
+                                }
+                                isMinuteFocused = focusState.isFocused
+                            }
+                            .testTag("edit_task_min_input")
                     )
                 }
 
@@ -1618,6 +1694,8 @@ private fun EditTaskDialog(
                                 execDate = java.time.LocalDate.now().toString()
                                 execHour = next.hour
                                 execMinute = next.minute
+                                execHourText = next.hour.toString().padStart(2, '0')
+                                execMinuteText = next.minute.toString().padStart(2, '0')
                             },
                             label = { Text("+${addMins}m") },
                             modifier = Modifier.weight(1f)
@@ -1680,9 +1758,11 @@ private fun EditTaskDialog(
                 onClick = {
                     val parsedDate = runCatching { java.time.LocalDate.parse(execDate.trim()) }
                         .getOrElse { initialLocalDateTime.toLocalDate() }
+                    val finalHour = (execHourText.toIntOrNull() ?: execHour).coerceIn(0, 23)
+                    val finalMinute = (execMinuteText.toIntOrNull() ?: execMinute).coerceIn(0, 59)
                     val zdt = java.time.ZonedDateTime.of(
                         parsedDate,
-                        java.time.LocalTime.of(execHour.coerceIn(0, 23), execMinute.coerceIn(0, 59)),
+                        java.time.LocalTime.of(finalHour, finalMinute),
                         java.time.ZoneId.systemDefault()
                     )
                     val iso = zdt.toInstant().toString()

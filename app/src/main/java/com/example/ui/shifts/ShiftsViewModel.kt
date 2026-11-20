@@ -47,6 +47,8 @@ val STANDARD_EXAM_CHECKLIST: List<ExamChecklistTemplateItem> = listOf(
     ExamChecklistTemplateItem("process_bundle", "Process Bundle Done?", 151, shift1Only = false),
     ExamChecklistTemplateItem("allow_candidate", "Allow Candidate Done?", 170, shift1Only = false),
     ExamChecklistTemplateItem("exam_started", "Exam Started?", 181, shift1Only = false),
+    ExamChecklistTemplateItem("convert_to_absent", "Convert to Absent Done?", 195, shift1Only = false),
+    ExamChecklistTemplateItem("vco_verification", "VCO Verification Done?", 200, shift1Only = false),
     ExamChecklistTemplateItem("paper_verification", "Paper Verification Done?", 230, shift1Only = false)
 )
 
@@ -71,6 +73,10 @@ class ShiftsViewModel(
 
     fun canManageShifts(): Boolean = permissionManager.canManageGroups()
     fun canSelfJoinShifts(): Boolean = permissionManager.canSelfJoinGroups()
+    fun canDeleteShift(shift: Shift): Boolean {
+        val ctx = permissionManager.getCurrentContext()
+        return canManageShifts() || shift.createdBy == ctx.userId
+    }
 
     private val _currentGroupId = MutableStateFlow<String>("")
 
@@ -303,6 +309,26 @@ class ShiftsViewModel(
                 },
                 onFailure = { error ->
                     _actionEvent.emit(error.message ?: "Failed to join shift tasks")
+                }
+            )
+            _isLoading.value = false
+        }
+    }
+
+    fun deleteShift(shiftId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val res = taskRepository.deleteShift(shiftId)
+            res.fold(
+                onSuccess = {
+                    if (_selectedShift.value?.id == shiftId) {
+                        _selectedShift.value = null
+                    }
+                    _actionEvent.emit("Shift deleted")
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionEvent.emit(err.message ?: "Failed to delete shift")
                 }
             )
             _isLoading.value = false

@@ -76,7 +76,16 @@ fun EditGroupScreen(
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
-    val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
+    val orgHierarchy by com.example.TaskzApplication.instance.taskzSyncManager.orgHierarchy.collectAsStateWithLifecycle()
+
+    val quickLans = remember(authContext.scope, orgHierarchy.centres) {
+        val matched = orgHierarchy.centres.firstOrNull {
+            (!authContext.scope.centreId.isNullOrBlank() && it.id == authContext.scope.centreId) ||
+                (!authContext.scope.centreCode.isNullOrBlank() && it.code.equals(authContext.scope.centreCode, ignoreCase = true))
+        }
+        matched?.resolvedLans() ?: (1..11).map { "LAN $it" }
+    }
 
     fun pickDate(current: String, onPicked: (String) -> Unit) {
         val parsed = runCatching { LocalDate.parse(current.trim()) }.getOrElse { LocalDate.now() }

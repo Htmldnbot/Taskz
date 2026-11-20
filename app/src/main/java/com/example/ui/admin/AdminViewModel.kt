@@ -197,6 +197,50 @@ class AdminViewModel(
         }
     }
 
+    fun upsertOrgCentre(
+        id: String? = null,
+        code: String,
+        name: String,
+        cityId: String? = null,
+        districtName: String? = null,
+        address: String? = null,
+        subHub: String? = null,
+        availableLans: List<String> = emptyList(),
+        stateName: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        if (code.isBlank() || name.isBlank()) {
+            _actionState.value = AdminActionState.Error("Centre code and name are required.")
+            return
+        }
+        viewModelScope.launch {
+            _actionState.value = AdminActionState.Loading
+            val res = adminRepository.upsertOrgCentre(
+                id = id,
+                code = code,
+                name = name,
+                cityId = cityId,
+                districtName = districtName,
+                address = address,
+                subHub = subHub,
+                availableLans = availableLans,
+                stateName = stateName
+            )
+            res.fold(
+                onSuccess = { saved ->
+                    _actionState.value = AdminActionState.Success(
+                        "Saved centre ${saved.code} · ${saved.name} (${saved.resolvedLans().joinToString(", ")})"
+                    )
+                    loadOrgHierarchy()
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionState.value = AdminActionState.Error(err.message ?: "Failed to save centre")
+                }
+            )
+        }
+    }
+
     fun clearActionState() {
         _actionState.value = AdminActionState.Idle
     }

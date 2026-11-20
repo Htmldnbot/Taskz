@@ -122,6 +122,35 @@ data class SystemIncident(
             return chunks.joinToString(":")
         }
 
+        /**
+         * Formats MAC address while accurately preserving cursor position across inserted colons.
+         */
+        fun formatMacAddressWithCursor(rawText: String, rawSelectionEnd: Int): Pair<String, Int> {
+            val safeSel = rawSelectionEnd.coerceIn(0, rawText.length)
+            fun isHex(ch: Char): Boolean = (ch in '0'..'9') || (ch in 'a'..'f') || (ch in 'A'..'F')
+
+            val hexBeforeCursor = rawText.substring(0, safeSel).count(::isHex).coerceAtMost(12)
+            val formatted = formatMacAddress(rawText)
+            if (hexBeforeCursor == 0) return formatted to 0
+
+            var hexSeen = 0
+            var newCursor = formatted.length
+            for (idx in formatted.indices) {
+                if (formatted[idx] != ':') {
+                    hexSeen++
+                    if (hexSeen == hexBeforeCursor) {
+                        // Place cursor immediately after the character (and skip past auto-inserted colon if just completed an even pair while typing forward)
+                        newCursor = idx + 1
+                        if (hexBeforeCursor % 2 == 0 && newCursor < formatted.length && formatted[newCursor] == ':' && rawSelectionEnd >= safeSel) {
+                            newCursor++
+                        }
+                        break
+                    }
+                }
+            }
+            return formatted to newCursor.coerceIn(0, formatted.length)
+        }
+
         fun isValidMacAddress(value: String): Boolean {
             return value.matches(Regex(MAC_ADDRESS_REGEX))
         }

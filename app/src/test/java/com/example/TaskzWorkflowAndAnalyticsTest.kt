@@ -489,7 +489,7 @@ class TaskzWorkflowAndAnalyticsTest {
 
     @Test
     fun examShiftChecklistAndSelectiveCopy_preservesGapsAndMarksShift1OnlyTasks() {
-        assertEquals(11, com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.size)
+        assertEquals(13, com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.size)
         val byKey = com.example.ui.shifts.STANDARD_EXAM_CHECKLIST.associateBy { it.key }
         assertEquals(20, byKey["drive_download"]?.offsetMinutes)
         assertEquals(25, byKey["backup_configured"]?.offsetMinutes)
@@ -501,6 +501,8 @@ class TaskzWorkflowAndAnalyticsTest {
         assertEquals(151, byKey["process_bundle"]?.offsetMinutes)
         assertEquals(170, byKey["allow_candidate"]?.offsetMinutes)
         assertEquals(181, byKey["exam_started"]?.offsetMinutes)
+        assertEquals(195, byKey["convert_to_absent"]?.offsetMinutes)
+        assertEquals(200, byKey["vco_verification"]?.offsetMinutes)
         assertEquals(230, byKey["paper_verification"]?.offsetMinutes)
 
         // Anchor Shift 1 at 06:00 AM UTC, Shift 2 at 09:45 AM UTC (+3h 45m = +225m)
@@ -528,7 +530,7 @@ class TaskzWorkflowAndAnalyticsTest {
             sourceTasks = sourceTasks,
             newStartsAt = shift2StartIso
         )
-        assertEquals(11, previews.size)
+        assertEquals(13, previews.size)
 
         // Shift-1-only tasks default unchecked, recurring tasks default checked
         val byTitle = previews.associateBy { it.title }
@@ -545,6 +547,10 @@ class TaskzWorkflowAndAnalyticsTest {
         assertTrue(byTitle["Drive Downloaded?"]?.defaultSelected == true)
         assertTrue(byTitle["Question Paper Downloaded?"]?.defaultSelected == true)
         assertTrue(byTitle["Exam Started?"]?.defaultSelected == true)
+        assertFalse(byTitle["Convert to Absent Done?"]?.isShift1Only ?: true)
+        assertTrue(byTitle["Convert to Absent Done?"]?.defaultSelected == true)
+        assertFalse(byTitle["VCO Verification Done?"]?.isShift1Only ?: true)
+        assertTrue(byTitle["VCO Verification Done?"]?.defaultSelected == true)
         assertTrue(byTitle["Paper Verification Done?"]?.defaultSelected == true)
 
         // Question Paper Download gap (+2h from T0): Shift 1 08:00 -> Shift 2 11:45 in device timezone
@@ -552,5 +558,45 @@ class TaskzWorkflowAndAnalyticsTest {
         val qpDstExpected = com.example.ui.shifts.ShiftsViewModel.formatTimeOnly(Instant.parse("2026-11-20T11:45:00Z").toEpochMilli())
         assertEquals(qpSrcExpected, byTitle["Question Paper Downloaded?"]?.sourceTime)
         assertEquals(qpDstExpected, byTitle["Question Paper Downloaded?"]?.newTime)
+    }
+
+    @Test
+    fun orgCentre_resolvesSpecificRajasthanLansAndParsesLanRanges() {
+        assertEquals(
+            listOf("LAN 4", "LAN 5", "LAN 6", "LAN 7", "LAN 8", "LAN 9", "LAN 10", "LAN 11"),
+            com.example.core.model.OrgCentre.defaultLansForCode("41683")
+        )
+        assertEquals(
+            listOf("LAN 1", "LAN 2", "LAN 3"),
+            com.example.core.model.OrgCentre.defaultLansForCode("41682")
+        )
+        assertEquals(
+            listOf("LAN 1"),
+            com.example.core.model.OrgCentre.defaultLansForCode("24264")
+        )
+        assertEquals(
+            listOf("LAN 1", "LAN 2"),
+            com.example.core.model.OrgCentre.defaultLansForCode("8451")
+        )
+        assertEquals(
+            listOf("LAN 4", "LAN 5", "LAN 6", "LAN 7", "LAN 8", "LAN 9", "LAN 10", "LAN 11"),
+            com.example.core.model.OrgCentre.parseLansInput("LAN 4-11")
+        )
+        assertEquals(
+            listOf("LAN 1", "LAN 3", "LAN 5"),
+            com.example.core.model.OrgCentre.parseLansInput("1, 3, LAN 5")
+        )
+    }
+
+    @Test
+    fun systemIncident_formatMacAddressWithCursor_preservesCursorPosition() {
+        val (formattedEnd, cursorEnd) = SystemIncident.formatMacAddressWithCursor("aabbcc112233", 12)
+        assertEquals("AA:BB:CC:11:22:33", formattedEnd)
+        assertEquals(17, cursorEnd)
+
+        // Editing after 5th hex char ('9') keeps cursor immediately after '9' (index 7 in AA:BB:9C:C1:12:2)
+        val (formattedMid, cursorMid) = SystemIncident.formatMacAddressWithCursor("AA:BB9CC:11:22", 6)
+        assertEquals("AA:BB:9C:C1:12:2", formattedMid)
+        assertEquals(7, cursorMid)
     }
 }

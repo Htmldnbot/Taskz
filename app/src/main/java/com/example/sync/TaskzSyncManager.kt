@@ -573,7 +573,10 @@ class TaskzSyncManager(
                             parentStateId = it.stateId,
                             parentCityId = it.cityId,
                             externalCode = it.externalCode,
-                            districtName = it.districtName
+                            districtName = it.districtName,
+                            address = it.address,
+                            subHub = it.subHub,
+                            availableLansCsv = OrgCentre.formatLansCsv(it.availableLans)
                         )
                     )
                 }
@@ -582,6 +585,58 @@ class TaskzSyncManager(
                 database.authorizationDao().clearOrgNodes()
                 database.authorizationDao().insertOrgNodes(nodes)
             }
+        }
+        res
+    }
+
+    suspend fun upsertOrgCentre(
+        id: String? = null,
+        code: String,
+        name: String,
+        cityId: String? = null,
+        districtName: String? = null,
+        address: String? = null,
+        subHub: String? = null,
+        availableLans: List<String> = emptyList(),
+        stateName: String? = null
+    ): Result<OrgCentre> = withContext(Dispatchers.IO) {
+        var token = authRepository.getValidAccessToken().getOrNull()
+            ?: return@withContext Result.failure(Exception("Authentication required"))
+        var res = supabaseClient.upsertOrgCentre(
+            accessToken = token,
+            id = id,
+            code = code,
+            name = name,
+            cityId = cityId,
+            districtName = districtName,
+            address = address,
+            subHub = subHub,
+            availableLans = availableLans,
+            stateName = stateName
+        )
+        if (res.isFailure) {
+            val msg = res.exceptionOrNull()?.message.orEmpty()
+            if (msg.contains("401") || msg.contains("jwt", true) || msg.contains("expired", true)) {
+                val refreshed = authRepository.forceRefreshAccessToken(token).getOrNull()
+                if (!refreshed.isNullOrBlank()) {
+                    token = refreshed
+                    res = supabaseClient.upsertOrgCentre(
+                        accessToken = token,
+                        id = id,
+                        code = code,
+                        name = name,
+                        cityId = cityId,
+                        districtName = districtName,
+                        address = address,
+                        subHub = subHub,
+                        availableLans = availableLans,
+                        stateName = stateName
+                    )
+                }
+            }
+        }
+        if (res.isSuccess) {
+            refreshOrgHierarchy(token)
         }
         res
     }
@@ -714,7 +769,10 @@ class TaskzSyncManager(
                     zoneId = it.parentZoneId.orEmpty(),
                     code = it.code,
                     name = it.name,
-                    districtName = it.districtName
+                    districtName = it.districtName,
+                    address = it.address,
+                    subHub = it.subHub,
+                    availableLans = OrgCentre.parseLansCsv(it.availableLansCsv)
                 )
             }
         )

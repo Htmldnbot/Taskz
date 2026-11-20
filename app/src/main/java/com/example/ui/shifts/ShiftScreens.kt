@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.PlaylistAddCheck
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -72,6 +74,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.TaskzApplication
+import com.example.core.model.OrgCentre
 import com.example.core.model.Shift
 import com.example.core.model.TaskItem
 import com.example.ui.common.TaskzTextField
@@ -157,7 +161,8 @@ fun ShiftCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onJoinAllTasksClick: (() -> Unit)? = null,
-    isOnLeave: Boolean = false
+    isOnLeave: Boolean = false,
+    onDeleteClick: (() -> Unit)? = null
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -188,26 +193,40 @@ fun ShiftCard(
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = when (shift.status) {
-                        "active" -> TaskzSuccess.copy(alpha = 0.15f)
-                        "completed" -> MaterialTheme.colorScheme.surfaceVariant
-                        else -> MaterialTheme.colorScheme.secondaryContainer
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = when (shift.status) {
+                            "active" -> TaskzSuccess.copy(alpha = 0.15f)
+                            "completed" -> MaterialTheme.colorScheme.surfaceVariant
+                            else -> MaterialTheme.colorScheme.secondaryContainer
+                        }
+                    ) {
+                        Text(
+                            text = shift.status.uppercase(),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = when (shift.status) {
+                                    "active" -> TaskzSuccess
+                                    "completed" -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    else -> MaterialTheme.colorScheme.onSecondaryContainer
+                                }
+                            ),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
                     }
-                ) {
-                    Text(
-                        text = shift.status.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = when (shift.status) {
-                                "active" -> TaskzSuccess
-                                "completed" -> MaterialTheme.colorScheme.onSurfaceVariant
-                                else -> MaterialTheme.colorScheme.onSecondaryContainer
-                            }
-                        ),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    if (onDeleteClick != null) {
+                        IconButton(
+                            onClick = onDeleteClick,
+                            modifier = Modifier.testTag("btn_delete_shift_${shift.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Shift",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                 }
             }
 
@@ -337,7 +356,17 @@ fun CreateShiftScreen(
     var endMillis by rememberSaveable { mutableLongStateOf(defaultLocalTimeMillis(10, 30)) }
     var notes by rememberSaveable { mutableStateOf("") }
 
-    val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+    val authContext by viewModel.authContextFlow.collectAsStateWithLifecycle()
+    val orgHierarchy by TaskzApplication.instance.taskzSyncManager.orgHierarchy.collectAsStateWithLifecycle()
+    val quickLans = remember(orgHierarchy.centres, authContext.scope.centreId, authContext.scope.centreCode) {
+        val matched = orgHierarchy.centres.firstOrNull {
+            (authContext.scope.centreId != null && it.id == authContext.scope.centreId) ||
+                (!authContext.scope.centreCode.isNullOrBlank() && it.code == authContext.scope.centreCode)
+        }
+        matched?.resolvedLans()
+            ?: authContext.scope.centreCode?.let { OrgCentre.defaultLansForCode(it) }
+            ?: (1..11).map { "LAN $it" }
+    }
     val selectedLans = remember { mutableStateListOf<String>() }
 
     var loadStandardChecklist by rememberSaveable { mutableStateOf(false) }
@@ -501,7 +530,7 @@ fun CreateShiftScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Exam Shift Checklist", fontWeight = FontWeight.Bold)
                             Text(
-                                text = "Auto-create 11 exam tasks from T0",
+                                text = "Auto-create ${STANDARD_EXAM_CHECKLIST.size} exam tasks from T0",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -567,11 +596,11 @@ fun CreateShiftScreen(
                             TextButton(onClick = {
                                 selectedChecklistKeys.clear()
                                 selectedChecklistKeys.addAll(STANDARD_EXAM_CHECKLIST.map { it.key })
-                            }) { Text("All (11)") }
+                            }) { Text("All (${STANDARD_EXAM_CHECKLIST.size})") }
                             TextButton(onClick = {
                                 selectedChecklistKeys.clear()
                                 selectedChecklistKeys.addAll(STANDARD_EXAM_CHECKLIST.filter { !it.shift1Only }.map { it.key })
-                            }) { Text("Shift 2+ (7)") }
+                            }) { Text("Shift 2+ (${STANDARD_EXAM_CHECKLIST.count { !it.shift1Only }})") }
                             TextButton(onClick = { selectedChecklistKeys.clear() }) { Text("Clear") }
                         }
 
@@ -901,6 +930,8 @@ fun ShiftDetailScreen(
     }
     val snackbarHostState = remember { SnackbarHostState() }
     var showChecklistDialog by remember { mutableStateOf(false) }
+    var showDeleteShiftDialog by remember { mutableStateOf(false) }
+    val orgHierarchy by TaskzApplication.instance.taskzSyncManager.orgHierarchy.collectAsStateWithLifecycle()
 
     LaunchedEffect(activeShift.id) {
         shiftsViewModel.loadShiftDetails(activeShift.id)
@@ -939,12 +970,29 @@ fun ShiftDetailScreen(
                     )
                 }
 
-                if (canManage) {
-                    IconButton(
-                        onClick = { onEditShiftClick(activeShift) },
-                        modifier = Modifier.testTag("btn_edit_shift")
-                    ) {
-                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
+                val canDeleteShift = canManage || shiftsViewModel.canDeleteShift(activeShift)
+                if (canManage || canDeleteShift) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (canManage) {
+                            IconButton(
+                                onClick = { onEditShiftClick(activeShift) },
+                                modifier = Modifier.testTag("btn_edit_shift")
+                            ) {
+                                Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Shift")
+                            }
+                        }
+                        if (canDeleteShift) {
+                            IconButton(
+                                onClick = { showDeleteShiftDialog = true },
+                                modifier = Modifier.testTag("btn_delete_shift_detail")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete Shift",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1145,7 +1193,7 @@ fun ShiftDetailScreen(
                         if (canManage) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Button(onClick = { showChecklistDialog = true }) {
-                                Text("Load 11 Exam Tasks")
+                                Text("Load ${STANDARD_EXAM_CHECKLIST.size} Exam Tasks")
                             }
                         }
                     }
@@ -1169,7 +1217,15 @@ fun ShiftDetailScreen(
         }
         var anchorMillis by remember { mutableLongStateOf(defaultAnchor) }
         val isShift1 = activeShift.shiftNumber == 1 || activeShift.name.contains("1")
-        val quickLans = remember { listOf("LAN 1", "LAN 2", "LAN 3", "LAN 4") }
+        val quickLans = remember(orgHierarchy.centres, authContext.scope.centreId, authContext.scope.centreCode) {
+            val matched = orgHierarchy.centres.firstOrNull {
+                (authContext.scope.centreId != null && it.id == authContext.scope.centreId) ||
+                    (!authContext.scope.centreCode.isNullOrBlank() && it.code == authContext.scope.centreCode)
+            }
+            matched?.resolvedLans()
+                ?: authContext.scope.centreCode?.let { OrgCentre.defaultLansForCode(it) }
+                ?: (1..11).map { "LAN $it" }
+        }
         val selectedLans = remember {
             mutableStateListOf<String>().apply {
                 quickLans.filter { activeShift.notes?.contains(it, ignoreCase = true) == true }
@@ -1293,6 +1349,33 @@ fun ShiftDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showChecklistDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showDeleteShiftDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteShiftDialog = false },
+            title = { Text("Delete Shift", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Delete '${activeShift.name}' and all ${shiftTasks.size} tasks scheduled under it? Scheduled alarms will be cancelled.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteShiftDialog = false
+                        shiftsViewModel.deleteShift(activeShift.id) { onBackClick() }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_shift_detail_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteShiftDialog = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }

@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,10 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.model.SystemIncident
@@ -45,11 +48,26 @@ fun SystemNumberField(
         raw.filter { it.isDigit() }.take(3)
     }
 
-    var localText by remember(digitsOnly) { mutableStateOf(digitsOnly) }
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(digitsOnly, TextRange(digitsOnly.length)))
+    }
+    var isFocused by remember { mutableStateOf(false) }
+
+    // Sync only on external value change (e.g. Save & Next clear or programmatic normalization on blur)
+    LaunchedEffect(digitsOnly, isFocused) {
+        if (!isFocused && digitsOnly != textFieldValue.text) {
+            textFieldValue = TextFieldValue(digitsOnly, TextRange(digitsOnly.length))
+        } else if (digitsOnly.isEmpty() && textFieldValue.text.isNotEmpty()) {
+            textFieldValue = TextFieldValue("", TextRange(0))
+        }
+    }
 
     fun normalizeAndCommit() {
-        if (localText.isNotBlank()) {
-            val normalized = SystemIncident.normalizeSystemNumber(localText)
+        val rawDigits = textFieldValue.text.filter { it.isDigit() }.take(3)
+        if (rawDigits.isNotBlank()) {
+            val normalized = SystemIncident.normalizeSystemNumber(rawDigits)
+            val normDigits = if (normalized.startsWith("C", ignoreCase = true)) normalized.drop(1) else normalized
+            textFieldValue = TextFieldValue(normDigits, TextRange(normDigits.length))
             onValueChange(normalized)
         } else {
             onValueChange("")
@@ -57,17 +75,17 @@ fun SystemNumberField(
     }
 
     OutlinedTextField(
-        value = localText,
-        onValueChange = { input ->
-            // Allow user to paste with "C" or type digits only
-            val cleaned = if (input.startsWith("C", ignoreCase = true)) input.drop(1) else input
+        value = textFieldValue,
+        onValueChange = { incoming ->
+            val cleaned = if (incoming.text.startsWith("C", ignoreCase = true)) incoming.text.drop(1) else incoming.text
             val numbers = cleaned.filter { it.isDigit() }.take(3)
-            localText = numbers
-            if (numbers.length == 3) {
-                onValueChange("C$numbers")
-            } else {
-                onValueChange(if (numbers.isEmpty()) "" else "C$numbers")
-            }
+            val adjustedCursor = incoming.selection.end
+                .coerceIn(0, incoming.text.length)
+                .let { sel ->
+                    incoming.text.substring(0, sel).count { it.isDigit() }.coerceAtMost(numbers.length)
+                }
+            textFieldValue = TextFieldValue(numbers, TextRange(adjustedCursor))
+            onValueChange(if (numbers.isEmpty()) "" else "C$numbers")
         },
         enabled = enabled,
         isError = isError,
@@ -132,6 +150,7 @@ fun SystemNumberField(
         modifier = modifier
             .testTag(testTag)
             .onFocusChanged { focusState ->
+                isFocused = focusState.isFocused
                 if (!focusState.isFocused) {
                     normalizeAndCommit()
                 }

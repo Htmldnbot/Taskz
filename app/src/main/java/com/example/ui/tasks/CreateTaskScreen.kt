@@ -86,6 +86,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -304,6 +305,15 @@ fun CreateTaskScreen(
     val initialTime = remember { java.time.LocalTime.now().plusMinutes(15) }
     var alarmHour by rememberSaveable { mutableIntStateOf(initialTime.hour) }
     var alarmMinute by rememberSaveable { mutableIntStateOf(initialTime.minute) }
+    val initialDisplayHour = when {
+        initialTime.hour == 0 -> 12
+        initialTime.hour > 12 -> initialTime.hour - 12
+        else -> initialTime.hour
+    }
+    var hourText by rememberSaveable { mutableStateOf(initialDisplayHour.toString().padStart(2, '0')) }
+    var minuteText by rememberSaveable { mutableStateOf(initialTime.minute.toString().padStart(2, '0')) }
+    var isHourFocused by remember { mutableStateOf(false) }
+    var isMinuteFocused by remember { mutableStateOf(false) }
     var showTimePickerDialog by remember { mutableStateOf(false) }
 
     // 6. Snooze / Unfinished Remind Time (5, 10, 20, Custom)
@@ -468,7 +478,7 @@ fun CreateTaskScreen(
         val scheduledIso = scheduledInstant.toString()
 
         val newTask = TaskItem(
-            groupId = selectedGroup?.id ?: "centre_141",
+            groupId = selectedGroup?.id ?: fallbackCentre?.id ?: "centre_141",
             groupTitle = selectedGroup?.title ?: fallbackCentre?.name ?: "General Operations",
             shiftId = preselectedShiftId,
             title = title.trim(),
@@ -655,11 +665,40 @@ fun CreateTaskScreen(
                     // Contextual Field & Cascaded Organizational Selectors
                     when (selectedScope) {
                         TaskScopeLevel.LAN -> {
+                            val activeCentreObj = selectedCentre
+                                ?: orgHierarchy.centres.firstOrNull { it.id == authContext.scope.centreId }
+                                ?: availableCentres.firstOrNull()
+                            val centreLans = remember(activeCentreObj, authContext.scope.centreCode) {
+                                activeCentreObj?.resolvedLans()
+                                    ?: authContext.scope.centreCode?.let { OrgCentre.defaultLansForCode(it) }
+                                    ?: (1..11).map { "LAN $it" }
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                centreLans.forEach { lan ->
+                                    val currentTokens = lanText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                                    val selected = currentTokens.any { it.equals(lan, ignoreCase = true) }
+                                    FilterChip(
+                                        selected = selected,
+                                        onClick = {
+                                            val updated = if (selected) {
+                                                currentTokens.filterNot { it.equals(lan, ignoreCase = true) }
+                                            } else {
+                                                currentTokens + lan
+                                            }
+                                            lanText = if (updated.isEmpty()) lan else updated.joinToString(", ")
+                                        },
+                                        label = { Text(lan) }
+                                    )
+                                }
+                            }
                             OutlinedTextField(
                                 value = lanText,
                                 onValueChange = { lanText = it },
                                 label = { Text("LAN / Room Numbers *") },
-                                placeholder = { Text("e.g., LAN 1, LAN 2, Server Room") },
+                                placeholder = { Text("e.g., ${centreLans.take(2).joinToString(", ")}") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp)
@@ -1096,6 +1135,13 @@ fun CreateTaskScreen(
                                             { _, h, m ->
                                                 alarmHour = h
                                                 alarmMinute = m
+                                                val h12 = when {
+                                                    h == 0 -> 12
+                                                    h > 12 -> h - 12
+                                                    else -> h
+                                                }
+                                                hourText = h12.toString().padStart(2, '0')
+                                                minuteText = m.toString().padStart(2, '0')
                                             },
                                             alarmHour,
                                             alarmMinute,
@@ -1120,9 +1166,11 @@ fun CreateTaskScreen(
                             ) {
                                 // Hour Input
                                 OutlinedTextField(
-                                    value = String.format("%02d", displayHour12),
+                                    value = hourText,
                                     onValueChange = { input ->
-                                        val hVal = input.filter { it.isDigit() }.toIntOrNull()
+                                        val digits = input.filter { it.isDigit() }.take(2)
+                                        hourText = digits
+                                        val hVal = digits.toIntOrNull()
                                         if (hVal != null && hVal in 1..12) {
                                             alarmHour = if (isPm) {
                                                 if (hVal == 12) 12 else hVal + 12
@@ -1134,7 +1182,24 @@ fun CreateTaskScreen(
                                     label = { Text("Hour") },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .onFocusChanged { focusState ->
+                                            if (isHourFocused && !focusState.isFocused) {
+                                                val parsed = hourText.toIntOrNull()?.coerceIn(1, 12)
+                                                if (parsed != null) {
+                                                    alarmHour = if (isPm) {
+                                                        if (parsed == 12) 12 else parsed + 12
+                                                    } else {
+                                                        if (parsed == 12) 0 else parsed
+                                                    }
+                                                    hourText = parsed.toString().padStart(2, '0')
+                                                } else {
+                                                    hourText = displayHour12.toString().padStart(2, '0')
+                                                }
+                                            }
+                                            isHourFocused = focusState.isFocused
+                                        },
                                     shape = RoundedCornerShape(8.dp)
                                 )
 
@@ -1142,9 +1207,11 @@ fun CreateTaskScreen(
 
                                 // Minute Input
                                 OutlinedTextField(
-                                    value = String.format("%02d", alarmMinute),
+                                    value = minuteText,
                                     onValueChange = { input ->
-                                        val mVal = input.filter { it.isDigit() }.take(2).toIntOrNull()
+                                        val digits = input.filter { it.isDigit() }.take(2)
+                                        minuteText = digits
+                                        val mVal = digits.toIntOrNull()
                                         if (mVal != null && mVal in 0..59) {
                                             alarmMinute = mVal
                                         }
@@ -1152,7 +1219,16 @@ fun CreateTaskScreen(
                                     label = { Text("Minute") },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .onFocusChanged { focusState ->
+                                            if (isMinuteFocused && !focusState.isFocused) {
+                                                val clamped = (minuteText.toIntOrNull() ?: alarmMinute).coerceIn(0, 59)
+                                                alarmMinute = clamped
+                                                minuteText = clamped.toString().padStart(2, '0')
+                                            }
+                                            isMinuteFocused = focusState.isFocused
+                                        },
                                     shape = RoundedCornerShape(8.dp)
                                 )
 
@@ -1202,6 +1278,13 @@ fun CreateTaskScreen(
                                             val t = java.time.LocalTime.now().plusMinutes(mins.toLong())
                                             alarmHour = t.hour
                                             alarmMinute = t.minute
+                                            val h12 = when {
+                                                t.hour == 0 -> 12
+                                                t.hour > 12 -> t.hour - 12
+                                                else -> t.hour
+                                            }
+                                            hourText = h12.toString().padStart(2, '0')
+                                            minuteText = t.minute.toString().padStart(2, '0')
                                         },
                                         label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                                         shape = RoundedCornerShape(16.dp),

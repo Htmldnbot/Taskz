@@ -61,6 +61,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,11 +70,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.model.OrgCentre
+import com.example.core.model.SystemIncident
 import com.example.core.model.TaskGroup
 import com.example.ui.incidents.components.SystemNumberField
 import java.text.SimpleDateFormat
@@ -104,6 +109,7 @@ fun QuickEntryScreen(
 ) {
     val formState by viewModel.formState.collectAsStateWithLifecycle()
     val availableCentres by viewModel.availableCentres.collectAsStateWithLifecycle()
+    val centreLans by viewModel.availableCentreLans.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var showCentreDialog by remember { mutableStateOf(false) }
@@ -322,13 +328,12 @@ fun QuickEntryScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "LAN Selection (Up to LAN 25 or Custom):",
+                    text = "LAN Selection (${centreLans.firstOrNull() ?: "LAN 1"} – ${centreLans.lastOrNull() ?: "LAN 11"}):",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
             }
 
-            val lans = (1..25).map { "LAN $it" }
             val lanScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -336,7 +341,7 @@ fun QuickEntryScreen(
                     .horizontalScroll(lanScrollState),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                lans.forEach { lan ->
+                centreLans.forEach { lan ->
                     val isSelected = formState.lanName.equals(lan, ignoreCase = true)
                     FilterChip(
                         selected = isSelected,
@@ -351,12 +356,12 @@ fun QuickEntryScreen(
                 }
             }
 
-            // Editable LAN field allows typing any LAN up to 20, 25, or custom lab names
+            // Editable LAN field allows selecting centre LANs or custom room names
             OutlinedTextField(
                 value = formState.lanName,
                 onValueChange = { viewModel.onLanNameChanged(it) },
                 label = { Text("Selected LAN / Room *") },
-                placeholder = { Text("e.g. LAN 18, LAN 20") },
+                placeholder = { Text("e.g. ${centreLans.firstOrNull() ?: "LAN 1"}") },
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Filled.Lan,
@@ -393,13 +398,38 @@ fun QuickEntryScreen(
         // ==========================================
         // 4. MANUAL HARDWARE FIELDS: MAC & IP
         // ==========================================
+        var macFieldValue by remember {
+            mutableStateOf(TextFieldValue(formState.macAddress, TextRange(formState.macAddress.length)))
+        }
+        LaunchedEffect(formState.macAddress) {
+            if (formState.macAddress != macFieldValue.text) {
+                macFieldValue = TextFieldValue(formState.macAddress, TextRange(formState.macAddress.length))
+            }
+        }
+
+        var ipFieldValue by remember {
+            mutableStateOf(TextFieldValue(formState.ipAddress, TextRange(formState.ipAddress.length)))
+        }
+        LaunchedEffect(formState.ipAddress) {
+            if (formState.ipAddress != ipFieldValue.text) {
+                ipFieldValue = TextFieldValue(formState.ipAddress, TextRange(formState.ipAddress.length))
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedTextField(
-                value = formState.macAddress,
-                onValueChange = { viewModel.onMacAddressChanged(it) },
+                value = macFieldValue,
+                onValueChange = { incoming ->
+                    val (formatted, newCursor) = SystemIncident.formatMacAddressWithCursor(
+                        rawText = incoming.text,
+                        rawSelectionEnd = incoming.selection.end
+                    )
+                    macFieldValue = TextFieldValue(formatted, TextRange(newCursor))
+                    viewModel.onMacAddressChanged(formatted)
+                },
                 label = { Text("MAC Address") },
                 placeholder = { Text("AA:BB:CC:DD:EE:FF") },
                 singleLine = true,
@@ -413,8 +443,11 @@ fun QuickEntryScreen(
             )
 
             OutlinedTextField(
-                value = formState.ipAddress,
-                onValueChange = { viewModel.onIpAddressChanged(it) },
+                value = ipFieldValue,
+                onValueChange = { incoming ->
+                    ipFieldValue = incoming
+                    viewModel.onIpAddressChanged(incoming.text)
+                },
                 label = { Text("IP Address") },
                 placeholder = { Text("192.168.1.10") },
                 singleLine = true,
@@ -899,19 +932,24 @@ fun QuickEntryScreen(
         var newCode by remember { mutableStateOf("") }
         var newName by remember { mutableStateOf("") }
         var newDistrict by remember { mutableStateOf("Jaipur") }
+        var newSubHub by remember { mutableStateOf("") }
         var newState by remember { mutableStateOf("Rajasthan") }
+        var newLansText by remember { mutableStateOf("LAN 1, LAN 2") }
         var addError by remember { mutableStateOf<String?>(null) }
 
         AlertDialog(
             onDismissRequest = { showAddCentreDialog = false },
             title = { Text("Add Examination Centre", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     OutlinedTextField(
                         value = newCode,
                         onValueChange = { newCode = it.trim() },
                         label = { Text("Centre Code *") },
-                        placeholder = { Text("e.g., 148, EXAM-01") },
+                        placeholder = { Text("e.g., 41683, 141") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -919,15 +957,23 @@ fun QuickEntryScreen(
                         value = newName,
                         onValueChange = { newName = it },
                         label = { Text("Centre / Institution Name *") },
-                        placeholder = { Text("e.g., Govt Engineering College") },
+                        placeholder = { Text("e.g., iON Digital Zone iDZ Sitapura 2") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = newDistrict,
                         onValueChange = { newDistrict = it },
-                        label = { Text("District / City") },
+                        label = { Text("City / District") },
                         placeholder = { Text("e.g., Jaipur, Ajmer, Kota") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newSubHub,
+                        onValueChange = { newSubHub = it },
+                        label = { Text("Sub Hub (Optional)") },
+                        placeholder = { Text("e.g., Jaipur 2 (Sitapura)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -936,6 +982,14 @@ fun QuickEntryScreen(
                         onValueChange = { newState = it },
                         label = { Text("State") },
                         placeholder = { Text("e.g., Rajasthan") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newLansText,
+                        onValueChange = { newLansText = it },
+                        label = { Text("Centre LANs") },
+                        placeholder = { Text("e.g., LAN 4-11 or LAN 1, LAN 2, LAN 3") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -958,7 +1012,9 @@ fun QuickEntryScreen(
                                 code = newCode,
                                 name = newName,
                                 district = newDistrict,
-                                state = newState
+                                state = newState,
+                                subHub = newSubHub,
+                                availableLans = OrgCentre.parseLansInput(newLansText)
                             )
                             showAddCentreDialog = false
                             showCentreDialog = false
@@ -988,8 +1044,14 @@ fun QuickEntryScreen(
         var editDistrict by remember(target) {
             mutableStateOf(if (locParts.size >= 2) locParts[locParts.size - 2] else locParts.firstOrNull() ?: "Jaipur")
         }
+        var editSubHub by remember(target) {
+            mutableStateOf("")
+        }
         var editState by remember(target) {
             mutableStateOf(if (locParts.isNotEmpty()) locParts.last() else "Rajasthan")
+        }
+        var editLansText by remember(target) {
+            mutableStateOf(OrgCentre.defaultLansForCode(editCode).joinToString(", "))
         }
         var editError by remember { mutableStateOf<String?>(null) }
 
@@ -997,7 +1059,10 @@ fun QuickEntryScreen(
             onDismissRequest = { editingCentre = null },
             title = { Text("Edit Examination Centre", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     OutlinedTextField(
                         value = editCode,
                         onValueChange = { editCode = it.trim() },
@@ -1015,7 +1080,14 @@ fun QuickEntryScreen(
                     OutlinedTextField(
                         value = editDistrict,
                         onValueChange = { editDistrict = it },
-                        label = { Text("District / City") },
+                        label = { Text("City / District") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editSubHub,
+                        onValueChange = { editSubHub = it },
+                        label = { Text("Sub Hub (Optional)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1023,6 +1095,14 @@ fun QuickEntryScreen(
                         value = editState,
                         onValueChange = { editState = it },
                         label = { Text("State") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editLansText,
+                        onValueChange = { editLansText = it },
+                        label = { Text("Centre LANs") },
+                        placeholder = { Text("e.g., LAN 4-11 or LAN 1, LAN 2") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1046,7 +1126,9 @@ fun QuickEntryScreen(
                                 code = editCode,
                                 name = editName,
                                 district = editDistrict,
-                                state = editState
+                                state = editState,
+                                subHub = editSubHub,
+                                availableLans = OrgCentre.parseLansInput(editLansText)
                             )
                             editingCentre = null
                         }

@@ -37,7 +37,10 @@ data class CachedOrgNodeEntity(
     val parentStateId: String? = null,
     val parentCityId: String? = null,
     val externalCode: String? = null,
-    val districtName: String? = null
+    val districtName: String? = null,
+    val address: String? = null,
+    val subHub: String? = null,
+    val availableLansCsv: String = ""
 )
 
 @Entity(tableName = "dispatched_notification_keys")

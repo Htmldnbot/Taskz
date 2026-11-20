@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -124,245 +125,254 @@ fun TasksScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        LazyColumn(
             modifier = modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(innerPadding),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // Main Filter Tabs
-            TabRow(
-                selectedTabIndex = selectedTab.ordinal,
-                containerColor = MaterialTheme.colorScheme.surface
-            ) {
-                Tab(
-                    selected = selectedTab == TaskTabFilter.MY_TASKS,
-                    onClick = { viewModel.setTab(TaskTabFilter.MY_TASKS) },
-                    text = { Text("My Tasks", fontWeight = FontWeight.SemiBold) },
-                    modifier = Modifier.testTag("tab_my_tasks")
-                )
-                Tab(
-                    selected = selectedTab == TaskTabFilter.AVAILABLE,
-                    onClick = { viewModel.setTab(TaskTabFilter.AVAILABLE) },
-                    text = { Text("Available", fontWeight = FontWeight.SemiBold) },
-                    modifier = Modifier.testTag("tab_available_tasks")
-                )
-                Tab(
-                    selected = selectedTab == TaskTabFilter.CREATED_BY_ME,
-                    onClick = { viewModel.setTab(TaskTabFilter.CREATED_BY_ME) },
-                    text = { Text("Created By Me", fontWeight = FontWeight.SemiBold) },
-                    modifier = Modifier.testTag("tab_created_tasks")
-                )
+            item(key = "header_tabs") {
+                TabRow(
+                    selectedTabIndex = selectedTab.ordinal,
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Tab(
+                        selected = selectedTab == TaskTabFilter.MY_TASKS,
+                        onClick = { viewModel.setTab(TaskTabFilter.MY_TASKS) },
+                        text = { Text("My Tasks", fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("tab_my_tasks")
+                    )
+                    Tab(
+                        selected = selectedTab == TaskTabFilter.AVAILABLE,
+                        onClick = { viewModel.setTab(TaskTabFilter.AVAILABLE) },
+                        text = { Text("Available", fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("tab_available_tasks")
+                    )
+                    Tab(
+                        selected = selectedTab == TaskTabFilter.CREATED_BY_ME,
+                        onClick = { viewModel.setTab(TaskTabFilter.CREATED_BY_ME) },
+                        text = { Text("Created By Me", fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("tab_created_tasks")
+                    )
+                }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
 
             // Sub-filter chips (All, Today, Upcoming, Completed)
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(TaskSubFilter.values().toList()) { filter ->
-                    FilterChip(
-                        selected = selectedSubFilter == filter,
-                        onClick = { viewModel.setSubFilter(filter) },
-                        label = {
-                            Text(
-                                text = filter.name.replaceFirstChar { it.uppercase() },
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        },
-                        modifier = Modifier.testTag("subfilter_${filter.name.lowercase()}")
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Quick Operations Bar: Repeat Shift 1 -> 2 & Groups
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    onClick = onRepeatShiftClick,
-                    enabled = !isLoading,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .testTag("btn_repeat_shift_1_to_2")
+            item(key = "subfilter_chips") {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Repeat Shift 1 tasks to Shift 2",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Repeat Shift 1 → 2", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                }
-
-                OutlinedButton(
-                    onClick = onManageGroupsClick,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .testTag("btn_manage_groups_shortcut")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Groups,
-                        contentDescription = "Manage Task Groups",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Exam Groups", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Ordered Cascading Dropdown Filters: 1. State -> 2. City -> 3. Test Centre -> 4. LAN -> Shift -> Date
-            val selectedStateName = availableStates.firstOrNull { it.id == filterState.stateId }?.name
-            val selectedCityName = availableCities.firstOrNull { it.id == filterState.cityId }?.name
-            val selectedCentreLabel = availableCentres.firstOrNull { it.id == filterState.centreId }?.let { "${it.code} · ${it.name}" }
-            val centreLabelOptions = remember(availableCentres) {
-                availableCentres.map { "${it.code} · ${it.name}" }
-            }
-
-            OrderedCascadingFilterBar(
-                selectedState = selectedStateName,
-                stateOptions = availableStates.map { it.name },
-                onStateSelected = { name ->
-                    viewModel.setStateFilter(availableStates.firstOrNull { it.name == name }?.id)
-                },
-                selectedCity = selectedCityName,
-                cityOptions = availableCities.map { it.name },
-                onCitySelected = { name ->
-                    viewModel.setCityFilter(availableCities.firstOrNull { it.name == name }?.id)
-                },
-                selectedCentre = selectedCentreLabel,
-                centreOptions = centreLabelOptions,
-                onCentreSelected = { label ->
-                    val centre = availableCentres.firstOrNull { "${it.code} · ${it.name}" == label }
-                    viewModel.setCentreFilter(centre?.id)
-                },
-                selectedLan = filterState.lan,
-                lanOptions = availableLans,
-                onLanSelected = { viewModel.setLanFilter(it) },
-                selectedShift = filterState.shift,
-                shiftOptions = availableShifts,
-                onShiftSelected = { viewModel.setShiftFilter(it) },
-                selectedDate = filterState.dateFilter,
-                dateOptions = viewModel.availableDateOptions,
-                onDateSelected = { viewModel.setDateFilter(it) },
-                onClearAll = { viewModel.clearAllFilters() },
-                initiallyExpanded = false
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Search Bar & Refresh Action
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.setSearchQuery(it) },
-                    placeholder = { Text("Search tasks, groups, locations...") },
-                    leadingIcon = {
-                        Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("tasks_search_field")
-                )
-
-                IconButton(
-                    onClick = { viewModel.refreshTasks() },
-                    enabled = !isLoading,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("btn_refresh_tasks")
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Refresh Tasks",
-                            tint = MaterialTheme.colorScheme.primary
+                    items(TaskSubFilter.values().toList()) { filter ->
+                        FilterChip(
+                            selected = selectedSubFilter == filter,
+                            onClick = { viewModel.setSubFilter(filter) },
+                            label = {
+                                Text(
+                                    text = filter.name.replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.testTag("subfilter_${filter.name.lowercase()}")
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            // Quick Operations Bar: Repeat Shift 1 -> 2 & Groups
+            item(key = "quick_ops_row") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = onRepeatShiftClick,
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_repeat_shift_1_to_2")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Repeat Shift 1 tasks to Shift 2",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Repeat Shift 1 → 2", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onManageGroupsClick,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("btn_manage_groups_shortcut")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = "Manage Task Groups",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Exam Groups", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            // Ordered Cascading Dropdown Filters: 1. State -> 2. City -> 3. Test Centre -> 4. LAN -> Shift -> Date
+            item(key = "cascading_filters") {
+                val selectedStateName = availableStates.firstOrNull { it.id == filterState.stateId }?.name
+                val selectedCityName = availableCities.firstOrNull { it.id == filterState.cityId }?.name
+                val selectedCentreLabel = availableCentres.firstOrNull { it.id == filterState.centreId }?.let { "${it.code} · ${it.name}" }
+                val centreLabelOptions = remember(availableCentres) {
+                    availableCentres.map { "${it.code} · ${it.name}" }
+                }
+
+                OrderedCascadingFilterBar(
+                    selectedState = selectedStateName,
+                    stateOptions = availableStates.map { it.name },
+                    onStateSelected = { name ->
+                        viewModel.setStateFilter(availableStates.firstOrNull { it.name == name }?.id)
+                    },
+                    selectedCity = selectedCityName,
+                    cityOptions = availableCities.map { it.name },
+                    onCitySelected = { name ->
+                        viewModel.setCityFilter(availableCities.firstOrNull { it.name == name }?.id)
+                    },
+                    selectedCentre = selectedCentreLabel,
+                    centreOptions = centreLabelOptions,
+                    onCentreSelected = { label ->
+                        val centre = availableCentres.firstOrNull { "${it.code} · ${it.name}" == label }
+                        viewModel.setCentreFilter(centre?.id)
+                    },
+                    selectedLan = filterState.lan,
+                    lanOptions = availableLans,
+                    onLanSelected = { viewModel.setLanFilter(it) },
+                    selectedShift = filterState.shift,
+                    shiftOptions = availableShifts,
+                    onShiftSelected = { viewModel.setShiftFilter(it) },
+                    selectedDate = filterState.dateFilter,
+                    dateOptions = viewModel.availableDateOptions,
+                    onDateSelected = { viewModel.setDateFilter(it) },
+                    onClearAll = { viewModel.clearAllFilters() },
+                    initiallyExpanded = false
+                )
+            }
+
+            // Search Bar & Refresh Action
+            item(key = "search_row") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { viewModel.setSearchQuery(it) },
+                        placeholder = { Text("Search tasks, groups, locations...") },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tasks_search_field")
+                    )
+
+                    IconButton(
+                        onClick = { viewModel.refreshTasks() },
+                        enabled = !isLoading,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("btn_refresh_tasks")
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh Tasks",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
 
             if (isLoading && tasks.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                item(key = "loading_state") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
             } else if (tasks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Assignment,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(52.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = when (selectedTab) {
-                                TaskTabFilter.MY_TASKS -> "No assigned tasks found"
-                                TaskTabFilter.AVAILABLE -> "No available open tasks to join"
-                                TaskTabFilter.CREATED_BY_ME -> "You haven't created any tasks yet"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Tap the + button to create a new task or explore Groups.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                item(key = "empty_state") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Assignment,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = when (selectedTab) {
+                                    TaskTabFilter.MY_TASKS -> "No assigned tasks found"
+                                    TaskTabFilter.AVAILABLE -> "No available open tasks to join"
+                                    TaskTabFilter.CREATED_BY_ME -> "You haven't created any tasks yet"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Tap the + button to create a new task or explore Groups.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(tasks, key = { it.id }) { task ->
-                        TaskCard(
-                            task = task,
-                            onClick = { onTaskClick(task) },
-                            onLongClick = if (viewModel.canDeleteTask(task)) {
-                                { taskToDelete = task }
-                            } else null,
-                            onJoinClick = if (
-                                !authContext.isOnLeave &&
-                                selectedTab == TaskTabFilter.AVAILABLE &&
-                                task.allowSelfJoin &&
-                                !task.isAssignedToMe &&
-                                !task.isPendingApproval
-                            ) {
-                                { viewModel.joinTask(task.id, "", null) }
-                            } else null
-                        )
-                    }
+                items(tasks, key = { it.id }) { task ->
+                    TaskCard(
+                        task = task,
+                        onClick = { onTaskClick(task) },
+                        onLongClick = if (viewModel.canDeleteTask(task)) {
+                            { taskToDelete = task }
+                        } else null,
+                        onJoinClick = if (
+                            !authContext.isOnLeave &&
+                            selectedTab == TaskTabFilter.AVAILABLE &&
+                            task.allowSelfJoin &&
+                            !task.isAssignedToMe &&
+                            !task.isPendingApproval
+                        ) {
+                            { viewModel.joinTask(task.id, "", null) }
+                        } else null
+                    )
                 }
+            }
+
+            item(key = "fab_bottom_spacer") {
+                Spacer(modifier = Modifier.height(72.dp))
             }
         }
     }

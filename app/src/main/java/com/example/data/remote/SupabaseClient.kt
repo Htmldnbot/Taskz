@@ -3346,6 +3346,14 @@ class SupabaseClient(
                     },
                     centres = List(centresArr.length()) { idx ->
                         val ct = centresArr.getJSONObject(idx)
+                        val lansArr = ct.optJSONArray("available_lans")
+                        val lansList = if (lansArr != null) {
+                            List(lansArr.length()) { lIdx -> lansArr.optString(lIdx) }
+                                .mapNotNull { OrgCentre.normalizeLanLabel(it) }
+                                .distinct()
+                        } else {
+                            emptyList()
+                        }
                         OrgCentre(
                             id = ct.optString("id"),
                             externalCode = ct.optString("external_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
@@ -3354,7 +3362,10 @@ class SupabaseClient(
                             zoneId = ct.optString("zone_id"),
                             code = ct.optString("code"),
                             name = ct.optString("name"),
-                            districtName = ct.optString("district_name").takeIf { it.isNotBlank() && !it.equals("null", true) }
+                            districtName = ct.optString("district_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                            address = ct.optString("address").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                            subHub = ct.optString("sub_hub").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                            availableLans = lansList
                         )
                     }
                 )
@@ -3454,6 +3465,86 @@ class SupabaseClient(
             executeRpc(accessToken, "purge_expired_tasks_24h", JSONObject()).map { raw ->
                 raw.trim().toIntOrNull() ?: 0
             }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun upsertOrgCentre(
+        accessToken: String,
+        id: String? = null,
+        code: String,
+        name: String,
+        cityId: String? = null,
+        districtName: String? = null,
+        address: String? = null,
+        subHub: String? = null,
+        availableLans: List<String> = emptyList(),
+        stateName: String? = null
+    ): Result<OrgCentre> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                if (SupabaseConfig.isValidUuid(id)) put("p_id", id)
+                put("p_code", code.trim())
+                put("p_name", name.trim())
+                if (SupabaseConfig.isValidUuid(cityId)) put("p_city_id", cityId)
+                if (!districtName.isNullOrBlank()) put("p_district_name", districtName.trim())
+                if (!address.isNullOrBlank()) put("p_address", address.trim())
+                if (!subHub.isNullOrBlank()) put("p_sub_hub", subHub.trim())
+                val normalizedLans = availableLans.mapNotNull { OrgCentre.normalizeLanLabel(it) }.distinct()
+                if (normalizedLans.isNotEmpty()) {
+                    put("p_available_lans", JSONArray(normalizedLans))
+                }
+                if (!stateName.isNullOrBlank()) put("p_state_name", stateName.trim())
+            }
+            executeRpc(accessToken, "upsert_org_centre", body).map { raw ->
+                val ct = JSONObject(raw)
+                val lansArr = ct.optJSONArray("available_lans")
+                val parsedLans = if (lansArr != null) {
+                    List(lansArr.length()) { idx -> lansArr.optString(idx) }
+                        .mapNotNull { OrgCentre.normalizeLanLabel(it) }
+                        .distinct()
+                } else {
+                    emptyList()
+                }
+                OrgCentre(
+                    id = ct.optString("id"),
+                    externalCode = ct.optString("external_code").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                    cityId = ct.optString("city_id"),
+                    stateId = ct.optString("state_id"),
+                    zoneId = ct.optString("zone_id"),
+                    code = ct.optString("code"),
+                    name = ct.optString("name"),
+                    districtName = ct.optString("district_name").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                    address = ct.optString("address").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                    subHub = ct.optString("sub_hub").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                    availableLans = parsedLans
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteGroup(
+        accessToken: String,
+        groupId: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().put("p_group_id", groupId)
+            executeRpc(accessToken, "delete_task_group", body).map { Unit }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteShift(
+        accessToken: String,
+        shiftId: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().put("p_shift_id", shiftId)
+            executeRpc(accessToken, "delete_shift", body).map { Unit }
         } catch (e: Exception) {
             Result.failure(e)
         }

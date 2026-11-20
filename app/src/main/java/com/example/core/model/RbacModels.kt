@@ -112,8 +112,70 @@ data class OrgCentre(
     val zoneId: String,
     val code: String,
     val name: String,
-    val districtName: String? = null
-)
+    val districtName: String? = null,
+    val address: String? = null,
+    val subHub: String? = null,
+    val availableLans: List<String> = emptyList()
+) {
+    fun resolvedLans(): List<String> {
+        val cleaned = availableLans.mapNotNull { normalizeLanLabel(it) }.distinct()
+        return cleaned.ifEmpty { defaultLansForCode(code) }
+    }
+
+    companion object {
+        fun normalizeLanLabel(raw: String?): String? {
+            val t = raw?.trim().orEmpty()
+            if (t.isBlank()) return null
+            val digits = t.removePrefix("LAN").removePrefix("lan").trim()
+            val num = digits.toIntOrNull()
+            return if (num != null && num in 1..25) "LAN $num" else t
+        }
+
+        fun defaultLansForCode(code: String?): List<String> {
+            return when (code?.trim()) {
+                "41683" -> (4..11).map { "LAN $it" }
+                "41682" -> (1..3).map { "LAN $it" }
+                "24264" -> listOf("LAN 1")
+                "8451", "8665", "37201", "8571", "141", "1118",
+                "8450", "33978", "10624", "42599", "1275", "7850",
+                "24271", "8449" -> listOf("LAN 1", "LAN 2")
+                else -> listOf("LAN 1", "LAN 2")
+            }
+        }
+
+        /**
+         * Parses user input such as "LAN 4-11", "4..11", "LAN 1, LAN 2, LAN 3" into ordered LAN labels.
+         */
+        fun parseLansInput(raw: String): List<String> {
+            val trimmed = raw.trim()
+            if (trimmed.isBlank()) return emptyList()
+            val rangeRegex = Regex("""^(?:LAN\s*)?(\d{1,2})\s*(?:-|\.\.|to)\s*(?:LAN\s*)?(\d{1,2})$""", RegexOption.IGNORE_CASE)
+            val result = mutableListOf<String>()
+            for (token in trimmed.split(",")) {
+                val part = token.trim()
+                if (part.isBlank()) continue
+                val match = rangeRegex.matchEntire(part)
+                if (match != null) {
+                    val start = match.groupValues[1].toIntOrNull()
+                    val end = match.groupValues[2].toIntOrNull()
+                    if (start != null && end != null && start in 1..25 && end in 1..25) {
+                        val range = if (start <= end) start..end else end..start
+                        range.forEach { result.add("LAN $it") }
+                        continue
+                    }
+                }
+                normalizeLanLabel(part)?.let { result.add(it) }
+            }
+            return result.distinct()
+        }
+
+        fun formatLansCsv(lans: List<String>): String =
+            lans.mapNotNull { normalizeLanLabel(it) }.distinct().joinToString(",")
+
+        fun parseLansCsv(csv: String?): List<String> =
+            csv?.split(",")?.mapNotNull { normalizeLanLabel(it) }?.distinct().orEmpty()
+    }
+}
 
 data class OrgHierarchyData(
     val zones: List<OrgZone> = emptyList(),
