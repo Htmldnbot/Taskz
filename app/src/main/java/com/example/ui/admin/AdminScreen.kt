@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
@@ -112,11 +114,13 @@ fun AdminScreen(
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var centreSearchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedCityFilterId by rememberSaveable { mutableStateOf<String?>(null) }
     var filterNeedsScopeReview by rememberSaveable { mutableStateOf(false) }
     var selectedRequestForReset by remember { mutableStateOf<PasswordResetRequest?>(null) }
     var userToManageAccess by remember { mutableStateOf<UserProfile?>(null) }
     var centreToEdit by remember { mutableStateOf<OrgCentre?>(null) }
     var showAddCentreDialog by remember { mutableStateOf(false) }
+    var showAddCityDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -284,7 +288,7 @@ fun AdminScreen(
                     selectedTab = 4
                     if (orgHierarchy.centres.isEmpty()) viewModel.loadOrgHierarchy()
                 },
-                text = { Text("Centres (${orgHierarchy.centres.size})", fontWeight = FontWeight.SemiBold) },
+                text = { Text("Cities & Centres (${orgHierarchy.centres.size})", fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("admin_tab_centres")
             )
         }
@@ -420,53 +424,106 @@ fun AdminScreen(
                 }
             }
         } else {
-            // Centres & LANs Management Tab
+            // Cities, Centres & LANs Management Tab
+            OutlinedTextField(
+                value = centreSearchQuery,
+                onValueChange = { centreSearchQuery = it },
+                placeholder = { Text("Search TC code, centre, city, hub...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("admin_centre_search_input")
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = centreSearchQuery,
-                    onValueChange = { centreSearchQuery = it },
-                    placeholder = { Text("Search code, centre, city, hub...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    singleLine = true,
+                OutlinedButton(
+                    onClick = { showAddCityDialog = true },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("admin_centre_search_input")
-                )
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_admin_add_city")
+                ) {
+                    Icon(Icons.Default.LocationCity, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("+ City")
+                }
                 Button(
                     onClick = { showAddCentreDialog = true },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
+                        .weight(1f)
                         .heightIn(min = 48.dp)
                         .testTag("btn_admin_add_centre")
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("+ Centre")
+                }
+            }
+
+            if (orgHierarchy.cities.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                val centreCountsByCity = remember(orgHierarchy.centres) {
+                    orgHierarchy.centres.groupingBy { it.cityId }.eachCount()
+                }
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item(key = "all_cities") {
+                        FilterChip(
+                            selected = selectedCityFilterId == null,
+                            onClick = { selectedCityFilterId = null },
+                            label = { Text("All Cities (${orgHierarchy.cities.size})") },
+                            modifier = Modifier.testTag("admin_city_filter_all")
+                        )
+                    }
+                    items(orgHierarchy.cities, key = { it.id }) { city ->
+                        val count = centreCountsByCity[city.id] ?: 0
+                        FilterChip(
+                            selected = selectedCityFilterId == city.id,
+                            onClick = {
+                                selectedCityFilterId = if (selectedCityFilterId == city.id) null else city.id
+                            },
+                            label = { Text("${city.name} ($count)") },
+                            modifier = Modifier.testTag("admin_city_filter_${city.code}")
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val filteredCentres = remember(orgHierarchy.centres, centreSearchQuery) {
+            val filteredCentres = remember(orgHierarchy.centres, centreSearchQuery, selectedCityFilterId) {
                 val q = centreSearchQuery.trim()
                 orgHierarchy.centres.filter { c ->
-                    q.isBlank() ||
+                    val matchesCity = selectedCityFilterId == null || c.cityId == selectedCityFilterId
+                    val matchesQuery = q.isBlank() ||
                         c.code.contains(q, ignoreCase = true) ||
                         c.name.contains(q, ignoreCase = true) ||
                         (c.districtName?.contains(q, ignoreCase = true) == true) ||
                         (c.subHub?.contains(q, ignoreCase = true) == true)
+                    matchesCity && matchesQuery
                 }.sortedBy { it.code.toIntOrNull() ?: Int.MAX_VALUE }
             }
 
             if (filteredCentres.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (centreSearchQuery.isBlank()) "No centres loaded yet." else "No centres matching '$centreSearchQuery'",
+                        text = if (centreSearchQuery.isBlank() && selectedCityFilterId == null) {
+                            "No centres loaded yet."
+                        } else {
+                            "No centres in this selection. Tap '+ Centre' to add one."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -520,15 +577,35 @@ fun AdminScreen(
         )
     }
 
+    if (showAddCityDialog) {
+        AddOrgCityDialog(
+            orgHierarchy = orgHierarchy,
+            onDismiss = { showAddCityDialog = false },
+            onSave = { cityName, cityCode, stateId, stateName, zoneId ->
+                viewModel.upsertOrgCity(
+                    code = cityCode,
+                    name = cityName,
+                    stateId = stateId,
+                    stateName = stateName,
+                    zoneId = zoneId,
+                    onSuccess = {
+                        showAddCityDialog = false
+                    }
+                )
+            }
+        )
+    }
+
     if (showAddCentreDialog || centreToEdit != null) {
         AddEditOrgCentreDialog(
             existing = centreToEdit,
+            defaultCityId = selectedCityFilterId,
             orgHierarchy = orgHierarchy,
             onDismiss = {
                 showAddCentreDialog = false
                 centreToEdit = null
             },
-            onSave = { code, name, cityId, districtName, subHub, address, lans ->
+            onSave = { code, name, cityId, districtName, stateName, subHub, address, lans ->
                 viewModel.upsertOrgCentre(
                     id = centreToEdit?.id,
                     code = code,
@@ -538,9 +615,7 @@ fun AdminScreen(
                     address = address,
                     subHub = subHub,
                     availableLans = lans,
-                    stateName = orgHierarchy.cities.firstOrNull { it.id == cityId }?.stateId?.let { stId ->
-                        orgHierarchy.states.firstOrNull { it.id == stId }?.name
-                    },
+                    stateName = stateName,
                     onSuccess = {
                         showAddCentreDialog = false
                         centreToEdit = null
@@ -1367,10 +1442,188 @@ private fun OrgCentreAdminCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddOrgCityDialog(
+    orgHierarchy: OrgHierarchyData,
+    onDismiss: () -> Unit,
+    onSave: (
+        cityName: String,
+        cityCode: String?,
+        stateId: String?,
+        stateName: String?,
+        zoneId: String?
+    ) -> Unit
+) {
+    var cityName by remember { mutableStateOf("") }
+    var cityCode by remember { mutableStateOf("") }
+    var useNewState by remember { mutableStateOf(orgHierarchy.states.isEmpty()) }
+    var selectedStateId by remember { mutableStateOf(orgHierarchy.states.firstOrNull()?.id) }
+    var newStateName by remember { mutableStateOf("") }
+    var selectedZoneId by remember { mutableStateOf(orgHierarchy.zones.firstOrNull()?.id) }
+    var stateDropdownExpanded by remember { mutableStateOf(false) }
+    var zoneDropdownExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add City", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = cityName,
+                    onValueChange = { cityName = it },
+                    label = { Text("City Name *") },
+                    placeholder = { Text("e.g., Alwar, Sikar, Gurugram") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_city_name_input")
+                )
+                OutlinedTextField(
+                    value = cityCode,
+                    onValueChange = { cityCode = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
+                    label = { Text("City Code (Optional)") },
+                    placeholder = { Text("e.g., ALW, SKR (auto-generated if blank)") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_city_code_input")
+                )
+
+                if (orgHierarchy.states.isNotEmpty()) {
+                    ExposedDropdownMenuBox(
+                        expanded = stateDropdownExpanded,
+                        onExpandedChange = { stateDropdownExpanded = it }
+                    ) {
+                        val stateLabel = if (useNewState) {
+                            "+ New State"
+                        } else {
+                            orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name ?: "Select State"
+                        }
+                        OutlinedTextField(
+                            value = stateLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("State") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateDropdownExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = stateDropdownExpanded,
+                            onDismissRequest = { stateDropdownExpanded = false }
+                        ) {
+                            orgHierarchy.states.forEach { st ->
+                                DropdownMenuItem(
+                                    text = { Text("${st.name} (${st.code})") },
+                                    onClick = {
+                                        useNewState = false
+                                        selectedStateId = st.id
+                                        selectedZoneId = st.zoneId
+                                        stateDropdownExpanded = false
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("+ New State", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                                onClick = {
+                                    useNewState = true
+                                    selectedStateId = null
+                                    stateDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (useNewState || orgHierarchy.states.isEmpty()) {
+                    OutlinedTextField(
+                        value = newStateName,
+                        onValueChange = { newStateName = it },
+                        label = { Text("New State Name *") },
+                        placeholder = { Text("e.g., Haryana, Delhi, Uttar Pradesh") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("admin_new_state_name_input")
+                    )
+                    if (orgHierarchy.zones.isNotEmpty()) {
+                        ExposedDropdownMenuBox(
+                            expanded = zoneDropdownExpanded,
+                            onExpandedChange = { zoneDropdownExpanded = it }
+                        ) {
+                            val zoneLabel = orgHierarchy.zones.firstOrNull { it.id == selectedZoneId }?.name ?: "Select Zone"
+                            OutlinedTextField(
+                                value = zoneLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Zone") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneDropdownExpanded) },
+                                modifier = Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = zoneDropdownExpanded,
+                                onDismissRequest = { zoneDropdownExpanded = false }
+                            ) {
+                                orgHierarchy.zones.forEach { zone ->
+                                    DropdownMenuItem(
+                                        text = { Text(zone.name) },
+                                        onClick = {
+                                            selectedZoneId = zone.id
+                                            zoneDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val stateValid = !useNewState || newStateName.isNotBlank()
+            Button(
+                enabled = cityName.isNotBlank() && stateValid,
+                onClick = {
+                    val resolvedStateName = if (useNewState || orgHierarchy.states.isEmpty()) {
+                        newStateName.trim()
+                    } else {
+                        orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name
+                    }
+                    onSave(
+                        cityName.trim(),
+                        cityCode.trim().takeIf { it.isNotBlank() },
+                        if (useNewState) null else selectedStateId,
+                        resolvedStateName,
+                        selectedZoneId
+                    )
+                },
+                modifier = Modifier.testTag("confirm_save_admin_city_btn")
+            ) {
+                Text("Save City")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun AddEditOrgCentreDialog(
     existing: OrgCentre?,
+    defaultCityId: String?,
     orgHierarchy: OrgHierarchyData,
     onDismiss: () -> Unit,
     onSave: (
@@ -1378,21 +1631,33 @@ private fun AddEditOrgCentreDialog(
         name: String,
         cityId: String?,
         districtName: String?,
+        stateName: String?,
         subHub: String?,
         address: String?,
         lans: List<String>
     ) -> Unit
 ) {
+    val initialCityId = existing?.cityId ?: defaultCityId ?: orgHierarchy.cities.firstOrNull()?.id
     var code by remember(existing?.id) { mutableStateOf(existing?.code.orEmpty()) }
     var name by remember(existing?.id) { mutableStateOf(existing?.name.orEmpty()) }
-    var selectedCityId by remember(existing?.id) { mutableStateOf(existing?.cityId ?: orgHierarchy.cities.firstOrNull()?.id) }
+    var useNewCity by remember(existing?.id) { mutableStateOf(orgHierarchy.cities.isEmpty()) }
+    var selectedCityId by remember(existing?.id) { mutableStateOf(initialCityId) }
     var districtName by remember(existing?.id) {
         mutableStateOf(
             existing?.districtName
-                ?: orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name
+                ?: orgHierarchy.cities.firstOrNull { it.id == initialCityId }?.name
                 ?: ""
         )
     }
+    var useNewState by remember(existing?.id) { mutableStateOf(orgHierarchy.states.isEmpty()) }
+    var selectedStateId by remember(existing?.id) {
+        mutableStateOf(
+            existing?.stateId
+                ?: orgHierarchy.cities.firstOrNull { it.id == initialCityId }?.stateId
+                ?: orgHierarchy.states.firstOrNull()?.id
+        )
+    }
+    var newStateName by remember(existing?.id) { mutableStateOf("") }
     var subHub by remember(existing?.id) { mutableStateOf(existing?.subHub.orEmpty()) }
     var address by remember(existing?.id) { mutableStateOf(existing?.address.orEmpty()) }
     var lansInput by remember(existing?.id) {
@@ -1401,6 +1666,7 @@ private fun AddEditOrgCentreDialog(
         )
     }
     var cityDropdownExpanded by remember { mutableStateOf(false) }
+    var stateDropdownExpanded by remember { mutableStateOf(false) }
 
     val parsedPreview = remember(lansInput) { OrgCentre.parseLansInput(lansInput) }
 
@@ -1442,7 +1708,11 @@ private fun AddEditOrgCentreDialog(
                         expanded = cityDropdownExpanded,
                         onExpandedChange = { cityDropdownExpanded = it }
                     ) {
-                        val cityLabel = orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "Select City"
+                        val cityLabel = if (useNewCity) {
+                            "+ New City"
+                        } else {
+                            orgHierarchy.cities.firstOrNull { it.id == selectedCityId }?.name ?: "Select City"
+                        }
                         OutlinedTextField(
                             value = cityLabel,
                             onValueChange = {},
@@ -1457,12 +1727,30 @@ private fun AddEditOrgCentreDialog(
                             expanded = cityDropdownExpanded,
                             onDismissRequest = { cityDropdownExpanded = false }
                         ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "+ New City",
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                onClick = {
+                                    useNewCity = true
+                                    selectedCityId = null
+                                    districtName = ""
+                                    cityDropdownExpanded = false
+                                }
+                            )
                             orgHierarchy.cities.forEach { city ->
                                 DropdownMenuItem(
                                     text = { Text("${city.name} (${city.code})") },
                                     onClick = {
+                                        useNewCity = false
                                         selectedCityId = city.id
-                                        if (districtName.isBlank()) districtName = city.name
+                                        selectedStateId = city.stateId
+                                        useNewState = false
+                                        districtName = city.name
                                         cityDropdownExpanded = false
                                     }
                                 )
@@ -1471,10 +1759,76 @@ private fun AddEditOrgCentreDialog(
                     }
                 }
 
+                if (useNewCity || orgHierarchy.cities.isEmpty()) {
+                    if (orgHierarchy.states.isNotEmpty()) {
+                        ExposedDropdownMenuBox(
+                            expanded = stateDropdownExpanded,
+                            onExpandedChange = { stateDropdownExpanded = it }
+                        ) {
+                            val stLabel = if (useNewState) {
+                                "+ New State"
+                            } else {
+                                orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name ?: "Select State"
+                            }
+                            OutlinedTextField(
+                                value = stLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("State") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateDropdownExpanded) },
+                                modifier = Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = stateDropdownExpanded,
+                                onDismissRequest = { stateDropdownExpanded = false }
+                            ) {
+                                orgHierarchy.states.forEach { st ->
+                                    DropdownMenuItem(
+                                        text = { Text("${st.name} (${st.code})") },
+                                        onClick = {
+                                            useNewState = false
+                                            selectedStateId = st.id
+                                            stateDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("+ New State", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                                    onClick = {
+                                        useNewState = true
+                                        selectedStateId = null
+                                        stateDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    if (useNewState || orgHierarchy.states.isEmpty()) {
+                        OutlinedTextField(
+                            value = newStateName,
+                            onValueChange = { newStateName = it },
+                            label = { Text("New State Name *") },
+                            placeholder = { Text("e.g., Haryana, Delhi") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = districtName,
-                    onValueChange = { districtName = it },
-                    label = { Text("City / District") },
+                    onValueChange = {
+                        districtName = it
+                        val matched = orgHierarchy.cities.firstOrNull { c -> c.name.equals(it.trim(), ignoreCase = true) }
+                        if (matched == null && it.isNotBlank()) {
+                            useNewCity = true
+                            selectedCityId = null
+                        }
+                    },
+                    label = { Text(if (useNewCity) "New City Name *" else "City / District") },
+                    placeholder = { Text("e.g., Alwar, Sikar, Gurugram") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1529,15 +1883,24 @@ private fun AddEditOrgCentreDialog(
             }
         },
         confirmButton = {
+            val cityReady = !useNewCity || districtName.isNotBlank()
+            val stateReady = !useNewCity || !useNewState || newStateName.isNotBlank()
             Button(
-                enabled = code.isNotBlank() && name.isNotBlank(),
+                enabled = code.isNotBlank() && name.isNotBlank() && cityReady && stateReady,
                 onClick = {
                     val finalLans = OrgCentre.parseLansInput(lansInput).ifEmpty { listOf("LAN 1") }
+                    val resolvedStateName = when {
+                        useNewCity && (useNewState || orgHierarchy.states.isEmpty()) ->
+                            newStateName.trim().takeIf { it.isNotBlank() }
+                        else ->
+                            orgHierarchy.states.firstOrNull { it.id == selectedStateId }?.name
+                    }
                     onSave(
                         code.trim(),
                         name.trim(),
-                        selectedCityId,
+                        if (useNewCity) null else selectedCityId,
                         districtName.trim().takeIf { it.isNotBlank() },
+                        resolvedStateName,
                         subHub.trim().takeIf { it.isNotBlank() },
                         address.trim().takeIf { it.isNotBlank() },
                         finalLans

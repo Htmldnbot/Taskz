@@ -589,6 +589,52 @@ class TaskzSyncManager(
         res
     }
 
+    suspend fun upsertOrgCity(
+        id: String? = null,
+        code: String? = null,
+        name: String,
+        stateId: String? = null,
+        stateName: String? = null,
+        zoneId: String? = null,
+        zoneName: String? = null
+    ): Result<OrgCity> = withContext(Dispatchers.IO) {
+        var token = authRepository.getValidAccessToken().getOrNull()
+            ?: return@withContext Result.failure(Exception("Authentication required"))
+        var res = supabaseClient.upsertOrgCity(
+            accessToken = token,
+            id = id,
+            code = code,
+            name = name,
+            stateId = stateId,
+            stateName = stateName,
+            zoneId = zoneId,
+            zoneName = zoneName
+        )
+        if (res.isFailure) {
+            val msg = res.exceptionOrNull()?.message.orEmpty()
+            if (msg.contains("401") || msg.contains("jwt", true) || msg.contains("expired", true)) {
+                val refreshed = authRepository.forceRefreshAccessToken(token).getOrNull()
+                if (!refreshed.isNullOrBlank()) {
+                    token = refreshed
+                    res = supabaseClient.upsertOrgCity(
+                        accessToken = token,
+                        id = id,
+                        code = code,
+                        name = name,
+                        stateId = stateId,
+                        stateName = stateName,
+                        zoneId = zoneId,
+                        zoneName = zoneName
+                    )
+                }
+            }
+        }
+        if (res.isSuccess) {
+            refreshOrgHierarchy(token)
+        }
+        res
+    }
+
     suspend fun upsertOrgCentre(
         id: String? = null,
         code: String,

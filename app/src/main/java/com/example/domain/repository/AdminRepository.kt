@@ -145,6 +145,26 @@ class AdminRepository(
         }
     }
 
+    suspend fun upsertOrgCity(
+        id: String? = null,
+        code: String? = null,
+        name: String,
+        stateId: String? = null,
+        stateName: String? = null,
+        zoneId: String? = null,
+        zoneName: String? = null
+    ): Result<com.example.core.model.OrgCity> {
+        return com.example.TaskzApplication.instance.taskzSyncManager.upsertOrgCity(
+            id = id,
+            code = code,
+            name = name,
+            stateId = stateId,
+            stateName = stateName,
+            zoneId = zoneId,
+            zoneName = zoneName
+        )
+    }
+
     suspend fun upsertOrgCentre(
         id: String? = null,
         code: String,

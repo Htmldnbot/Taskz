@@ -197,6 +197,46 @@ class AdminViewModel(
         }
     }
 
+    fun upsertOrgCity(
+        id: String? = null,
+        code: String? = null,
+        name: String,
+        stateId: String? = null,
+        stateName: String? = null,
+        zoneId: String? = null,
+        zoneName: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        if (name.isBlank()) {
+            _actionState.value = AdminActionState.Error("City name is required.")
+            return
+        }
+        viewModelScope.launch {
+            _actionState.value = AdminActionState.Loading
+            val res = adminRepository.upsertOrgCity(
+                id = id,
+                code = code,
+                name = name,
+                stateId = stateId,
+                stateName = stateName,
+                zoneId = zoneId,
+                zoneName = zoneName
+            )
+            res.fold(
+                onSuccess = { saved ->
+                    _actionState.value = AdminActionState.Success(
+                        "Saved city ${saved.name} (${saved.code})"
+                    )
+                    loadOrgHierarchy()
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionState.value = AdminActionState.Error(err.message ?: "Failed to save city")
+                }
+            )
+        }
+    }
+
     fun upsertOrgCentre(
         id: String? = null,
         code: String,

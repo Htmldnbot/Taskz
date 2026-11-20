@@ -3470,6 +3470,41 @@ class SupabaseClient(
         }
     }
 
+    suspend fun upsertOrgCity(
+        accessToken: String,
+        id: String? = null,
+        code: String? = null,
+        name: String,
+        stateId: String? = null,
+        stateName: String? = null,
+        zoneId: String? = null,
+        zoneName: String? = null
+    ): Result<OrgCity> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                if (SupabaseConfig.isValidUuid(id)) put("p_id", id)
+                if (!code.isNullOrBlank()) put("p_code", code.trim())
+                put("p_name", name.trim())
+                if (SupabaseConfig.isValidUuid(stateId)) put("p_state_id", stateId)
+                if (!stateName.isNullOrBlank()) put("p_state_name", stateName.trim())
+                if (SupabaseConfig.isValidUuid(zoneId)) put("p_zone_id", zoneId)
+                if (!zoneName.isNullOrBlank()) put("p_zone_name", zoneName.trim())
+            }
+            executeRpc(accessToken, "upsert_org_city", body).map { raw ->
+                val obj = JSONObject(raw)
+                OrgCity(
+                    id = obj.optString("id"),
+                    stateId = obj.optString("state_id"),
+                    zoneId = obj.optString("zone_id"),
+                    code = obj.optString("code"),
+                    name = obj.optString("name")
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun upsertOrgCentre(
         accessToken: String,
         id: String? = null,
