@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +72,7 @@ import com.example.core.model.TaskzRole
 import com.example.ui.common.NothingDivider
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingFilterToggleButton
 import com.example.ui.common.NothingHairlineCard
 import com.example.ui.common.NothingSearchInput
 import com.example.ui.common.NothingStatusDot
@@ -102,25 +104,38 @@ fun IncidentHistoryScreen(
     val filterCity by viewModel.filterCity.collectAsStateWithLifecycle()
     val filterState by viewModel.filterSelectedState.collectAsStateWithLifecycle()
     val filterZone by viewModel.filterZone.collectAsStateWithLifecycle()
+    val filterExam by viewModel.filterExam.collectAsStateWithLifecycle()
     val filterShift by viewModel.filterShift.collectAsStateWithLifecycle()
     val filterDateRange by viewModel.filterDateRange.collectAsStateWithLifecycle()
     val availableLans by viewModel.availableLans.collectAsStateWithLifecycle()
     val availableCentres by viewModel.availableCentreNames.collectAsStateWithLifecycle()
     val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
     val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
+    val availableExams by viewModel.availableExams.collectAsStateWithLifecycle()
     val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
 
     val selectedIncident by viewModel.selectedIncident.collectAsStateWithLifecycle()
     val selectedAudits by viewModel.incidentAudits.collectAsStateWithLifecycle()
     var incidentToDelete by remember { mutableStateOf<SystemIncident?>(null) }
+    var showFilters by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
     val activeContext by TaskzApplication.instance.permissionManager.contextFlow.collectAsStateWithLifecycle()
     val isSuperAdmin = activeContext.activeRole == TaskzRole.SUPER_ADMIN
 
-    val hasActiveFilter = myReportsOnly || filterShiftedOnly || filterLan != null ||
-        filterCentre != null || filterCity != null || filterState != null || filterZone != null ||
-        filterShift != null || (filterDateRange != null && filterDateRange != "all") || searchQuery.isNotBlank()
+    val extraActiveCount = (if (myReportsOnly) 1 else 0) + (if (filterShiftedOnly) 1 else 0)
+    val cascadingActiveCount = listOfNotNull(
+        filterState?.takeIf { it.isNotBlank() },
+        filterCity?.takeIf { it.isNotBlank() },
+        filterCentre?.takeIf { it.isNotBlank() },
+        filterExam?.takeIf { it.isNotBlank() },
+        filterLan?.takeIf { it.isNotBlank() },
+        filterShift?.takeIf { it.isNotBlank() },
+        filterZone?.takeIf { it.isNotBlank() },
+        filterDateRange?.takeIf { it.isNotBlank() && !it.equals("all", ignoreCase = true) }
+    ).size
+    val activeFilterCount = extraActiveCount + cascadingActiveCount
+    val hasActiveFilter = activeFilterCount > 0 || searchQuery.isNotBlank()
 
     Box(
         modifier = modifier
@@ -132,7 +147,7 @@ fun IncidentHistoryScreen(
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Search & Refresh Row
+            // Search, Filter Toggle & Refresh Row
             item(key = "history_search_row") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -142,9 +157,16 @@ fun IncidentHistoryScreen(
                     NothingSearchInput(
                         value = searchQuery,
                         onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = "Search system, centre, reason...",
+                        placeholder = "Search system, exam, reason...",
                         testTag = "history_search_input",
                         modifier = Modifier.weight(1f)
+                    )
+
+                    NothingFilterToggleButton(
+                        activeCount = activeFilterCount,
+                        isExpanded = showFilters,
+                        onClick = { showFilters = !showFilters },
+                        testTag = "filter_toggle_button"
                     )
 
                     Surface(
@@ -186,6 +208,9 @@ fun IncidentHistoryScreen(
                     selectedCentre = filterCentre,
                     centreOptions = availableCentres,
                     onCentreSelected = { viewModel.setFilterCentre(it) },
+                    selectedExam = filterExam,
+                    examOptions = availableExams,
+                    onExamSelected = { viewModel.setFilterExam(it) },
                     selectedLan = filterLan,
                     lanOptions = availableLans,
                     onLanSelected = { viewModel.setFilterLan(it) },
@@ -206,50 +231,50 @@ fun IncidentHistoryScreen(
                     },
                     onClearAll = { viewModel.clearAllFilters() },
                     tagPrefix = "filter_dropdown",
-                    initiallyExpanded = false
-                )
-            }
-
-            // Compact Quick Toggles
-            item(key = "history_quick_chips") {
-                val primaryChipScroll = rememberScrollState()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(primaryChipScroll),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CompactHistoryFilterChip(
-                        label = "My Reports",
-                        selected = myReportsOnly,
-                        icon = Icons.Filled.Person,
-                        onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
-                        testTag = "filter_my_reports_chip"
-                    )
-                    CompactHistoryFilterChip(
-                        label = "All (${allIncidents.size})",
-                        selected = !filterShiftedOnly && !hasActiveFilter,
-                        onClick = { viewModel.clearAllFilters() },
-                        testTag = "filter_all_chip"
-                    )
-                    CompactHistoryFilterChip(
-                        label = "Shifted Only",
-                        selected = filterShiftedOnly,
-                        onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
-                        testTag = "filter_shifted_chip"
-                    )
-                    if (hasActiveFilter) {
-                        CompactHistoryFilterChip(
-                            label = "Clear",
-                            selected = false,
-                            icon = Icons.Filled.Clear,
-                            tintColor = NothingRed,
-                            onClick = { viewModel.clearAllFilters() },
-                            testTag = "filter_clear_all_chip"
-                        )
+                    expanded = showFilters,
+                    onToggleExpanded = { showFilters = !showFilters },
+                    extraActiveCount = extraActiveCount + if (filterZone != null) 1 else 0,
+                    extraContent = {
+                        val primaryChipScroll = rememberScrollState()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(primaryChipScroll),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CompactHistoryFilterChip(
+                                label = "My Reports",
+                                selected = myReportsOnly,
+                                icon = Icons.Filled.Person,
+                                onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) },
+                                testTag = "filter_my_reports_chip"
+                            )
+                            CompactHistoryFilterChip(
+                                label = "All (${allIncidents.size})",
+                                selected = !filterShiftedOnly && !hasActiveFilter,
+                                onClick = { viewModel.clearAllFilters() },
+                                testTag = "filter_all_chip"
+                            )
+                            CompactHistoryFilterChip(
+                                label = "Shifted Only",
+                                selected = filterShiftedOnly,
+                                onClick = { viewModel.setFilterShiftedOnly(!filterShiftedOnly) },
+                                testTag = "filter_shifted_chip"
+                            )
+                            if (hasActiveFilter) {
+                                CompactHistoryFilterChip(
+                                    label = "Clear",
+                                    selected = false,
+                                    icon = Icons.Filled.Clear,
+                                    tintColor = NothingRed,
+                                    onClick = { viewModel.clearAllFilters() },
+                                    testTag = "filter_clear_all_chip"
+                                )
+                            }
+                        }
                     }
-                }
+                )
             }
 
             if (incidents.isEmpty()) {

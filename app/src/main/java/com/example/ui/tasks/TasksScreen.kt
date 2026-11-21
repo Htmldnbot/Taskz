@@ -49,6 +49,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,7 @@ import com.example.core.model.TaskItem
 import com.example.core.model.TaskType
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingEmptyState
+import com.example.ui.common.NothingFilterToggleButton
 import com.example.ui.common.NothingHairlineCard
 import com.example.ui.common.NothingSearchInput
 import com.example.ui.common.NothingStatusDot
@@ -92,6 +94,7 @@ fun TasksScreen(
     val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
     val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
     val availableCentres by viewModel.availableCentres.collectAsStateWithLifecycle()
+    val availableExams by viewModel.availableExams.collectAsStateWithLifecycle()
     val availableLans by viewModel.availableLans.collectAsStateWithLifecycle()
     val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
     val orgHierarchy by viewModel.orgHierarchyFlow.collectAsStateWithLifecycle()
@@ -100,6 +103,17 @@ fun TasksScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var taskToDelete by remember { mutableStateOf<TaskItem?>(null) }
+    var showFilters by rememberSaveable { mutableStateOf(false) }
+
+    val activeFilterCount = listOfNotNull(
+        filterState.stateId?.takeIf { it.isNotBlank() },
+        filterState.cityId?.takeIf { it.isNotBlank() },
+        filterState.centreId?.takeIf { it.isNotBlank() },
+        filterState.examName?.takeIf { it.isNotBlank() },
+        filterState.lan?.takeIf { it.isNotBlank() },
+        filterState.shift?.takeIf { it.isNotBlank() },
+        filterState.dateFilter.takeIf { it.isNotBlank() && !it.equals("All", ignoreCase = true) }
+    ).size + if (selectedSubFilter != TaskSubFilter.ALL) 1 else 0
 
     LaunchedEffect(Unit) {
         if (orgHierarchy.cities.isEmpty()) {
@@ -253,43 +267,6 @@ fun TasksScreen(
                 }
             }
 
-            // Compact Sub-filter chips (All, Today, Upcoming, Completed)
-            item(key = "subfilter_chips") {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(TaskSubFilter.values().toList()) { filter ->
-                        val selected = selectedSubFilter == filter
-                        Surface(
-                            onClick = { viewModel.setSubFilter(filter) },
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (selected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
-                            border = BorderStroke(
-                                1.dp,
-                                if (selected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
-                            ),
-                            modifier = Modifier
-                                .heightIn(min = 34.dp)
-                                .testTag("subfilter_${filter.name.lowercase()}")
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = filter.name.lowercase().replaceFirstChar { it.uppercase() },
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                    ),
-                                    color = if (selected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             // Quick Operations Bar: Repeat Shift 1 -> 2 & Exam Groups
             item(key = "quick_ops_row") {
                 Row(
@@ -361,7 +338,30 @@ fun TasksScreen(
                 }
             }
 
-            // Ordered Cascading Dropdown Filters (collapsed by default)
+            // Compact Search Input + On-Demand Filter Trigger
+            item(key = "search_row") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    NothingSearchInput(
+                        value = searchQuery,
+                        onValueChange = { viewModel.setSearchQuery(it) },
+                        placeholder = "Search tasks, exams, locations...",
+                        testTag = "tasks_search_field",
+                        modifier = Modifier.weight(1f)
+                    )
+                    NothingFilterToggleButton(
+                        activeCount = activeFilterCount,
+                        isExpanded = showFilters,
+                        onClick = { showFilters = !showFilters },
+                        testTag = "filter_toggle_button"
+                    )
+                }
+            }
+
+            // Ordered Cascading Dropdown Filters + Sub-filter chips (shown only when user taps Filters)
             item(key = "cascading_filters") {
                 val selectedStateName = availableStates.firstOrNull { it.id == filterState.stateId }?.name
                 val selectedCityName = availableCities.firstOrNull { it.id == filterState.cityId }?.name
@@ -387,6 +387,9 @@ fun TasksScreen(
                         val centre = availableCentres.firstOrNull { "${it.code} · ${it.name}" == label }
                         viewModel.setCentreFilter(centre?.id)
                     },
+                    selectedExam = filterState.examName,
+                    examOptions = availableExams,
+                    onExamSelected = { viewModel.setExamFilter(it) },
                     selectedLan = filterState.lan,
                     lanOptions = availableLans,
                     onLanSelected = { viewModel.setLanFilter(it) },
@@ -397,17 +400,44 @@ fun TasksScreen(
                     dateOptions = viewModel.availableDateOptions,
                     onDateSelected = { viewModel.setDateFilter(it) },
                     onClearAll = { viewModel.clearAllFilters() },
-                    initiallyExpanded = false
-                )
-            }
-
-            // Compact Search Input
-            item(key = "search_row") {
-                NothingSearchInput(
-                    value = searchQuery,
-                    onValueChange = { viewModel.setSearchQuery(it) },
-                    placeholder = "Search tasks, groups, locations...",
-                    testTag = "tasks_search_field"
+                    expanded = showFilters,
+                    onToggleExpanded = { showFilters = !showFilters },
+                    extraActiveCount = if (selectedSubFilter != TaskSubFilter.ALL) 1 else 0,
+                    extraContent = {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(TaskSubFilter.values().toList()) { filter ->
+                                val selected = selectedSubFilter == filter
+                                Surface(
+                                    onClick = { viewModel.setSubFilter(filter) },
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (selected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surfaceElevated,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
+                                    ),
+                                    modifier = Modifier
+                                        .heightIn(min = 36.dp)
+                                        .testTag("subfilter_${filter.name.lowercase()}")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = filter.name.lowercase().replaceFirstChar { it.uppercase() },
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                            ),
+                                            color = if (selected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 )
             }
 

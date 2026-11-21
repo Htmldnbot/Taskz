@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Clear
@@ -34,6 +36,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,8 +55,58 @@ import com.example.ui.theme.NothingTheme
 import com.example.ui.theme.TechMonoFontFamily
 
 /**
+ * Compact on-demand filter trigger pill so screens stay uncluttered until the user taps Filters.
+ */
+@Composable
+fun NothingFilterToggleButton(
+    activeCount: Int,
+    isExpanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    testTag: String = "filter_toggle_button"
+) {
+    val isHighlighted = isExpanded || activeCount > 0
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isHighlighted) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isHighlighted) NothingTheme.colors.accentPrimary else NothingTheme.colors.border
+        ),
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .heightIn(min = 48.dp)
+            .testTag(testTag)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.FilterList,
+                contentDescription = if (isExpanded) "Hide Filters" else "Show Filters",
+                tint = if (isHighlighted) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = if (activeCount > 0) "Filters ($activeCount)" else "Filters",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.SemiBold
+                ),
+                color = if (isHighlighted) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
  * Shared ordered cascading dropdown filter bar:
- * 1. State -> 2. City -> 3. Test Centre -> 4. LAN -> Shift -> Date
+ * 1. State -> 2. City -> 3. Test Centre -> 4. Exam -> 5. LAN -> Shift -> Date
+ *
+ * When [expanded] is supplied (recommended), the entire filter card stays hidden until toggled on.
  */
 @Composable
 fun OrderedCascadingFilterBar(
@@ -77,182 +130,269 @@ fun OrderedCascadingFilterBar(
     onDateSelected: (String?) -> Unit,
     onClearAll: () -> Unit,
     modifier: Modifier = Modifier,
+    selectedExam: String? = null,
+    examOptions: List<String> = emptyList(),
+    onExamSelected: (String?) -> Unit = {},
+    showExamFilter: Boolean = true,
     tagPrefix: String = "filter_dropdown",
-    initiallyExpanded: Boolean = true
+    initiallyExpanded: Boolean = true,
+    expanded: Boolean? = null,
+    onToggleExpanded: (() -> Unit)? = null,
+    extraActiveCount: Int = 0,
+    extraContent: (@Composable ColumnScope.() -> Unit)? = null
 ) {
-    var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
-    val activeCount = listOfNotNull(
+    var internalExpanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+    val isExpanded = expanded ?: internalExpanded
+    val isExternallyControlled = expanded != null
+
+    val cascadingActiveCount = listOfNotNull(
         selectedState?.takeIf { it.isNotBlank() },
         selectedCity?.takeIf { it.isNotBlank() },
         selectedCentre?.takeIf { it.isNotBlank() },
+        selectedExam?.takeIf { it.isNotBlank() },
         selectedLan?.takeIf { it.isNotBlank() },
         selectedShift?.takeIf { it.isNotBlank() },
         selectedDate?.takeIf { it.isNotBlank() && !it.equals("All", ignoreCase = true) }
     ).size
+    val totalActiveCount = cascadingActiveCount + extraActiveCount
 
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = NothingTheme.colors.surface,
-        border = BorderStroke(1.dp, NothingTheme.colors.border)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+    val handleToggle: () -> Unit = {
+        if (onToggleExpanded != null) {
+            onToggleExpanded()
+        } else {
+            internalExpanded = !internalExpanded
+        }
+    }
+
+    val panelBody: @Composable () -> Unit = {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = NothingTheme.colors.surface,
+            border = BorderStroke(1.dp, NothingTheme.colors.border)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.FilterList,
-                        contentDescription = "Filters",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (activeCount > 0) "FILTERS ($activeCount)" else "FILTERS",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = TechMonoFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.8.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FilterList,
+                            contentDescription = "Filters",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = if (totalActiveCount > 0) "FILTERS ($totalActiveCount)" else "FILTERS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = TechMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (activeCount > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (totalActiveCount > 0) {
+                            TextButton(
+                                onClick = onClearAll,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("filter_clear_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear all filters",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Reset",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
                         TextButton(
-                            onClick = onClearAll,
+                            onClick = handleToggle,
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
-                                .testTag("filter_clear_button")
+                                .testTag(if (isExternallyControlled) "filter_panel_hide_button" else "filter_toggle_button")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear all filters",
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Reset",
+                                text = if (isExpanded) "Hide" else "Show",
                                 style = MaterialTheme.typography.labelMedium
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = if (isExpanded) "Collapse filters" else "Expand filters",
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
-                    TextButton(
-                        onClick = { expanded = !expanded },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("filter_toggle_button")
-                    ) {
-                        Text(
-                            text = if (expanded) "Hide" else "Show",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Icon(
-                            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (expanded) "Collapse filters" else "Expand filters",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
                 }
-            }
 
-            AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier.padding(bottom = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                AnimatedVisibility(visible = isExpanded) {
+                    Column(
+                        modifier = Modifier.padding(bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        OrderedFilterDropdownButton(
-                            label = "1. State",
-                            selectedValue = selectedState,
-                            options = stateOptions,
-                            onSelect = onStateSelected,
-                            icon = Icons.Default.Public,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("${tagPrefix}_state")
-                        )
-                        OrderedFilterDropdownButton(
-                            label = "2. City",
-                            selectedValue = selectedCity,
-                            options = cityOptions,
-                            onSelect = onCitySelected,
-                            icon = Icons.Default.LocationCity,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("${tagPrefix}_city")
-                        )
-                    }
+                        if (extraContent != null) {
+                            extraContent()
+                        }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OrderedFilterDropdownButton(
-                            label = "3. Test Centre",
-                            selectedValue = selectedCentre,
-                            options = centreOptions,
-                            onSelect = onCentreSelected,
-                            icon = Icons.Default.Business,
-                            modifier = Modifier
-                                .weight(1.2f)
-                                .testTag("${tagPrefix}_centre")
-                        )
-                        OrderedFilterDropdownButton(
-                            label = "4. LAN",
-                            selectedValue = selectedLan,
-                            options = lanOptions,
-                            onSelect = onLanSelected,
-                            icon = Icons.Default.Lan,
-                            modifier = Modifier
-                                .weight(0.8f)
-                                .testTag("${tagPrefix}_lan")
-                        )
-                    }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OrderedFilterDropdownButton(
+                                label = "1. State",
+                                selectedValue = selectedState,
+                                options = stateOptions,
+                                onSelect = onStateSelected,
+                                icon = Icons.Default.Public,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("${tagPrefix}_state")
+                            )
+                            OrderedFilterDropdownButton(
+                                label = "2. City",
+                                selectedValue = selectedCity,
+                                options = cityOptions,
+                                onSelect = onCitySelected,
+                                icon = Icons.Default.LocationCity,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("${tagPrefix}_city")
+                            )
+                        }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OrderedFilterDropdownButton(
-                            label = "Shift",
-                            selectedValue = selectedShift,
-                            options = shiftOptions,
-                            onSelect = onShiftSelected,
-                            icon = Icons.Default.Schedule,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("${tagPrefix}_shift")
-                        )
-                        OrderedFilterDropdownButton(
-                            label = "Date",
-                            selectedValue = selectedDate?.takeIf { !it.equals("All", ignoreCase = true) },
-                            options = dateOptions.filterNot { it.equals("All", ignoreCase = true) },
-                            onSelect = onDateSelected,
-                            icon = Icons.Default.CalendarMonth,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("${tagPrefix}_date")
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OrderedFilterDropdownButton(
+                                label = "3. Test Centre",
+                                selectedValue = selectedCentre,
+                                options = centreOptions,
+                                onSelect = onCentreSelected,
+                                icon = Icons.Default.Business,
+                                modifier = Modifier
+                                    .weight(1.1f)
+                                    .testTag("${tagPrefix}_centre")
+                            )
+                            if (showExamFilter) {
+                                OrderedFilterDropdownButton(
+                                    label = "4. Exam",
+                                    selectedValue = selectedExam,
+                                    options = examOptions,
+                                    onSelect = onExamSelected,
+                                    icon = Icons.Default.Assignment,
+                                    modifier = Modifier
+                                        .weight(0.9f)
+                                        .testTag("${tagPrefix}_exam")
+                                )
+                            } else {
+                                OrderedFilterDropdownButton(
+                                    label = "4. LAN",
+                                    selectedValue = selectedLan,
+                                    options = lanOptions,
+                                    onSelect = onLanSelected,
+                                    icon = Icons.Default.Lan,
+                                    modifier = Modifier
+                                        .weight(0.9f)
+                                        .testTag("${tagPrefix}_lan")
+                                )
+                            }
+                        }
+
+                        if (showExamFilter) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                OrderedFilterDropdownButton(
+                                    label = "5. LAN",
+                                    selectedValue = selectedLan,
+                                    options = lanOptions,
+                                    onSelect = onLanSelected,
+                                    icon = Icons.Default.Lan,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("${tagPrefix}_lan")
+                                )
+                                OrderedFilterDropdownButton(
+                                    label = "Shift",
+                                    selectedValue = selectedShift,
+                                    options = shiftOptions,
+                                    onSelect = onShiftSelected,
+                                    icon = Icons.Default.Schedule,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("${tagPrefix}_shift")
+                                )
+                            }
+
+                            OrderedFilterDropdownButton(
+                                label = "Date",
+                                selectedValue = selectedDate?.takeIf { !it.equals("All", ignoreCase = true) },
+                                options = dateOptions.filterNot { it.equals("All", ignoreCase = true) },
+                                onSelect = onDateSelected,
+                                icon = Icons.Default.CalendarMonth,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("${tagPrefix}_date")
+                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                OrderedFilterDropdownButton(
+                                    label = "Shift",
+                                    selectedValue = selectedShift,
+                                    options = shiftOptions,
+                                    onSelect = onShiftSelected,
+                                    icon = Icons.Default.Schedule,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("${tagPrefix}_shift")
+                                )
+                                OrderedFilterDropdownButton(
+                                    label = "Date",
+                                    selectedValue = selectedDate?.takeIf { !it.equals("All", ignoreCase = true) },
+                                    options = dateOptions.filterNot { it.equals("All", ignoreCase = true) },
+                                    onSelect = onDateSelected,
+                                    icon = Icons.Default.CalendarMonth,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("${tagPrefix}_date")
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (isExternallyControlled) {
+        AnimatedVisibility(visible = isExpanded) {
+            panelBody()
+        }
+    } else {
+        panelBody()
     }
 }
 

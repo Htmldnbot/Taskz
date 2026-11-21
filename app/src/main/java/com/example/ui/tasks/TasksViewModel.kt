@@ -63,6 +63,7 @@ data class TasksFilterState(
     val stateId: String? = null,
     val cityId: String? = null,
     val centreId: String? = null,
+    val examName: String? = null,
     val lan: String? = null,
     val shift: String? = null,
     val dateFilter: String = "All"
@@ -195,6 +196,28 @@ class TasksViewModel(
             .sortedBy { it.code }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val availableExams: StateFlow<List<String>> = combine(
+        allTasksFlow,
+        taskGroupsFlow,
+        _tasksFilterState,
+        orgHierarchyFlow,
+        permissionManager.contextFlow
+    ) { tasks, groups, filter, orgHierarchy, _ ->
+        val fromTasks = tasks.asSequence()
+            .filter { permissionManager.canViewTask(it) }
+            .filter { matchesUpstreamScope(it, filter, orgHierarchy) }
+            .mapNotNull { extractTaskExamName(it, groups) }
+            .toList()
+        val fromGroups = if (filter.stateId == null && filter.cityId == null && filter.centreId == null) {
+            groups.mapNotNull { it.title.trim().takeIf { title -> title.isNotBlank() } }
+        } else {
+            emptyList()
+        }
+        (fromTasks + fromGroups)
+            .distinct()
+            .sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Real LANs only — derived exclusively from existing tasks inside upstream State -> City -> Centre filter
     val availableLans: StateFlow<List<String>> = combine(
         allTasksFlow,
@@ -213,13 +236,18 @@ class TasksViewModel(
 
     val availableShifts: StateFlow<List<String>> = combine(
         allTasksFlow,
+        taskGroupsFlow,
         _tasksFilterState,
         orgHierarchyFlow,
         permissionManager.contextFlow
-    ) { tasks, filter, orgHierarchy, _ ->
+    ) { tasks, groups, filter, orgHierarchy, _ ->
         tasks.asSequence()
             .filter { permissionManager.canViewTask(it) }
             .filter { matchesUpstreamScope(it, filter, orgHierarchy) }
+            .filter {
+                filter.examName.isNullOrBlank() ||
+                    extractTaskExamName(it, groups)?.equals(filter.examName, ignoreCase = true) == true
+            }
             .mapNotNull { it.shiftName?.trim()?.takeIf { s -> s.isNotBlank() } }
             .distinct()
             .sorted()
@@ -277,10 +305,11 @@ class TasksViewModel(
     // Filtered tasks state derived from RBAC permission scope, tab, sub-filter, cascading filters, query, and tasks flow
     val filteredTasks: StateFlow<List<TaskItem>> = combine(
         allTasksFlow,
+        taskGroupsFlow,
         filterCriteriaFlow,
         permissionManager.contextFlow,
         orgHierarchyFlow
-    ) { tasks, criteria, _, orgHierarchy ->
+    ) { tasks, groups, criteria, _, orgHierarchy ->
         val currentUserId = taskRepository.getActiveUserId()
         val scopedTasks = tasks.filter { permissionManager.canViewTask(it) }
         val baseFiltered = when (criteria.tab) {
@@ -310,6 +339,8 @@ class TasksViewModel(
 
         val cascadeFiltered = subFiltered.filter { task ->
             val matchesScope = matchesUpstreamScope(task, f, orgHierarchy)
+            val matchesExam = f.examName.isNullOrBlank() ||
+                extractTaskExamName(task, groups)?.equals(f.examName, ignoreCase = true) == true
             val matchesLan = f.lan.isNullOrBlank() || extractTaskLans(task).any { it.equals(f.lan, ignoreCase = true) }
             val matchesShift = f.shift.isNullOrBlank() ||
                 task.shiftName?.equals(f.shift, ignoreCase = true) == true ||
@@ -323,7 +354,7 @@ class TasksViewModel(
                 }
                 else -> true
             }
-            matchesScope && matchesLan && matchesShift && matchesDate
+            matchesScope && matchesExam && matchesLan && matchesShift && matchesDate
         }
 
         if (criteria.query.isBlank()) {
@@ -396,6 +427,11 @@ class TasksViewModel(
         return result.distinct()
     }
 
+    private fun extractTaskExamName(task: TaskItem, groups: List<TaskGroup>): String? {
+        return task.groupTitle?.trim()?.takeIf { it.isNotBlank() }
+            ?: groups.firstOrNull { it.id == task.groupId }?.title?.trim()?.takeIf { it.isNotBlank() }
+    }
+
     private fun extractTaskLocalDate(task: TaskItem): LocalDate? {
         val raw = task.executionTime ?: task.startsAt ?: task.dueAt ?: task.createdAt
         val millis = TaskItem.parseIsoToMillis(raw) ?: return null
@@ -447,6 +483,10 @@ class TasksViewModel(
         )
     }
 
+    fun setExamFilter(examName: String?) {
+        _tasksFilterState.value = _tasksFilterState.value.copy(examName = examName)
+    }
+
     fun setLanFilter(lan: String?) {
         _tasksFilterState.value = _tasksFilterState.value.copy(lan = lan)
     }
@@ -462,6 +502,7 @@ class TasksViewModel(
     }
 
     fun clearAllFilters() {
+        _selectedSubFilter.value = TaskSubFilter.ALL
         _tasksFilterState.value = TasksFilterState()
     }
 

@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FilterList
@@ -45,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.common.NothingDivider
 import com.example.ui.common.NothingDotMatrixText
+import com.example.ui.common.NothingFilterToggleButton
 import com.example.ui.common.NothingHairlineCard
 import com.example.ui.common.NothingSectionHeader
 import com.example.ui.common.NothingStatTile
@@ -71,6 +74,7 @@ import java.util.Locale
 
 enum class ReportBreakdownTab {
     OVERVIEW,
+    EXAM_WISE,
     LAN_WISE,
     CENTER_WISE,
     CITY_WISE,
@@ -92,6 +96,7 @@ fun ReportsScreen(
     val selectedCity by viewModel.filterCity.collectAsStateWithLifecycle()
     val selectedState by viewModel.filterSelectedState.collectAsStateWithLifecycle()
     val selectedZone by viewModel.filterZone.collectAsStateWithLifecycle()
+    val selectedExam by viewModel.filterExam.collectAsStateWithLifecycle()
     val selectedShift by viewModel.filterShift.collectAsStateWithLifecycle()
     val selectedDateRange by viewModel.filterDateRange.collectAsStateWithLifecycle()
 
@@ -99,6 +104,7 @@ fun ReportsScreen(
     val availableCentres by viewModel.availableCentreNames.collectAsStateWithLifecycle()
     val availableCities by viewModel.availableCities.collectAsStateWithLifecycle()
     val availableStates by viewModel.availableStates.collectAsStateWithLifecycle()
+    val availableExams by viewModel.availableExams.collectAsStateWithLifecycle()
     val availableShifts by viewModel.availableShifts.collectAsStateWithLifecycle()
 
     val repeatLockedSystems by viewModel.repeatLockedSystems.collectAsStateWithLifecycle()
@@ -108,15 +114,29 @@ fun ReportsScreen(
 
     var activeTab by remember { mutableStateOf(ReportBreakdownTab.OVERVIEW) }
     var topReasonsScopeTab by remember { mutableIntStateOf(0) }
+    var showFilters by rememberSaveable { mutableStateOf(false) }
 
-    val hasActiveFilter = myReportsOnly || selectedLan != null || selectedCentre != null ||
-        selectedCity != null || selectedState != null || selectedZone != null ||
-        selectedShift != null || (selectedDateRange != null && selectedDateRange != "all")
+    val activeFilterCount = listOfNotNull(
+        selectedState?.takeIf { it.isNotBlank() },
+        selectedCity?.takeIf { it.isNotBlank() },
+        selectedCentre?.takeIf { it.isNotBlank() },
+        selectedExam?.takeIf { it.isNotBlank() },
+        selectedLan?.takeIf { it.isNotBlank() },
+        selectedShift?.takeIf { it.isNotBlank() },
+        selectedZone?.takeIf { it.isNotBlank() },
+        selectedDateRange?.takeIf { it.isNotBlank() && !it.equals("all", ignoreCase = true) }
+    ).size + if (myReportsOnly) 1 else 0
+    val hasActiveFilter = activeFilterCount > 0
 
     val totalCount = incidents.size
     val shiftedCount = incidents.count { it.candidateShifted }
 
     val reasonCounts = incidents.groupBy { it.reason }
+        .mapValues { it.value.size }
+        .toList()
+        .sortedByDescending { it.second }
+
+    val examCounts = incidents.groupBy { it.examName.ifBlank { "Unspecified Exam" } }
         .mapValues { it.value.size }
         .toList()
         .sortedByDescending { it.second }
@@ -226,7 +246,19 @@ fun ReportsScreen(
             }
         }
 
-        NothingSectionHeader(title = "BREAKDOWN VIEW", useDotMatrix = true)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NothingSectionHeader(title = "BREAKDOWN VIEW", useDotMatrix = true)
+            NothingFilterToggleButton(
+                activeCount = activeFilterCount,
+                isExpanded = showFilters,
+                onClick = { showFilters = !showFilters },
+                testTag = "reports_filter_toggle_button"
+            )
+        }
 
         val tabScroll = rememberScrollState()
         Row(
@@ -237,6 +269,7 @@ fun ReportsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             ReportTabPill("Overview", activeTab == ReportBreakdownTab.OVERVIEW) { activeTab = ReportBreakdownTab.OVERVIEW }
+            ReportTabPill("Exam", activeTab == ReportBreakdownTab.EXAM_WISE, Icons.Default.Assignment) { activeTab = ReportBreakdownTab.EXAM_WISE }
             ReportTabPill("LAN", activeTab == ReportBreakdownTab.LAN_WISE, Icons.Default.Router) { activeTab = ReportBreakdownTab.LAN_WISE }
             ReportTabPill("Centre", activeTab == ReportBreakdownTab.CENTER_WISE, Icons.Default.Map) { activeTab = ReportBreakdownTab.CENTER_WISE }
             ReportTabPill("City", activeTab == ReportBreakdownTab.CITY_WISE, Icons.Default.LocationCity) { activeTab = ReportBreakdownTab.CITY_WISE }
@@ -261,6 +294,9 @@ fun ReportsScreen(
             selectedCentre = selectedCentre,
             centreOptions = availableCentres,
             onCentreSelected = { viewModel.setFilterCentre(it) },
+            selectedExam = selectedExam,
+            examOptions = availableExams,
+            onExamSelected = { viewModel.setFilterExam(it) },
             selectedLan = selectedLan,
             lanOptions = availableLans,
             onLanSelected = { viewModel.setFilterLan(it) },
@@ -281,30 +317,33 @@ fun ReportsScreen(
             },
             onClearAll = { viewModel.clearAllFilters() },
             tagPrefix = "reports_dropdown",
-            initiallyExpanded = false
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ReportTabPill(
-                label = if (myReportsOnly) "My Reports ✓" else "My Reports Only",
-                selected = myReportsOnly,
-                icon = Icons.Default.Person,
-                modifier = Modifier.testTag("reports_my_reports_chip"),
-                onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) }
-            )
-            if (hasActiveFilter) {
-                ReportTabPill(
-                    label = "Clear Filters",
-                    selected = false,
-                    icon = Icons.Default.Clear,
-                    onClick = { viewModel.clearAllFilters() }
-                )
+            expanded = showFilters,
+            onToggleExpanded = { showFilters = !showFilters },
+            extraActiveCount = (if (myReportsOnly) 1 else 0) + (if (selectedZone != null) 1 else 0),
+            extraContent = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ReportTabPill(
+                        label = if (myReportsOnly) "My Reports ✓" else "My Reports Only",
+                        selected = myReportsOnly,
+                        icon = Icons.Default.Person,
+                        modifier = Modifier.testTag("reports_my_reports_chip"),
+                        onClick = { viewModel.setFilterMyReportsOnly(!myReportsOnly) }
+                    )
+                    if (hasActiveFilter) {
+                        ReportTabPill(
+                            label = "Clear Filters",
+                            selected = false,
+                            icon = Icons.Default.Clear,
+                            onClick = { viewModel.clearAllFilters() }
+                        )
+                    }
+                }
             }
-        }
+        )
 
         // KPI Telemetry Strip
         Row(
@@ -352,6 +391,13 @@ fun ReportsScreen(
             ReportBreakdownTab.OVERVIEW -> {
                 BreakdownCard(title = "By Failure Reason", items = reasonCounts, total = totalCount)
                 BreakdownCard(
+                    title = "By Exam",
+                    items = examCounts,
+                    total = totalCount,
+                    onItemClick = { exam -> viewModel.setFilterExam(if (selectedExam == exam) null else exam) },
+                    selectedItem = selectedExam
+                )
+                BreakdownCard(
                     title = "By LAN",
                     items = lanCounts,
                     total = totalCount,
@@ -365,6 +411,38 @@ fun ReportsScreen(
                     onItemClick = { centre -> viewModel.setFilterCentre(if (selectedCentre == centre) null else centre) },
                     selectedItem = selectedCentre
                 )
+            }
+            ReportBreakdownTab.EXAM_WISE -> {
+                BreakdownCard(
+                    title = "Exam-wise Distribution",
+                    items = examCounts,
+                    total = totalCount,
+                    onItemClick = { exam -> viewModel.setFilterExam(if (selectedExam == exam) null else exam) },
+                    selectedItem = selectedExam,
+                    interactiveHint = "Tap Exam to filter"
+                )
+                if (selectedExam != null) {
+                    NothingHairlineCard(
+                        containerColor = NothingTheme.colors.surfaceElevated,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Exam: $selectedExam ($totalCount)",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { viewModel.setFilterExam(null) }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear Exam filter")
+                            }
+                        }
+                    }
+                }
+                BreakdownCard(title = "Failure Reasons in Exam", items = reasonCounts, total = totalCount)
             }
             ReportBreakdownTab.LAN_WISE -> {
                 BreakdownCard(

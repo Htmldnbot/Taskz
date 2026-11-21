@@ -32,6 +32,7 @@ data class IncidentFilterState(
     val city: String? = null,
     val state: String? = null,
     val zone: String? = null,
+    val examName: String? = null,
     val shift: String? = null,
     val dateRange: String? = "all",
     val reason: String? = null
@@ -158,6 +159,7 @@ class SystemIncidentViewModel(
     val filterCity: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.city }
     val filterSelectedState: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.state }
     val filterZone: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.zone }
+    val filterExam: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.examName }
     val filterShift: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.shift }
     val filterDateRange: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.dateRange }
     val filterReason: StateFlow<String?> = _filterState.mapState(viewModelScope) { it.reason }
@@ -317,6 +319,17 @@ class SystemIncidentViewModel(
             .sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val availableExams: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
+        list.filter { item ->
+            (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
+                (filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)) &&
+                matchesCentreLabel(item, filter.centre)
+        }.map { it.examName.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val availableLans: StateFlow<List<String>> = combine(visibleIncidents, _filterState) { list, filter ->
         list.filter { item ->
             (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
@@ -338,6 +351,7 @@ class SystemIncidentViewModel(
             (filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)) &&
                 (filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)) &&
                 matchesCentreLabel(item, filter.centre) &&
+                (filter.examName.isNullOrBlank() || item.examName.equals(filter.examName, ignoreCase = true)) &&
                 (filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true))
         }.map { it.shiftName.trim() }.filter { it.isNotBlank() }.distinct().sorted()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -372,6 +386,7 @@ class SystemIncidentViewModel(
                 item.districtName.contains(q, ignoreCase = true) ||
                 item.stateName.contains(q, ignoreCase = true) ||
                 item.shiftName.contains(q, ignoreCase = true) ||
+                item.examName.contains(q, ignoreCase = true) ||
                 item.itManagerName.contains(q, ignoreCase = true) ||
                 (item.creatorName?.contains(q, ignoreCase = true) == true)
 
@@ -385,11 +400,12 @@ class SystemIncidentViewModel(
             // Shifted Only
             val matchesShifted = !filter.shiftedOnly || item.candidateShifted
 
-            // Ordered cascade: State -> City -> Test Centre -> LAN -> Shift -> Date
+            // Ordered cascade: State -> City -> Test Centre -> Exam -> LAN -> Shift -> Date
             val matchesState = filter.state.isNullOrBlank() || item.stateName.equals(filter.state, ignoreCase = true)
             val matchesCity = filter.city.isNullOrBlank() || item.districtName.equals(filter.city, ignoreCase = true)
             val matchesCentre = matchesCentreLabel(item, filter.centre) ||
                 (!filter.centre.isNullOrBlank() && item.centreName.contains(filter.centre, ignoreCase = true))
+            val matchesExam = filter.examName.isNullOrBlank() || item.examName.equals(filter.examName, ignoreCase = true)
             val matchesLan = filter.lan.isNullOrBlank() || item.lanName.equals(filter.lan, ignoreCase = true)
             val matchesShift = filter.shift.isNullOrBlank() || item.shiftName.equals(filter.shift, ignoreCase = true)
 
@@ -409,7 +425,7 @@ class SystemIncidentViewModel(
             val matchesReason = filter.reason.isNullOrBlank() || item.reason.equals(filter.reason, ignoreCase = true)
 
             matchesQuery && matchesMyReports && matchesShifted && matchesState &&
-                matchesCity && matchesCentre && matchesLan && matchesShift &&
+                matchesCity && matchesCentre && matchesExam && matchesLan && matchesShift &&
                 matchesZone && matchesDate && matchesReason
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -476,6 +492,10 @@ class SystemIncidentViewModel(
 
     fun setFilterZone(zone: String?) {
         _filterState.value = _filterState.value.copy(zone = zone)
+    }
+
+    fun setFilterExam(examName: String?) {
+        _filterState.value = _filterState.value.copy(examName = examName)
     }
 
     fun setFilterShift(shift: String?) {

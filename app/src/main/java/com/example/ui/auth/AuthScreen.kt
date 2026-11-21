@@ -112,11 +112,6 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-enum class LoginAuthMethod {
-    EMAIL_PASSWORD,
-    EMPLOYEE_ID
-}
-
 @Composable
 fun AuthScreen(
     viewModel: AuthViewModel,
@@ -130,7 +125,6 @@ fun AuthScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var loginMethod by rememberSaveable { mutableStateOf(LoginAuthMethod.EMAIL_PASSWORD) }
 
     var showContactAdminDialog by rememberSaveable { mutableStateOf(false) }
     var showForgotPasswordDialog by rememberSaveable { mutableStateOf(false) }
@@ -307,106 +301,17 @@ fun AuthScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (selectedTab == 0) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val emailSelected = loginMethod == LoginAuthMethod.EMAIL_PASSWORD
-                        Surface(
-                            onClick = {
-                                loginMethod = LoginAuthMethod.EMAIL_PASSWORD
-                                viewModel.clearLoginError()
-                            },
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (emailSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
-                            border = BorderStroke(1.dp, if (emailSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 42.dp)
-                                .testTag("auth_mode_email")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Email,
-                                    contentDescription = null,
-                                    tint = if (emailSelected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Email",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = if (emailSelected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-
-                        val empSelected = loginMethod == LoginAuthMethod.EMPLOYEE_ID
-                        Surface(
-                            onClick = {
-                                loginMethod = LoginAuthMethod.EMPLOYEE_ID
-                                viewModel.clearLoginError()
-                            },
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (empSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.surface,
-                            border = BorderStroke(1.dp, if (empSelected) NothingTheme.colors.accentPrimary else NothingTheme.colors.border),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 42.dp)
-                                .testTag("auth_mode_empid")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Badge,
-                                    contentDescription = null,
-                                    tint = if (empSelected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Employee ID",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = if (empSelected) NothingTheme.colors.onAccentPrimary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
                     NothingHairlineCard(contentPadding = PaddingValues(16.dp)) {
-                        when (loginMethod) {
-                            LoginAuthMethod.EMAIL_PASSWORD -> {
-                                EmailPasswordLoginForm(
-                                    uiState = if (isGoogleAuthAttempt) AuthUiState.Idle else loginState,
-                                    isLoadingGlobal = loginState is AuthUiState.Loading,
-                                    onLogin = { email, pwd ->
-                                        isGoogleAuthAttempt = false
-                                        focusManager.clearFocus()
-                                        viewModel.loginWithEmailPassword(email, pwd)
-                                    },
-                                    onForgotPassword = { showForgotPasswordDialog = true }
-                                )
-                            }
-                            LoginAuthMethod.EMPLOYEE_ID -> {
-                                EmployeeIdLoginForm(
-                                    uiState = if (isGoogleAuthAttempt) AuthUiState.Idle else loginState,
-                                    onLogin = { empId, pwd ->
-                                        isGoogleAuthAttempt = false
-                                        focusManager.clearFocus()
-                                        viewModel.login(empId, pwd)
-                                    }
-                                )
-                            }
-                        }
+                        UnifiedLoginForm(
+                            uiState = if (isGoogleAuthAttempt) AuthUiState.Idle else loginState,
+                            isLoadingGlobal = loginState is AuthUiState.Loading,
+                            onLogin = { identifier, pwd ->
+                                isGoogleAuthAttempt = false
+                                focusManager.clearFocus()
+                                viewModel.loginWithEmailPassword(identifier, pwd)
+                            },
+                            onForgotPassword = { showForgotPasswordDialog = true }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -675,7 +580,7 @@ private fun GoogleProfileCompletionDialog(
                         employeeId = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch in "._-" }.take(20)
                     },
                     label = { Text("Employee ID *") },
-                    placeholder = { Text("e.g., 2780195") },
+                    placeholder = { Text("Enter Employee ID") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
@@ -786,25 +691,26 @@ private fun GoogleProfileCompletionDialog(
 }
 
 @Composable
-private fun EmailPasswordLoginForm(
+private fun UnifiedLoginForm(
     uiState: AuthUiState,
     isLoadingGlobal: Boolean = false,
     onLogin: (String, String) -> Unit,
     onForgotPassword: () -> Unit
 ) {
     val focusManager = LocalFocusManager.current
-    var email by rememberSaveable { mutableStateOf("") }
+    var identifier by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         TaskzTextField(
-            value = email,
-            onValueChange = { email = it.trim() },
-            label = "Email Address *",
-            placeholder = "you@example.com",
-            leadingIcon = Icons.Default.Email,
+            value = identifier,
+            onValueChange = { identifier = it.replace(" ", "") },
+            label = "Email or Employee ID *",
+            placeholder = "Enter email or Employee ID",
+            leadingIcon = Icons.Default.Person,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Email,
+                capitalization = KeyboardCapitalization.None,
                 imeAction = ImeAction.Next
             ),
             keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
@@ -826,7 +732,7 @@ private fun EmailPasswordLoginForm(
             ),
             keyboardActions = KeyboardActions(onDone = {
                 focusManager.clearFocus()
-                onLogin(email, password)
+                onLogin(identifier, password)
             }),
             testTag = "email_password_input"
         )
@@ -864,85 +770,10 @@ private fun EmailPasswordLoginForm(
         Spacer(modifier = Modifier.height(12.dp))
 
         TaskzPrimaryButton(
-            text = "Sign In with Email",
-            onClick = { onLogin(email, password) },
+            text = "Sign In",
+            onClick = { onLogin(identifier, password) },
             isLoading = (uiState is AuthUiState.Loading && !isLoadingGlobal) || (isLoadingGlobal && uiState is AuthUiState.Loading),
             testTag = "email_login_button"
-        )
-    }
-}
-
-@Composable
-private fun EmployeeIdLoginForm(
-    uiState: AuthUiState,
-    onLogin: (String, String) -> Unit
-) {
-    val focusManager = LocalFocusManager.current
-    var employeeId by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        TaskzTextField(
-            value = employeeId,
-            onValueChange = {
-                employeeId = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch in "._-" }.take(20)
-            },
-            label = "Employee ID",
-            placeholder = "e.g., 2780195 or EMP1024",
-            leadingIcon = Icons.Default.Badge,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-            testTag = "login_employee_id"
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        TaskzTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = "Password",
-            placeholder = "Enter your password",
-            leadingIcon = Icons.Default.Lock,
-            isPassword = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = {
-                focusManager.clearFocus()
-                onLogin(employeeId, password)
-            }),
-            testTag = "login_password"
-        )
-
-        AnimatedVisibility(visible = uiState is AuthUiState.Error) {
-            Surface(
-                color = NothingRed.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, NothingRed.copy(alpha = 0.45f)),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp)
-            ) {
-                Text(
-                    text = (uiState as? AuthUiState.Error)?.message.orEmpty(),
-                    color = NothingRed,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(10.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TaskzPrimaryButton(
-            text = "Login with Employee ID",
-            onClick = { onLogin(employeeId, password) },
-            isLoading = uiState is AuthUiState.Loading,
-            testTag = "login_submit_button"
         )
     }
 }
@@ -1106,7 +937,7 @@ private fun UnifiedSignUpForm(
                 localError = null
             },
             label = "Employee ID *",
-            placeholder = "e.g., 2780195 or EMP1024",
+            placeholder = "Enter Employee ID",
             leadingIcon = Icons.Default.Badge,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Text,
@@ -1392,7 +1223,7 @@ fun ContactAdminModal(
                         value = empId,
                         onValueChange = { empId = it.trim() },
                         label = "Employee ID",
-                        placeholder = "e.g., EMP1024",
+                        placeholder = "Enter Employee ID",
                         testTag = "reset_employee_id"
                     )
                     Spacer(modifier = Modifier.height(10.dp))
