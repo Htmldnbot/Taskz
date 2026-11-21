@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -96,8 +97,19 @@ import com.example.ui.common.ConfigureSupabaseDialog
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingDotPatternStrip
 import com.example.ui.common.NothingHairlineCard
+import com.example.ui.common.TaskzAmbientBackground
 import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
+import com.example.ui.settings.ADMIN_SUPPORT_EMAIL
+import com.example.ui.settings.DisclaimerScreen
+import com.example.ui.settings.PrivacyPolicyScreen
+import com.example.ui.settings.SupportCategory
+import com.example.ui.settings.TermsOfUseScreen
+import com.example.ui.settings.buildDiagnosticsSummary
+import com.example.ui.settings.buildSupportMailtoUri
+import com.example.ui.settings.copyToClipboard
+import com.example.ui.settings.defaultSupportSubject
+import com.example.ui.settings.launchSupportEmailIntent
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingTheme
 import com.example.ui.theme.TechMonoFontFamily
@@ -130,6 +142,7 @@ fun AuthScreen(
     var showForgotPasswordDialog by rememberSaveable { mutableStateOf(false) }
     var showConfigDialog by rememberSaveable { mutableStateOf(false) }
     var showInactiveDialog by rememberSaveable { mutableStateOf(false) }
+    var preLoginLegalDoc by rememberSaveable { mutableStateOf<String?>(null) }
 
     val loginState by viewModel.loginState.collectAsStateWithLifecycle()
     val signUpState by viewModel.signUpState.collectAsStateWithLifecycle()
@@ -137,6 +150,10 @@ fun AuthScreen(
     var pendingGoogleProfile by remember { mutableStateOf<UserProfile?>(null) }
     var showGoogleProfileModal by remember { mutableStateOf(false) }
     var isGoogleAuthAttempt by rememberSaveable { mutableStateOf(false) }
+
+    BackHandler(enabled = preLoginLegalDoc != null) {
+        preLoginLegalDoc = null
+    }
 
     LaunchedEffect(loginState) {
         if (loginState is AuthUiState.Success) {
@@ -159,9 +176,23 @@ fun AuthScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = NothingTheme.colors.background,
+    if (preLoginLegalDoc != null) {
+        val openPreLoginAdmin: () -> Unit = {
+            preLoginLegalDoc = null
+            showContactAdminDialog = true
+        }
+        when (preLoginLegalDoc) {
+            "privacy" -> PrivacyPolicyScreen(onContactAdmin = openPreLoginAdmin, onBack = { preLoginLegalDoc = null })
+            "terms" -> TermsOfUseScreen(onContactAdmin = openPreLoginAdmin, onBack = { preLoginLegalDoc = null })
+            "disclaimer" -> DisclaimerScreen(onContactAdmin = openPreLoginAdmin, onBack = { preLoginLegalDoc = null })
+        }
+        return
+    }
+
+    TaskzAmbientBackground(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = Color.Transparent,
         topBar = {
             Row(
                 modifier = Modifier
@@ -439,7 +470,8 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { showContactAdminDialog = true }
-                        .padding(vertical = 12.dp),
+                        .padding(vertical = 12.dp)
+                        .testTag("auth_contact_admin_button"),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -457,9 +489,56 @@ fun AuthScreen(
                     )
                 }
 
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = { preLoginLegalDoc = "privacy" },
+                        modifier = Modifier.testTag("auth_privacy_policy_link")
+                    ) {
+                        Text(
+                            text = "Privacy Policy",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    Text(
+                        text = "·",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingTheme.colors.textSecondary
+                    )
+                    TextButton(
+                        onClick = { preLoginLegalDoc = "terms" },
+                        modifier = Modifier.testTag("auth_terms_link")
+                    ) {
+                        Text(
+                            text = "Terms of Use",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    Text(
+                        text = "·",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingTheme.colors.textSecondary
+                    )
+                    TextButton(
+                        onClick = { preLoginLegalDoc = "disclaimer" },
+                        modifier = Modifier.testTag("auth_disclaimer_link")
+                    ) {
+                        Text(
+                            text = "Disclaimer",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
     }
 
     if (showContactAdminDialog) {
@@ -1193,6 +1272,7 @@ fun ContactAdminModal(
     viewModel: AuthViewModel,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val resetState by viewModel.resetRequestState.collectAsStateWithLifecycle()
     var empId by rememberSaveable { mutableStateOf("") }
     var mobile by rememberSaveable { mutableStateOf("") }
@@ -1214,10 +1294,46 @@ fun ContactAdminModal(
                     )
                 } else {
                     Text(
-                        text = "Submit a request to reset your password or update credentials.",
+                        text = "Submit an access/password reset ticket or email the administrator at $ADMIN_SUPPORT_EMAIL.",
                         style = MaterialTheme.typography.bodySmall,
                         color = NothingTheme.colors.textSecondary
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val mailtoUri = buildSupportMailtoUri(
+                                    category = SupportCategory.ACCOUNT_ACCESS,
+                                    subject = defaultSupportSubject(SupportCategory.ACCOUNT_ACCESS),
+                                    message = reason.ifBlank { "Account assistance requested for Employee ID: $empId" },
+                                    includeDiagnostics = true,
+                                    diagnosticsText = buildDiagnosticsSummary(employeeId = empId.ifBlank { null })
+                                )
+                                val opened = launchSupportEmailIntent(context, mailtoUri)
+                                if (!opened) {
+                                    copyToClipboard(context, "Support email", ADMIN_SUPPORT_EMAIL)
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, NothingTheme.colors.border),
+                            modifier = Modifier.weight(1f).testTag("auth_email_admin_button")
+                        ) {
+                            Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Email Admin", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { copyToClipboard(context, "Support email", ADMIN_SUPPORT_EMAIL) },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, NothingTheme.colors.border),
+                            modifier = Modifier.testTag("auth_copy_admin_email_button")
+                        ) {
+                            Text("Copy Email", maxLines = 1)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     TaskzTextField(
                         value = empId,

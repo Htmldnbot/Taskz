@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.TaskzApplication
 import com.example.core.model.AdminAuditEntry
+import com.example.core.model.AppReleaseInfo
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
 import com.example.core.model.ScopedMemberSearchResult
@@ -50,6 +51,12 @@ class AdminViewModel(
     private val _isLoadingAudits = MutableStateFlow(false)
     val isLoadingAudits: StateFlow<Boolean> = _isLoadingAudits.asStateFlow()
 
+    private val _appReleases = MutableStateFlow<List<AppReleaseInfo>>(emptyList())
+    val appReleases: StateFlow<List<AppReleaseInfo>> = _appReleases.asStateFlow()
+
+    private val _isLoadingReleases = MutableStateFlow(false)
+    val isLoadingReleases: StateFlow<Boolean> = _isLoadingReleases.asStateFlow()
+
     private val _actionState = MutableStateFlow<AdminActionState>(AdminActionState.Idle)
     val actionState: StateFlow<AdminActionState> = _actionState.asStateFlow()
 
@@ -58,6 +65,7 @@ class AdminViewModel(
         loadResetRequests()
         loadOrgHierarchy()
         loadAuditLogs()
+        loadAppReleases()
     }
 
     fun loadAllUsers() {
@@ -276,6 +284,53 @@ class AdminViewModel(
                 },
                 onFailure = { err ->
                     _actionState.value = AdminActionState.Error(err.message ?: "Failed to save centre")
+                }
+            )
+        }
+    }
+
+    fun loadAppReleases() {
+        viewModelScope.launch {
+            _isLoadingReleases.value = true
+            val res = adminRepository.getAppReleases()
+            _isLoadingReleases.value = false
+            res.onSuccess { _appReleases.value = it }
+        }
+    }
+
+    fun saveAppRelease(
+        release: AppReleaseInfo,
+        onSuccess: () -> Unit = {}
+    ) {
+        if (release.versionName.isBlank() || release.versionCode <= 0) {
+            _actionState.value = AdminActionState.Error("Version name and numeric version code (> 0) are required.")
+            return
+        }
+        val url = release.downloadUrl.trim()
+        if (!url.startsWith("https://", ignoreCase = true)) {
+            _actionState.value = AdminActionState.Error("Download URL must be a valid HTTPS link.")
+            return
+        }
+        val sha = release.sha256Checksum?.trim().orEmpty()
+        if (sha.isNotEmpty() && !sha.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+            _actionState.value = AdminActionState.Error("SHA-256 checksum must be 64 hex characters or left empty.")
+            return
+        }
+        viewModelScope.launch {
+            _actionState.value = AdminActionState.Loading
+            val res = adminRepository.upsertAppRelease(release)
+            res.fold(
+                onSuccess = { saved ->
+                    _actionState.value = AdminActionState.Success(
+                        "Published release v${saved.versionName} (code ${saved.versionCode})"
+                    )
+                    loadAppReleases()
+                    loadAuditLogs()
+                    runCatching { TaskzApplication.instance.appUpdateManager.forceCheckNow() }
+                    onSuccess()
+                },
+                onFailure = { err ->
+                    _actionState.value = AdminActionState.Error(err.message ?: "Failed to save app release")
                 }
             )
         }

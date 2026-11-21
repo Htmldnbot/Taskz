@@ -11,12 +11,14 @@ android {
 
   val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.takeIf { it > 0 }
   val explicitVersionCode = System.getenv("TASKZ_VERSION_CODE")?.toIntOrNull()?.takeIf { it > 0 }
-  val resolvedVersionCode = (ciRunNumber?.let { 100 + it } ?: explicitVersionCode ?: 1).also {
+  val explicitVersionName = System.getenv("TASKZ_VERSION_NAME")?.trim()?.takeIf { it.isNotEmpty() }
+  val resolvedVersionCode = (explicitVersionCode ?: ciRunNumber?.let { 100 + it } ?: 1).also {
     require(it in 1..2_000_000_000) { "Invalid versionCode: $it" }
   }
   val resolvedVersionName = when {
-    ciRunNumber != null -> "1.0.$ciRunNumber"
+    explicitVersionName != null -> explicitVersionName
     explicitVersionCode != null -> "1.0.$explicitVersionCode"
+    ciRunNumber != null -> "1.0.$ciRunNumber"
     else -> "1.0"
   }
 
@@ -72,7 +74,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -143,18 +146,18 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
+  // implementation(libs.converter.moshi)
   // Google Credential Manager + Google Identity (for native Google ID-token sign-in with Supabase Auth):
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.logging.interceptor)
+  // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit)
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.messaging)
   testImplementation(libs.androidx.compose.ui.test.junit4)
@@ -171,7 +174,7 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // "ksp"(libs.moshi.kotlin.codegen)
 }
 
 if (file("google-services.json").exists()) {

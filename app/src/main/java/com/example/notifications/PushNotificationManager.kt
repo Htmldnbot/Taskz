@@ -13,6 +13,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.core.datastore.NotificationPreferences
+import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AppNotification
 import com.example.core.model.NotificationCategory
 import com.example.data.local.dao.AuthorizationDao
@@ -28,7 +30,8 @@ import kotlinx.coroutines.withContext
  */
 class PushNotificationManager(
     private val context: Context,
-    private val authorizationDao: AuthorizationDao
+    private val authorizationDao: AuthorizationDao,
+    private val userPrefs: UserPreferencesDataStore? = null
 ) {
     companion object {
         private const val TAG = "PushNotificationMgr"
@@ -80,15 +83,23 @@ class PushNotificationManager(
             }
         }
 
+        val category = NotificationCategory.fromRaw(notification.category, notification.type)
+        val prefs = runCatching { userPrefs?.getNotificationPreferences() }.getOrNull() ?: NotificationPreferences()
+        if (!isCategoryEnabled(category, prefs)) {
+            return@withContext true
+        }
+
         showSystemNotification(
             dedupKey = dedupKey,
             title = notification.title,
             body = notification.body.orEmpty(),
-            category = NotificationCategory.fromRaw(notification.category, notification.type),
+            category = category,
             deepLink = notification.deepLink,
             taskId = notification.taskId,
             incidentId = notification.incidentId,
-            notificationId = notification.id
+            notificationId = notification.id,
+            soundEnabled = prefs.soundEnabled,
+            vibrationEnabled = prefs.vibrationEnabled
         )
         true
     }
@@ -131,18 +142,35 @@ class PushNotificationManager(
         }
 
         if (displayTrayNotification) {
-            showSystemNotification(
-                dedupKey = dedupKey,
-                title = title,
-                body = body,
-                category = category,
-                deepLink = deepLink,
-                taskId = taskId,
-                incidentId = incidentId,
-                notificationId = notificationId
-            )
+            val prefs = runCatching { userPrefs?.getNotificationPreferences() }.getOrNull() ?: NotificationPreferences()
+            if (isCategoryEnabled(category, prefs)) {
+                showSystemNotification(
+                    dedupKey = dedupKey,
+                    title = title,
+                    body = body,
+                    category = category,
+                    deepLink = deepLink,
+                    taskId = taskId,
+                    incidentId = incidentId,
+                    notificationId = notificationId,
+                    soundEnabled = prefs.soundEnabled,
+                    vibrationEnabled = prefs.vibrationEnabled
+                )
+            }
         }
         true
+    }
+
+    private fun isCategoryEnabled(category: NotificationCategory, prefs: NotificationPreferences): Boolean {
+        return when (category) {
+            NotificationCategory.TASK_ASSIGNMENT,
+            NotificationCategory.TASK_REMINDER,
+            NotificationCategory.TASK_UPDATE -> prefs.taskAlertsEnabled
+            NotificationCategory.INCIDENT,
+            NotificationCategory.INCIDENT_ESCALATION,
+            NotificationCategory.SYSTEM_ALERT -> prefs.incidentAlertsEnabled
+            NotificationCategory.ADMIN_ALERT -> true
+        }
     }
 
     fun showSystemNotification(
@@ -153,7 +181,9 @@ class PushNotificationManager(
         deepLink: String?,
         taskId: String? = null,
         incidentId: String? = null,
-        notificationId: String? = null
+        notificationId: String? = null,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -186,7 +216,7 @@ class PushNotificationManager(
         )
 
         val priority = if (category.urgent) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT
-        val built = NotificationCompat.Builder(context, category.channelId)
+        val builder = NotificationCompat.Builder(context, category.channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(body.ifBlank { "Open Taskz for authorized details" })
@@ -194,7 +224,14 @@ class PushNotificationManager(
             .setAutoCancel(true)
             .setPriority(priority)
             .setContentIntent(pendingIntent)
-            .build()
+
+        if (!soundEnabled && !vibrationEnabled) {
+            builder.setSilent(true)
+        } else {
+            if (!soundEnabled) builder.setSound(null)
+            if (!vibrationEnabled) builder.setVibrate(longArrayOf(0L))
+        }
+        val built = builder.build()
 
         runCatching {
             manager.notify(dedupKey.hashCode(), built)

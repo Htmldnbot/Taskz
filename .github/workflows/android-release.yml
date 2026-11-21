@@ -1,0 +1,328 @@
+name: Taskz Production Android Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Optional semantic version name override (e.g. 1.0.25). Defaults to 1.0.<run_number>."
+        required: false
+        type: string
+      version_code:
+        description: "Optional numeric versionCode override. Must increase monotonically."
+        required: false
+        type: string
+      release_notes:
+        description: "Optional release notes markdown for the GitHub Release."
+        required: false
+        type: string
+      is_critical:
+        description: "Mark in release summary if this release addresses a critical issue."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build, Verify & Publish Production APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Restore and validate permanent signing keystore
+        id: keystore
+        shell: bash
+        env:
+          TASKZ_KEYSTORE_BASE64: ${{ secrets.TASKZ_KEYSTORE_BASE64 }}
+          TASKZ_KEYSTORE_PASSWORD: ${{ secrets.TASKZ_KEYSTORE_PASSWORD }}
+          TASKZ_KEY_ALIAS: ${{ secrets.TASKZ_KEY_ALIAS }}
+          TASKZ_KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for var in \
+            TASKZ_KEYSTORE_BASE64 \
+            TASKZ_KEYSTORE_PASSWORD \
+            TASKZ_KEY_ALIAS \
+            TASKZ_KEY_PASSWORD
+          do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::Missing required GitHub secret: $var"
+              exit 1
+            fi
+          done
+
+          ORIG_KS="$RUNNER_TEMP/taskz-signing.jks"
+          printf '%s' "$TASKZ_KEYSTORE_BASE64" \
+            | tr -d '[:space:]' \
+            | base64 --decode > "$ORIG_KS"
+
+          if [ ! -s "$ORIG_KS" ]; then
+            echo "::error::Decoded keystore is empty."
+            exit 1
+          fi
+
+          keytool -list \
+            -keystore "$ORIG_KS" \
+            -storepass "$TASKZ_KEYSTORE_PASSWORD" \
+            -alias "$TASKZ_KEY_ALIAS" >/dev/null
+
+          # Gradle signingConfigs.release uses keyAlias = "upload".
+          # Provide a Gradle-compatible working copy when the secret alias differs, then re-verify with apksigner.
+          GRADLE_KS="$RUNNER_TEMP/taskz-gradle-release.jks"
+          cp "$ORIG_KS" "$GRADLE_KS"
+          if [ "$TASKZ_KEY_ALIAS" != "upload" ]; then
+            keytool -changealias \
+              -keystore "$GRADLE_KS" \
+              -storepass "$TASKZ_KEYSTORE_PASSWORD" \
+              -alias "$TASKZ_KEY_ALIAS" \
+              -destalias "upload" \
+              -keypass "$TASKZ_KEY_PASSWORD"
+          fi
+
+          echo "orig_keystore=$ORIG_KS" >> "$GITHUB_OUTPUT"
+          echo "gradle_keystore=$GRADLE_KS" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Firebase & Supabase environment for Release build
+        id: app_secrets
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          CREATED_GS=false
+          if [ ! -f "app/google-services.json" ] && [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+            TRIMMED="$(printf '%s' "$GOOGLE_SERVICES_JSON" | sed 's/^[[:space:]]*//')"
+            if [[ "$TRIMMED" == \{* ]]; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '[:space:]' | base64 --decode > app/google-services.json
+            fi
+            CREATED_GS=true
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON secret."
+          elif [ ! -f "app/google-services.json" ]; then
+            echo "::warning::app/google-services.json missing and GOOGLE_SERVICES_JSON secret not set. FCM will be inactive in this build."
+          fi
+
+          CREATED_ENV=false
+          if [ ! -f ".env" ] && { [ -n "${SUPABASE_URL:-}" ] || [ -n "${SUPABASE_ANON_KEY:-}" ]; }; then
+            {
+              [ -n "${SUPABASE_URL:-}" ] && printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+              [ -n "${SUPABASE_ANON_KEY:-}" ] && printf 'SUPABASE_ANON_KEY=%s\n' "$SUPABASE_ANON_KEY"
+            } > .env
+            CREATED_ENV=true
+            echo "Configured .env from GitHub Secrets."
+          fi
+
+          echo "created_gs=$CREATED_GS" >> "$GITHUB_OUTPUT"
+          echo "created_env=$CREATED_ENV" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release version metadata
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION_CODE: ${{ inputs.version_code }}
+          INPUT_VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION_CODE:-}" ]; then
+            VER_CODE="$INPUT_VERSION_CODE"
+          else
+            VER_CODE=$((100 + GITHUB_RUN_NUMBER))
+          fi
+          if [ -n "${INPUT_VERSION_NAME:-}" ]; then
+            VER_NAME="$INPUT_VERSION_NAME"
+          elif [ -n "${INPUT_VERSION_CODE:-}" ]; then
+            VER_NAME="1.0.${VER_CODE}"
+          else
+            VER_NAME="1.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "code=$VER_CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$VER_NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: v${VER_NAME} (code ${VER_CODE})"
+
+      - name: Grant Gradle execute permission
+        run: chmod +x ./gradlew
+
+      - name: Run unit tests & build signed Production Release APK
+        shell: bash
+        env:
+          KEYSTORE_PATH: ${{ steps.keystore.outputs.gradle_keystore }}
+          STORE_PASSWORD: ${{ secrets.TASKZ_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
+          TASKZ_VERSION_CODE: ${{ steps.version.outputs.code }}
+          TASKZ_VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          ./gradlew testDebugUnitTest assembleRelease --stacktrace
+
+      - name: Verify production Release APK & prepare single release asset
+        id: verify
+        shell: bash
+        env:
+          ORIG_KEYSTORE: ${{ steps.keystore.outputs.orig_keystore }}
+          TASKZ_KEYSTORE_PASSWORD: ${{ secrets.TASKZ_KEYSTORE_PASSWORD }}
+          TASKZ_KEY_ALIAS: ${{ secrets.TASKZ_KEY_ALIAS }}
+          TASKZ_KEY_PASSWORD: ${{ secrets.TASKZ_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          RAW_APK="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -s "$RAW_APK" ]; then
+            echo "::error::Production Release APK missing at $RAW_APK"
+            exit 1
+          fi
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          BUILD_TOOLS_DIR="$(
+            find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1
+          )"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          AAPT2="$BUILD_TOOLS_DIR/aapt2"
+
+          # Re-sign explicitly with original keystore/alias to guarantee v1/v2/v3 signing integrity
+          "$APKSIGNER" sign \
+            --ks "$ORIG_KEYSTORE" \
+            --ks-pass "env:TASKZ_KEYSTORE_PASSWORD" \
+            --ks-key-alias "$TASKZ_KEY_ALIAS" \
+            --key-pass "env:TASKZ_KEY_PASSWORD" \
+            "$RAW_APK"
+
+          VERIFY_OUT="$("$APKSIGNER" verify --print-certs --verbose "$RAW_APK")"
+          BADGING_OUTPUT="$("$AAPT2" dump badging "$RAW_APK")"
+
+          if printf '%s\n' "$BADGING_OUTPUT" | grep -q "application-debuggable"; then
+            echo "::error::Release APK must NEVER be debuggable."
+            exit 1
+          fi
+
+          BADGING_LINE="$(printf '%s\n' "$BADGING_OUTPUT" | sed -n '/^package:/p' | sed -n '1p')"
+          PKG_NAME="$(printf '%s\n' "$BADGING_LINE" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          VER_CODE="$(printf '%s\n' "$BADGING_LINE" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p")"
+          VER_NAME="$(printf '%s\n' "$BADGING_LINE" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")"
+
+          if [ "$PKG_NAME" != "com.taskz.app" ]; then
+            echo "::error::Unexpected package name: $PKG_NAME (expected com.taskz.app)"
+            exit 1
+          fi
+
+          if [ -z "$VER_CODE" ] || [ -z "$VER_NAME" ]; then
+            echo "::error::Missing versionCode or versionName in APK manifest"
+            exit 1
+          fi
+
+          RAW_SHA1="$(
+            printf '%s\n' "$VERIFY_OUT" \
+              | sed -n 's/.*certificate SHA-1 digest: *//p' \
+              | sed -n '1p' \
+              | tr -d '[:space:]' \
+              | tr '[:lower:]' '[:upper:]'
+          )"
+
+          EXPECTED_SHA1="D7FCD7715FD40FDC8B55E916E467C60FC064E2A6"
+          if [ "$RAW_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::Signing certificate SHA-1 mismatch ($RAW_SHA1 != $EXPECTED_SHA1)"
+            exit 1
+          fi
+
+          FINAL_DIR="$RUNNER_TEMP/release-asset"
+          mkdir -p "$FINAL_DIR"
+          FINAL_APK_NAME="Taskz-v${VER_NAME}.apk"
+          FINAL_APK_PATH="${FINAL_DIR}/${FINAL_APK_NAME}"
+          cp "$RAW_APK" "$FINAL_APK_PATH"
+
+          APK_SHA256="$(sha256sum "$FINAL_APK_PATH" | awk '{print $1}')"
+          APK_BYTES="$(stat -c%s "$FINAL_APK_PATH")"
+          APK_MB="$(awk "BEGIN {printf \"%.2f\", ${APK_BYTES}/1048576}")"
+
+          echo "apk_path=$FINAL_APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$FINAL_APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VER_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VER_CODE" >> "$GITHUB_OUTPUT"
+          echo "sha256=$APK_SHA256" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$APK_MB" >> "$GITHUB_OUTPUT"
+
+          echo "Verified ${FINAL_APK_NAME}: ${APK_MB} MB (${APK_BYTES} bytes), SHA-256 ${APK_SHA256}"
+
+      - name: Generate structured release notes
+        id: notes
+        shell: bash
+        env:
+          VER_NAME: ${{ steps.verify.outputs.version_name }}
+          VER_CODE: ${{ steps.verify.outputs.version_code }}
+          APK_NAME: ${{ steps.verify.outputs.apk_name }}
+          APK_SHA256: ${{ steps.verify.outputs.sha256 }}
+          APK_MB: ${{ steps.verify.outputs.size_mb }}
+          CUSTOM_NOTES: ${{ inputs.release_notes }}
+          IS_CRITICAL: ${{ inputs.is_critical }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "## Taskz v${VER_NAME} (Build ${VER_CODE})"
+            echo ""
+            if [ "${IS_CRITICAL:-false}" = "true" ]; then
+              echo "> **Critical Release**"
+              echo ""
+            fi
+            if [ -n "${CUSTOM_NOTES:-}" ]; then
+              echo "### What's New"
+              echo "${CUSTOM_NOTES}"
+              echo ""
+            else
+              echo "### Changes"
+              git log -n 10 --pretty=format:"- %s (%h)" || true
+              echo ""
+            fi
+            echo "### Verification"
+            echo "- **APK File:** \`${APK_NAME}\`"
+            echo "- **Size:** ${APK_MB} MB"
+            echo "- **Package:** \`com.taskz.app\`"
+            echo "- **APK SHA-256:** \`${APK_SHA256}\`"
+            echo "- **Signing Cert SHA-1:** \`D7:FC:D7:71:5F:D4:0F:DC:8B:55:E9:16:E4:67:C6:0F:C0:64:E2:A6\`"
+          } > "$NOTES_FILE"
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release with Single Production APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.verify.outputs.version_name }}
+          name: Taskz v${{ steps.verify.outputs.version_name }}
+          body_path: ${{ steps.notes.outputs.file }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            ${{ steps.verify.outputs.apk_path }}
+
+      - name: Clean up temporary secrets and keystores
+        if: always()
+        shell: bash
+        env:
+          CREATED_GS: ${{ steps.app_secrets.outputs.created_gs }}
+          CREATED_ENV: ${{ steps.app_secrets.outputs.created_env }}
+        run: |
+          rm -f "$RUNNER_TEMP/taskz-signing.jks" "$RUNNER_TEMP/taskz-gradle-release.jks"
+          rm -rf "$RUNNER_TEMP/release-asset"
+          if [ "${CREATED_GS:-false}" = "true" ]; then
+            rm -f app/google-services.json
+          fi
+          if [ "${CREATED_ENV:-false}" = "true" ]; then
+            rm -f .env
+          fi

@@ -3,6 +3,7 @@ package com.example.data.remote
 import android.util.Log
 import com.example.core.model.AdminAuditEntry
 import com.example.core.model.AppNotification
+import com.example.core.model.AppReleaseInfo
 import com.example.core.model.AssignedRoleInfo
 import com.example.core.model.AuthorizationContext
 import com.example.core.model.OrgCentre
@@ -44,7 +45,8 @@ data class AuthSessionResponse(
     val accessToken: String,
     val refreshToken: String?,
     val userId: String,
-    val employeeId: String
+    val employeeId: String,
+    val email: String? = null
 )
 
 class SupabaseClient(
@@ -159,7 +161,8 @@ class SupabaseClient(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
                     userId = userId,
-                    employeeId = employeeId.trim()
+                    employeeId = employeeId.trim(),
+                    email = SupabaseConfig.sanitizeDisplayEmail(userObj?.optString("email"))
                 )
             )
         } catch (e: Exception) {
@@ -209,7 +212,10 @@ class SupabaseClient(
                         accessToken = accessToken,
                         refreshToken = refreshToken.takeIf { it.isNotBlank() },
                         userId = userId,
-                        employeeId = resolvedEmpId
+                        employeeId = resolvedEmpId,
+                        email = SupabaseConfig.sanitizeDisplayEmail(userObj.optString("email"))
+                            ?: SupabaseConfig.sanitizeDisplayEmail(json.optString("email"))
+                            ?: extractEmailFromJwt(accessToken)
                     )
                 )
             }
@@ -266,7 +272,9 @@ class SupabaseClient(
                             accessToken = accessToken,
                             refreshToken = refreshToken.takeIf { it.isNotBlank() },
                             userId = userId,
-                            employeeId = normalized
+                            employeeId = normalized,
+                            email = SupabaseConfig.sanitizeDisplayEmail(userObj.optString("email"))
+                                ?: extractEmailFromJwt(accessToken)
                         )
                     )
                 } else {
@@ -328,7 +336,9 @@ class SupabaseClient(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
                     userId = userId,
-                    employeeId = ""
+                    employeeId = "",
+                    email = SupabaseConfig.sanitizeDisplayEmail(userObj?.optString("email"))
+                        ?: extractEmailFromJwt(accessToken)
                 )
             )
         } catch (e: Exception) {
@@ -496,7 +506,9 @@ class SupabaseClient(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
                     userId = userId,
-                    employeeId = normalizedEmpId
+                    employeeId = normalizedEmpId,
+                    email = SupabaseConfig.sanitizeDisplayEmail(userObj?.optString("email"))
+                        ?: SupabaseConfig.sanitizeDisplayEmail(email)
                 )
             )
         } catch (e: Exception) {
@@ -545,7 +557,10 @@ class SupabaseClient(
                     accessToken = accessToken,
                     refreshToken = refreshToken.takeIf { it.isNotBlank() },
                     userId = userId,
-                    employeeId = ""
+                    employeeId = "",
+                    email = SupabaseConfig.sanitizeDisplayEmail(userObj.optString("email"))
+                        ?: SupabaseConfig.sanitizeDisplayEmail(email)
+                        ?: extractEmailFromJwt(accessToken)
                 )
             )
         } catch (e: Exception) {
@@ -594,7 +609,9 @@ class SupabaseClient(
                     accessToken = newAccessToken,
                     refreshToken = newRefreshToken.takeIf { it.isNotBlank() },
                     userId = userId,
-                    employeeId = ""
+                    employeeId = "",
+                    email = SupabaseConfig.sanitizeDisplayEmail(userObj.optString("email"))
+                        ?: extractEmailFromJwt(newAccessToken)
                 )
             )
         } catch (e: Exception) {
@@ -1744,6 +1761,45 @@ class SupabaseClient(
     // BATCH 1: SERVER-BACKED TASKS, GROUPS, SHIFTS & MULTI-USER API
     // ==========================================
 
+    fun extractEmailFromJwt(bearer: String): String? {
+        return try {
+            val parts = bearer.split(".")
+            if (parts.size < 2) return null
+            var b64 = parts[1].replace('-', '+').replace('_', '/')
+            while (b64.length % 4 != 0) b64 += "="
+            val decoded = runCatching {
+                android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            }.getOrElse {
+                java.util.Base64.getDecoder().decode(b64)
+            }
+            val json = JSONObject(String(decoded, Charsets.UTF_8))
+            SupabaseConfig.sanitizeDisplayEmail(json.optString("email"))
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    suspend fun fetchCurrentAuthUserEmail(accessToken: String): String? = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = getAuthBearer(accessToken)
+            if (bearer.isBlank()) return@withContext null
+            val request = Request.Builder()
+                .url("${baseUrl()}/auth/v1/user")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
+                .build()
+            val response = okHttpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful || body.isBlank()) return@withContext null
+            val obj = JSONObject(body)
+            SupabaseConfig.sanitizeDisplayEmail(obj.optString("email"))
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     private fun extractUserIdFromJwt(bearer: String): String? {
         return try {
             val parts = bearer.split(".")
@@ -2610,7 +2666,7 @@ class SupabaseClient(
             employeeId = json.optString("employee_id"),
             fullName = json.optString("full_name"),
             mobile = json.optString("mobile"),
-            email = json.optString("email").takeIf { it.isNotBlank() && !it.equals("null", true) },
+            email = SupabaseConfig.sanitizeDisplayEmail(json.optString("email")),
             profilePhotoPath = json.optString("profile_photo_path").takeIf { it.isNotBlank() && !it.equals("null", true) },
             appRole = rawRole,
             activeRoleCode = json.optString("active_role_code").takeIf { it.isNotBlank() && !it.equals("null", true) } ?: fallbackActive,
@@ -3402,7 +3458,7 @@ class SupabaseClient(
                         id = o.optString("id"),
                         employeeId = o.optString("employee_id"),
                         fullName = o.optString("full_name"),
-                        email = o.optString("email").takeIf { it.isNotBlank() && !it.equals("null", true) },
+                        email = SupabaseConfig.sanitizeDisplayEmail(o.optString("email")),
                         mobile = o.optString("mobile").takeIf { it.isNotBlank() && !it.equals("null", true) },
                         activeRoleCode = o.optString("active_role_code", "IT_MANAGER"),
                         assignedRoles = List(rolesArr.length()) { rIdx -> rolesArr.optString(rIdx) },
@@ -3796,5 +3852,118 @@ class SupabaseClient(
             createdAt = obj.optString("created_at")
         )
     }
+
+    // ==========================================
+    // APP RELEASES & IN-APP UPDATES
+    // ==========================================
+
+    suspend fun fetchLatestAppRelease(accessToken: String? = null): Result<AppReleaseInfo?> = withContext(Dispatchers.IO) {
+        try {
+            checkConfig()
+            val bearer = accessToken?.let { getAuthBearer(it) }?.takeIf { it.isNotBlank() } ?: anonKey()
+            val rpcRequest = Request.Builder()
+                .url("${baseUrl()}/rest/v1/rpc/get_latest_app_release")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .addHeader("Content-Type", "application/json")
+                .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val rpcResponse = okHttpClient.newCall(rpcRequest).execute()
+            val rpcBody = rpcResponse.body?.string() ?: ""
+
+            if (rpcResponse.isSuccessful) {
+                val trimmed = rpcBody.trim()
+                if (trimmed.isBlank() || trimmed == "[]" || trimmed == "null") {
+                    return@withContext Result.success(null)
+                }
+                val item = if (trimmed.startsWith("[")) {
+                    val arr = JSONArray(trimmed)
+                    if (arr.length() == 0) null else AppReleaseInfo.fromJson(arr.getJSONObject(0))
+                } else {
+                    AppReleaseInfo.fromJson(JSONObject(trimmed))
+                }
+                return@withContext Result.success(item)
+            }
+
+            val isMissingRpc = rpcResponse.code == 404 ||
+                rpcBody.contains("PGRST202", ignoreCase = true) ||
+                rpcBody.contains("Could not find the function", ignoreCase = true)
+
+            if (!isMissingRpc) {
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(rpcBody, "Failed to check app updates (${rpcResponse.code})"))
+                )
+            }
+
+            val tableRequest = Request.Builder()
+                .url("${baseUrl()}/rest/v1/app_releases?is_active=eq.true&order=is_latest.desc,version_code.desc&limit=1")
+                .addHeader("apikey", anonKey())
+                .addHeader("Authorization", "Bearer $bearer")
+                .get()
+                .build()
+            val tableResponse = okHttpClient.newCall(tableRequest).execute()
+            val tableBody = tableResponse.body?.string() ?: ""
+            if (!tableResponse.isSuccessful) {
+                if (tableResponse.code == 404 || tableBody.contains("PGRST205", ignoreCase = true)) {
+                    return@withContext Result.success(null)
+                }
+                return@withContext Result.failure(
+                    IOException(parseErrorMessage(tableBody, "Failed to read app_releases (${tableResponse.code})"))
+                )
+            }
+            val arr = JSONArray(tableBody)
+            val parsed = if (arr.length() > 0) AppReleaseInfo.fromJson(arr.getJSONObject(0)) else null
+            Result.success(parsed)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchAllAppReleasesAdmin(accessToken: String): Result<List<AppReleaseInfo>> = withContext(Dispatchers.IO) {
+        try {
+            executeRpc(accessToken, "admin_list_app_releases", JSONObject()).map { raw ->
+                val arr = JSONArray(raw.ifBlank { "[]" })
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        AppReleaseInfo.fromJson(arr.getJSONObject(i))?.let { add(it) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun adminUpsertAppRelease(
+        accessToken: String,
+        release: AppReleaseInfo
+    ): Result<AppReleaseInfo> = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                if (SupabaseConfig.isValidUuid(release.id)) {
+                    put("p_id", release.id)
+                }
+                put("p_version_name", release.versionName.trim())
+                put("p_version_code", release.versionCode)
+                put("p_download_url", release.downloadUrl.trim())
+                put("p_release_notes", release.releaseNotes.trim())
+                put("p_minimum_supported_version", release.minimumSupportedVersion?.trim()?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                put("p_minimum_supported_version_code", release.minimumSupportedVersionCode ?: JSONObject.NULL)
+                put("p_sha256_checksum", release.sha256Checksum?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                put("p_is_latest", release.isLatest)
+                put("p_is_critical", release.isCritical)
+                put("p_is_active", release.isActive)
+                put("p_force_update", release.forceUpdate)
+            }
+            executeRpc(accessToken, "admin_upsert_app_release", body).mapCatching { raw ->
+                AppReleaseInfo.fromJson(JSONObject(raw))
+                    ?: throw IOException("Saved release returned invalid JSON")
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
+
 

@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -126,8 +127,12 @@ fun NothingHairlineCard(
     val cardModifier = modifier.fillMaxWidth()
     val border = BorderStroke(1.dp, borderColor)
     if (onClick != null) {
+        val view = LocalView.current
         Surface(
-            onClick = onClick,
+            onClick = {
+                TaskzHaptics.tap(view)
+                onClick()
+            },
             shape = shape,
             color = containerColor,
             border = border,
@@ -521,6 +526,7 @@ fun NothingFloatingNavCapsule(
                 .widthIn(max = 540.dp)
                 .fillMaxWidth()
         ) {
+            val view = LocalView.current
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -532,7 +538,10 @@ fun NothingFloatingNavCapsule(
                     CapsuleNavSlot(
                         dest = dest,
                         selected = selectedId == dest.id,
-                        onClick = { onSelect(dest) },
+                        onClick = {
+                            TaskzHaptics.tap(view)
+                            onSelect(dest)
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -549,7 +558,10 @@ fun NothingFloatingNavCapsule(
                         .clickable(
                             interactionSource = plusInteraction,
                             indication = null,
-                            onClick = onCreateClick
+                            onClick = {
+                                TaskzHaptics.tap(view)
+                                onCreateClick()
+                            }
                         )
                         .testTag("nav_fab_create_center"),
                     contentAlignment = Alignment.Center
@@ -568,7 +580,10 @@ fun NothingFloatingNavCapsule(
                     CapsuleNavSlot(
                         dest = dest,
                         selected = selectedId == dest.id,
-                        onClick = { onSelect(dest) },
+                        onClick = {
+                            TaskzHaptics.tap(view)
+                            onSelect(dest)
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }

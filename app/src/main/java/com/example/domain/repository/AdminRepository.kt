@@ -2,6 +2,7 @@ package com.example.domain.repository
 
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AdminAuditEntry
+import com.example.core.model.AppReleaseInfo
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
 import com.example.core.model.ScopedMemberSearchResult
@@ -187,5 +188,23 @@ class AdminRepository(
             availableLans = availableLans,
             stateName = stateName
         )
+    }
+
+    suspend fun getAppReleases(): Result<List<AppReleaseInfo>> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.fetchAllAppReleasesAdmin(token)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun upsertAppRelease(release: AppReleaseInfo): Result<AppReleaseInfo> {
+        return try {
+            val token = getActiveToken()
+            supabaseClient.adminUpsertAppRelease(token, release)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

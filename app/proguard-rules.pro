@@ -1,21 +1,59 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Taskz ProGuard / R8 Rules
+-keepattributes SourceFile,LineNumberTable,*Annotation*,Signature,InnerClasses,EnclosingMethod
+-renamesourcefileattribute SourceFile
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Kotlin & Coroutines
+-keep class kotlin.Metadata { *; }
+-dontwarn kotlinx.coroutines.**
+-keepclassmembers class kotlinx.coroutines.** {
+    volatile <fields>;
+}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# BuildConfig & App Classes
+-keep class com.example.BuildConfig { *; }
+-keep class com.example.TaskzApplication { *; }
+-keep class com.example.MainActivity { *; }
+-keep class com.example.alarm.** { *; }
+-keep class com.example.notifications.** { *; }
+-keep class com.example.sync.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Domain & Release Models
+-keep class com.example.core.model.** { *; }
+
+# Room Database
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class * { *; }
+-keepclassmembers class * {
+    @androidx.room.Dao <methods>;
+}
+-dontwarn androidx.room.**
+
+# OkHttp & Okio
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+# Firebase Messaging & Google Credential Manager / Identity
+-keepclassmembers class * {
+    @com.google.firebase.** <methods>;
+}
+-keep class com.google.firebase.messaging.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-keep class androidx.credentials.** { *; }
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.lang.model.element.Modifier
+
+# FileProvider & AndroidX Startup / WorkManager
+-keep class androidx.core.content.FileProvider { *; }
+-keep class * extends androidx.work.Worker
+-keep class * extends androidx.work.CoroutineWorker
+-keep class * extends androidx.work.ListenableWorker
+
+# Strip verbose debug logs in release
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+}

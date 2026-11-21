@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -81,16 +82,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.core.model.AdminAuditEntry
+import com.example.core.model.AppReleaseInfo
 import com.example.core.model.OrgCentre
 import com.example.core.model.OrgHierarchyData
 import com.example.core.model.PasswordResetRequest
 import com.example.core.model.TaskzRole
 import com.example.core.model.UserProfile
+import com.example.core.network.SupabaseConfig
 import com.example.ui.common.NothingDivider
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingEmptyState
@@ -116,9 +120,11 @@ fun AdminScreen(
     val requests by viewModel.resetRequests.collectAsStateWithLifecycle()
     val orgHierarchy by viewModel.orgHierarchy.collectAsStateWithLifecycle()
     val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
+    val appReleases by viewModel.appReleases.collectAsStateWithLifecycle()
     val isLoadingUsers by viewModel.isLoadingUsers.collectAsStateWithLifecycle()
     val isLoadingRequests by viewModel.isLoadingRequests.collectAsStateWithLifecycle()
     val isLoadingAudits by viewModel.isLoadingAudits.collectAsStateWithLifecycle()
+    val isLoadingReleases by viewModel.isLoadingReleases.collectAsStateWithLifecycle()
     val actionState by viewModel.actionState.collectAsStateWithLifecycle()
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -130,6 +136,8 @@ fun AdminScreen(
     var centreToEdit by remember { mutableStateOf<OrgCentre?>(null) }
     var showAddCentreDialog by remember { mutableStateOf(false) }
     var showAddCityDialog by remember { mutableStateOf(false) }
+    var releaseToEdit by remember { mutableStateOf<AppReleaseInfo?>(null) }
+    var showAddReleaseDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -186,6 +194,7 @@ fun AdminScreen(
                         1 -> viewModel.loadResetRequests()
                         3 -> viewModel.loadAuditLogs()
                         4 -> viewModel.loadOrgHierarchy()
+                        5 -> viewModel.loadAppReleases()
                         else -> viewModel.loadAllUsers()
                     }
                 },
@@ -259,7 +268,8 @@ fun AdminScreen(
             Triple(1, if (pendingCount > 0) "Resets ($pendingCount)" else "Resets", "admin_tab_requests"),
             Triple(2, "Work Roles", "admin_tab_work_roles"),
             Triple(3, "Audit Logs", "admin_tab_audit_logs"),
-            Triple(4, "Centres (${orgHierarchy.centres.size})", "admin_tab_centres")
+            Triple(4, "Centres (${orgHierarchy.centres.size})", "admin_tab_centres"),
+            Triple(5, "Releases (${appReleases.size})", "admin_tab_releases")
         )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -282,6 +292,7 @@ fun AdminScreen(
                             when (tabIdx) {
                                 3 -> viewModel.loadAuditLogs()
                                 4 -> if (orgHierarchy.centres.isEmpty()) viewModel.loadOrgHierarchy()
+                                5 -> viewModel.loadAppReleases()
                             }
                         }
                         .testTag(tag)
@@ -478,7 +489,7 @@ fun AdminScreen(
                     }
                 }
             }
-        } else {
+        } else if (selectedTab == 4) {
             // Cities, Centres & LANs Management Tab
             OutlinedTextField(
                 value = centreSearchQuery,
@@ -638,6 +649,52 @@ fun AdminScreen(
                     }
                 }
             }
+        } else {
+            // App Releases Tab (Super-Admin Update Publishing)
+            Button(
+                onClick = { showAddReleaseDialog = true },
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("btn_admin_add_release")
+            ) {
+                Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Publish New App Release", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (isLoadingReleases && appReleases.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
+                }
+            } else if (appReleases.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    NothingEmptyState(
+                        icon = Icons.Default.SystemUpdate,
+                        title = "NO RELEASES PUBLISHED",
+                        subtitle = "Publish a signed GitHub Release APK metadata record so users receive automatic 48h & manual updates."
+                    )
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 96.dp)
+                ) {
+                    items(appReleases, key = { it.id.ifBlank { it.versionCode.toString() } }) { release ->
+                        AppReleaseAdminCard(
+                            release = release,
+                            onEditClick = { releaseToEdit = release }
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -724,6 +781,22 @@ fun AdminScreen(
             }
         )
     }
+
+    if (showAddReleaseDialog || releaseToEdit != null) {
+        AddEditAppReleaseDialog(
+            existing = releaseToEdit,
+            onDismiss = {
+                showAddReleaseDialog = false
+                releaseToEdit = null
+            },
+            onSave = { updated ->
+                viewModel.saveAppRelease(updated) {
+                    showAddReleaseDialog = false
+                    releaseToEdit = null
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -802,6 +875,7 @@ private fun UserAdminCard(
                     Text(
                         text = listOfNotNull(
                             "ID: ${user.employeeId}",
+                            SupabaseConfig.sanitizeDisplayEmail(user.email),
                             user.mobile.takeIf { it.isNotBlank() },
                             user.centreCode?.let { "Centre $it" } ?: user.cityName ?: user.stateName
                         ).joinToString(" • "),
@@ -2128,3 +2202,285 @@ private fun AddEditOrgCentreDialog(
         }
     )
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AppReleaseAdminCard(
+    release: AppReleaseInfo,
+    onEditClick: () -> Unit
+) {
+    NothingHairlineCard(
+        shape = RoundedCornerShape(14.dp),
+        containerColor = NothingTheme.colors.surface,
+        contentPadding = PaddingValues(14.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "v${release.versionName} (Code ${release.versionCode})",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = TechMonoFontFamily
+                        ),
+                        color = NothingTheme.colors.textPrimary
+                    )
+                    val displayDate = release.releaseDate.ifBlank { release.createdAt }
+                    Text(
+                        text = displayDate.take(19).replace("T", " ").ifBlank { "Draft / Unscheduled" },
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                        color = NothingTheme.colors.textSecondary
+                    )
+                }
+                IconButton(
+                    onClick = onEditClick,
+                    modifier = Modifier.testTag("btn_edit_release_${release.versionCode}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Release",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (release.isLatest) {
+                    NothingTagChip(
+                        text = "LATEST",
+                        containerColor = NothingGreen.copy(alpha = 0.14f),
+                        contentColor = NothingGreen,
+                        borderColor = NothingGreen.copy(alpha = 0.45f)
+                    )
+                }
+                if (release.isActive) {
+                    NothingTagChip(text = "ACTIVE")
+                } else {
+                    NothingTagChip(
+                        text = "INACTIVE",
+                        containerColor = NothingRed.copy(alpha = 0.12f),
+                        contentColor = NothingRed,
+                        borderColor = NothingRed.copy(alpha = 0.4f)
+                    )
+                }
+                if (release.isCritical || release.forceUpdate) {
+                    NothingTagChip(
+                        text = "CRITICAL / MANDATORY",
+                        containerColor = NothingRed.copy(alpha = 0.14f),
+                        contentColor = NothingRed,
+                        borderColor = NothingRed.copy(alpha = 0.45f)
+                    )
+                }
+                if ((release.minimumSupportedVersionCode ?: 0) > 0) {
+                    NothingTagChip(text = "MIN CODE ${release.minimumSupportedVersionCode}")
+                }
+            }
+
+            if (release.releaseNotes.isNotBlank()) {
+                Text(
+                    text = release.releaseNotes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingTheme.colors.textSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = release.downloadUrl,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                color = NothingTheme.colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddEditAppReleaseDialog(
+    existing: AppReleaseInfo?,
+    onDismiss: () -> Unit,
+    onSave: (AppReleaseInfo) -> Unit
+) {
+    var versionName by remember(existing?.id) { mutableStateOf(existing?.versionName ?: "1.0.1") }
+    var versionCodeText by remember(existing?.id) { mutableStateOf((existing?.versionCode ?: 2).toString()) }
+    var downloadUrl by remember(existing?.id) { mutableStateOf(existing?.downloadUrl ?: "https://github.com/OWNER/REPO/releases/download/v1.0.1/Taskz-v1.0.1.apk") }
+    var releaseNotes by remember(existing?.id) { mutableStateOf(existing?.releaseNotes ?: "") }
+    var minVersionName by remember(existing?.id) { mutableStateOf(existing?.minimumSupportedVersion ?: "") }
+    var minVersionCodeText by remember(existing?.id) { mutableStateOf(existing?.minimumSupportedVersionCode?.toString() ?: "") }
+    var sha256Checksum by remember(existing?.id) { mutableStateOf(existing?.sha256Checksum ?: "") }
+    var isCritical by remember(existing?.id) { mutableStateOf(existing?.isCritical ?: false) }
+    var forceUpdate by remember(existing?.id) { mutableStateOf(existing?.forceUpdate ?: false) }
+    var isLatest by remember(existing?.id) { mutableStateOf(existing?.isLatest ?: true) }
+    var isActive by remember(existing?.id) { mutableStateOf(existing?.isActive ?: true) }
+
+    val parsedVersionCode = versionCodeText.trim().toIntOrNull() ?: 0
+    val parsedMinCode = minVersionCodeText.trim().takeIf { it.isNotBlank() }?.toIntOrNull()
+    val urlValid = downloadUrl.trim().startsWith("https://", ignoreCase = true)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = NothingTheme.colors.surface,
+        shape = RoundedCornerShape(16.dp),
+        title = {
+            NothingDotMatrixText(
+                text = if (existing == null) "PUBLISH APP RELEASE" else "EDIT APP RELEASE",
+                fontSize = 16.sp,
+                letterSpacing = 1.sp,
+                color = NothingTheme.colors.textPrimary
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = versionName,
+                    onValueChange = { versionName = it.trim() },
+                    label = { Text("Version Name *") },
+                    placeholder = { Text("e.g., 1.0.2") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("admin_release_version_name")
+                )
+                OutlinedTextField(
+                    value = versionCodeText,
+                    onValueChange = { versionCodeText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Version Code (integer) *") },
+                    placeholder = { Text("e.g., 2") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("admin_release_version_code")
+                )
+                OutlinedTextField(
+                    value = downloadUrl,
+                    onValueChange = { downloadUrl = it.trim() },
+                    label = { Text("HTTPS APK Download URL *") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("admin_release_download_url")
+                )
+                OutlinedTextField(
+                    value = releaseNotes,
+                    onValueChange = { releaseNotes = it },
+                    label = { Text("Release Notes") },
+                    minLines = 2,
+                    maxLines = 5,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("admin_release_notes")
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = minVersionName,
+                        onValueChange = { minVersionName = it.trim() },
+                        label = { Text("Min Version") },
+                        placeholder = { Text("1.0.0") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = minVersionCodeText,
+                        onValueChange = { minVersionCodeText = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Min Code") },
+                        placeholder = { Text("1") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                OutlinedTextField(
+                    value = sha256Checksum,
+                    onValueChange = { sha256Checksum = it.trim() },
+                    label = { Text("APK SHA-256 Checksum (Optional)") },
+                    placeholder = { Text("64-char hex digest") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                ReleaseToggleRow("Mark as Latest Release", isLatest) { isLatest = it }
+                ReleaseToggleRow("Release Active", isActive) { isActive = it }
+                ReleaseToggleRow("Critical Security / Fix", isCritical) { isCritical = it }
+                ReleaseToggleRow("Force Mandatory Update", forceUpdate) { forceUpdate = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = versionName.isNotBlank() && parsedVersionCode > 0 && urlValid,
+                onClick = {
+                    onSave(
+                        AppReleaseInfo(
+                            id = existing?.id.orEmpty(),
+                            versionName = versionName.trim(),
+                            versionCode = parsedVersionCode,
+                            downloadUrl = downloadUrl.trim(),
+                            releaseNotes = releaseNotes.trim(),
+                            isCritical = isCritical,
+                            forceUpdate = forceUpdate,
+                            minimumSupportedVersion = minVersionName.trim().takeIf { it.isNotBlank() },
+                            minimumSupportedVersionCode = parsedMinCode,
+                            sha256Checksum = sha256Checksum.trim().takeIf { it.isNotBlank() },
+                            isLatest = isLatest,
+                            isActive = isActive
+                        )
+                    )
+                },
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NothingTheme.colors.accentPrimary,
+                    contentColor = NothingTheme.colors.onAccentPrimary
+                ),
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("confirm_save_admin_release_btn")
+            ) {
+                Text("Save Release", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("Cancel", color = NothingTheme.colors.textSecondary)
+            }
+        }
+    )
+}
+
+@Composable
+private fun ReleaseToggleRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = NothingTheme.colors.textPrimary
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Groups
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -75,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -82,10 +85,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.example.BuildConfig
 import com.example.core.datastore.AppThemeMode
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.model.AssignedRoleInfo
 import com.example.core.model.TaskzRole
+import com.example.core.network.SupabaseConfig
 import com.example.ui.common.NothingDivider
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingHairlineCard
@@ -93,6 +98,7 @@ import com.example.ui.common.NothingSectionHeader
 import com.example.ui.common.NothingSegmentedTabs
 import com.example.ui.common.NothingTagChip
 import com.example.ui.common.SyncStatusCard
+import com.example.ui.common.TaskzHaptics
 import com.example.ui.common.TaskzOutlinedButton
 import com.example.ui.common.TaskzPrimaryButton
 import com.example.ui.common.TaskzTextField
@@ -109,6 +115,7 @@ import kotlinx.coroutines.launch
 fun ProfileScreen(
     viewModel: ProfileViewModel,
     onLogoutSuccess: () -> Unit,
+    onNavigateToSettings: () -> Unit = {},
     onNavigateToAlarmSettings: () -> Unit = {},
     onNavigateToGroups: () -> Unit = {},
     onNavigateToAdmin: () -> Unit = {},
@@ -245,6 +252,13 @@ fun ProfileScreen(
                         text = profile?.employeeId?.ifBlank { "EMP" } ?: "EMP",
                         style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
                         color = NothingTheme.colors.textSecondary
+                    )
+                    val headerEmail = SupabaseConfig.sanitizeDisplayEmail(profile?.email)
+                    Text(
+                        text = headerEmail ?: "No email linked",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (headerEmail != null) NothingTheme.colors.textSecondary else NothingAmber,
+                        modifier = Modifier.testTag("profile_header_email")
                     )
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -477,6 +491,14 @@ fun ProfileScreen(
                     color = NothingTheme.colors.textSecondary
                 )
             }
+            if (!profile?.id.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "USER ID: ${profile?.id?.take(18)}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
+                    color = NothingTheme.colors.textSecondary
+                )
+            }
             val scopeBtnLabel = when (authContext.activeRole) {
                 TaskzRole.ZOM -> "Update Zone"
                 TaskzRole.ROM -> "Update State"
@@ -507,6 +529,14 @@ fun ProfileScreen(
         // Quick Shortcuts Card
         NothingHairlineCard(contentPadding = PaddingValues(0.dp)) {
             ProfileNavRow(
+                icon = Icons.Default.Settings,
+                title = "Settings & Privacy",
+                subtitle = "Appearance, alerts, app updates, policies & support",
+                onClick = onNavigateToSettings,
+                testTag = "profile_nav_settings"
+            )
+            NothingDivider()
+            ProfileNavRow(
                 icon = Icons.Default.Alarm,
                 title = "Alarm Reliability",
                 subtitle = "Full-screen alerts & exact timing",
@@ -528,7 +558,7 @@ fun ProfileScreen(
                 ProfileNavRow(
                     icon = Icons.Default.AdminPanelSettings,
                     title = "Admin Console",
-                    subtitle = "Users, roles & system access",
+                    subtitle = "Users, roles, centres & app releases",
                     onClick = onNavigateToAdmin,
                     testTag = "profile_nav_admin"
                 )
@@ -538,6 +568,40 @@ fun ProfileScreen(
         // Employee Credentials Form
         NothingHairlineCard(contentPadding = PaddingValues(14.dp)) {
             NothingSectionHeader(title = "EMPLOYEE CREDENTIALS")
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val lockedEmail = SupabaseConfig.sanitizeDisplayEmail(profile?.email)
+            OutlinedTextField(
+                value = lockedEmail ?: "Not linked — sign in with Email or Google",
+                onValueChange = {},
+                readOnly = true,
+                enabled = false,
+                label = { Text("Email Address (Read-only)") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Email,
+                        contentDescription = null,
+                        tint = NothingTheme.colors.textSecondary
+                    )
+                },
+                trailingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Locked",
+                        tint = NothingTheme.colors.textSecondary
+                    )
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    disabledBorderColor = NothingTheme.colors.border,
+                    disabledTextColor = if (lockedEmail != null) MaterialTheme.colorScheme.onSurface else NothingTheme.colors.textSecondary,
+                    disabledLabelColor = NothingTheme.colors.textSecondary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_email_readonly")
+            )
+
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
@@ -661,7 +725,7 @@ fun ProfileScreen(
         )
 
         Text(
-            text = "TASKZ CLIENT · BUILD 1.0",
+            text = "TASKZ CLIENT · v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = TechMonoFontFamily),
             color = NothingTheme.colors.textSecondary
         )
@@ -763,10 +827,14 @@ private fun ProfileNavRow(
     onClick: () -> Unit,
     testTag: String
 ) {
+    val view = LocalView.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable {
+                TaskzHaptics.tap(view)
+                onClick()
+            }
             .padding(horizontal = 14.dp, vertical = 12.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically

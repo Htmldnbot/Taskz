@@ -23,12 +23,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.common.NothingDotMatrixText
 import com.example.ui.common.NothingDotPatternStrip
+import com.example.ui.common.TaskzAmbientBackground
 import com.example.ui.theme.NothingTheme
 import com.example.ui.theme.TechMonoFontFamily
 
@@ -53,12 +55,13 @@ fun SplashScreen(
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(NothingTheme.colors.background),
-        contentAlignment = Alignment.Center
-    ) {
+    TaskzAmbientBackground(modifier = modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
         NothingDotPatternStrip(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -124,5 +127,6 @@ fun SplashScreen(
                 .height(64.dp)
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         )
+        }
     }
 }

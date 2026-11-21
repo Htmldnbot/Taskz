@@ -109,6 +109,7 @@ fun TaskzAppNavigation() {
             AuthScreen(
                 viewModel = authViewModel,
                 onAuthSuccess = {
+                    TaskzApplication.instance.appUpdateManager.checkIfDue("post_login")
                     navController.navigate("main") {
                         popUpTo("auth") { inclusive = true }
                     }

@@ -46,7 +46,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReportProblem
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.DesktopWindows
@@ -104,6 +106,8 @@ import com.example.core.model.NotificationCategory
 import com.example.core.model.Shift
 import com.example.core.model.TaskGroup
 import com.example.core.model.TaskItem
+import com.example.core.model.UpdateStatusState
+import com.example.core.network.SupabaseConfig
 import com.example.notifications.DeepLinkTarget
 import com.example.notifications.NotificationDeepLinkRouter
 import com.example.ui.admin.AdminScreen
@@ -132,6 +136,18 @@ import com.example.ui.incidents.SystemIncidentRegisterScreen
 import com.example.ui.incidents.SystemIncidentViewModel
 import com.example.ui.profile.ProfileScreen
 import com.example.ui.profile.ProfileViewModel
+import com.example.ui.settings.AppInfoScreen
+import com.example.ui.settings.ContactAdminScreen
+import com.example.ui.settings.DataAndPermissionsScreen
+import com.example.ui.settings.DisclaimerScreen
+import com.example.ui.settings.MandatoryUpdateGateScreen
+import com.example.ui.settings.OpenSourceLicensesScreen
+import com.example.ui.settings.OptionalUpdateBanner
+import com.example.ui.settings.PrivacyPolicyScreen
+import com.example.ui.settings.SettingsScreen
+import com.example.ui.settings.SupportCategory
+import com.example.ui.settings.TermsOfUseScreen
+import com.example.ui.settings.UpdatesScreen
 import com.example.ui.shifts.CopyShiftScreen
 import com.example.ui.shifts.CreateShiftScreen
 import com.example.ui.shifts.EditShiftScreen
@@ -182,6 +198,16 @@ sealed interface SubRoute {
     data class TaskParticipants(val taskId: String) : SubRoute
     data class TaskJoinRequests(val taskId: String) : SubRoute
     object AlarmReliabilitySettings : SubRoute
+
+    object Settings : SubRoute
+    object AppUpdates : SubRoute
+    data class ContactAdmin(val category: SupportCategory = SupportCategory.GENERAL_SUPPORT) : SubRoute
+    object PrivacyPolicy : SubRoute
+    object Disclaimer : SubRoute
+    object TermsOfUse : SubRoute
+    object DataAndPermissions : SubRoute
+    object OpenSourceLicenses : SubRoute
+    object AppInfo : SubRoute
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -245,6 +271,10 @@ fun MainShell(
     val allIncidents by systemIncidentViewModel.allIncidents.collectAsStateWithLifecycle()
     val isOnline by app.networkMonitor.isOnlineFlow.collectAsStateWithLifecycle(initialValue = app.networkMonitor.isCurrentlyConnected())
     val pendingDeepLink by NotificationDeepLinkRouter.pendingTarget.collectAsStateWithLifecycle()
+    val appUpdateManager = app.appUpdateManager
+    val userPrefs = app.userPreferences
+    val updateStatus by appUpdateManager.updateStatus.collectAsStateWithLifecycle()
+    val dismissedOptionalVersionCode by userPrefs.dismissedUpdateVersionCodeFlow.collectAsStateWithLifecycle(initialValue = 0)
 
     var showRoleMenu by remember { mutableStateOf(false) }
     var showAvailabilityMenu by remember { mutableStateOf(false) }
@@ -432,6 +462,19 @@ fun MainShell(
                 )
             }
         }
+    }
+
+    val mandatoryGateRelease = if (isOnline && currentSubRoute !is SubRoute.ContactAdmin) {
+        (updateStatus as? UpdateStatusState.MandatoryRequired)?.release
+    } else null
+
+    if (mandatoryGateRelease != null) {
+        MandatoryUpdateGateScreen(
+            release = mandatoryGateRelease,
+            appUpdateManager = appUpdateManager,
+            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.APP_UPDATE)) }
+        )
+        return
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -796,7 +839,7 @@ fun MainShell(
                                     }
 
                                     DropdownMenuItem(
-                                        text = { Text("Profile & Settings") },
+                                        text = { Text("Profile") },
                                         leadingIcon = {
                                             Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
                                         },
@@ -805,6 +848,34 @@ fun MainShell(
                                             currentTab = MainTab.PROFILE
                                             subRouteStack.clear()
                                         }
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = { Text("Settings") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        onClick = {
+                                            showRoleMenu = false
+                                            subRouteStack.add(SubRoute.Settings)
+                                        },
+                                        modifier = Modifier.testTag("menu_open_settings")
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = {
+                                            val hasUpdate = updateStatus is UpdateStatusState.OptionalAvailable ||
+                                                updateStatus is UpdateStatusState.MandatoryRequired
+                                            Text(if (hasUpdate) "App Updates (Available)" else "Check for Updates")
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        onClick = {
+                                            showRoleMenu = false
+                                            subRouteStack.add(SubRoute.AppUpdates)
+                                        },
+                                        modifier = Modifier.testTag("menu_open_updates")
                                     )
                                 }
                             }
@@ -964,65 +1035,155 @@ fun MainShell(
                             onNavigateBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
                         )
                     }
-                    SubRoute.None -> {
-                        AnimatedContent(
-                            targetState = currentTab,
-                            transitionSpec = {
-                                fadeIn(animationSpec = tween(160)) togetherWith fadeOut(animationSpec = tween(120))
+                    is SubRoute.Settings -> {
+                        SettingsScreen(
+                            profile = profile,
+                            authContext = authContext,
+                            userPrefs = userPrefs,
+                            appUpdateManager = appUpdateManager,
+                            onOpenProfile = {
+                                subRouteStack.clear()
+                                currentTab = MainTab.PROFILE
                             },
-                            label = "main_tab_transition"
-                        ) { activeTab ->
-                            when (activeTab) {
-                                MainTab.HOME -> HomeScreen(
-                                    viewModel = homeViewModel,
-                                    onNavigateToTasks = { currentTab = MainTab.TASKS },
-                                    onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
-                                    onNavigateToProfile = { currentTab = MainTab.PROFILE },
-                                    onNavigateToAdmin = { currentTab = MainTab.ADMIN },
-                                    onNavigateToIncidents = {
-                                        systemIncidentViewModel.selectTab(1)
-                                        currentTab = MainTab.INCIDENTS
-                                    },
-                                    onNavigateToReports = {
-                                        systemIncidentViewModel.selectTab(2)
-                                        currentTab = MainTab.INCIDENTS
-                                    },
-                                    onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
-                                    onSignedOut = onLogoutSuccess,
-                                    tasks = allTasks,
-                                    incidents = allIncidents,
-                                    notifications = notifications,
-                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
-                                    onIncidentClick = { incident ->
-                                        systemIncidentViewModel.selectTab(1)
-                                        systemIncidentViewModel.selectIncidentForDetail(incident)
-                                        currentTab = MainTab.INCIDENTS
-                                    },
-                                    onOpenNotifications = { showNotificationsSheet = true }
+                            onOpenAlarmReliability = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
+                            onOpenUpdates = { subRouteStack.add(SubRoute.AppUpdates) },
+                            onOpenContactAdmin = { cat -> subRouteStack.add(SubRoute.ContactAdmin(cat)) },
+                            onOpenPrivacyPolicy = { subRouteStack.add(SubRoute.PrivacyPolicy) },
+                            onOpenDisclaimer = { subRouteStack.add(SubRoute.Disclaimer) },
+                            onOpenTermsOfUse = { subRouteStack.add(SubRoute.TermsOfUse) },
+                            onOpenDataAndPermissions = { subRouteStack.add(SubRoute.DataAndPermissions) },
+                            onOpenLicenses = { subRouteStack.add(SubRoute.OpenSourceLicenses) },
+                            onOpenAppInfo = { subRouteStack.add(SubRoute.AppInfo) },
+                            onSignOut = {
+                                subRouteStack.clear()
+                                profileViewModel.logout(onLogoutSuccess)
+                            },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.AppUpdates -> {
+                        UpdatesScreen(
+                            appUpdateManager = appUpdateManager,
+                            isOnline = isOnline,
+                            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.APP_UPDATE)) },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.ContactAdmin -> {
+                        ContactAdminScreen(
+                            initialCategory = route.category,
+                            employeeId = profile?.employeeId,
+                            userEmail = SupabaseConfig.sanitizeDisplayEmail(profile?.email),
+                            roleName = authContext.activeRole.displayName,
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.PrivacyPolicy -> {
+                        PrivacyPolicyScreen(
+                            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.GENERAL_SUPPORT)) },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.Disclaimer -> {
+                        DisclaimerScreen(
+                            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.GENERAL_SUPPORT)) },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.TermsOfUse -> {
+                        TermsOfUseScreen(
+                            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.GENERAL_SUPPORT)) },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.DataAndPermissions -> {
+                        DataAndPermissionsScreen(
+                            isOnline = isOnline,
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    is SubRoute.OpenSourceLicenses -> {
+                        OpenSourceLicensesScreen(onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) })
+                    }
+                    is SubRoute.AppInfo -> {
+                        AppInfoScreen(
+                            onOpenUpdates = { subRouteStack.add(SubRoute.AppUpdates) },
+                            onContactAdmin = { subRouteStack.add(SubRoute.ContactAdmin(SupportCategory.GENERAL_SUPPORT)) },
+                            onBack = { subRouteStack.removeAt(subRouteStack.lastIndex) }
+                        )
+                    }
+                    SubRoute.None -> {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            val optionalRelease = (updateStatus as? UpdateStatusState.OptionalAvailable)?.release
+                            if (optionalRelease != null && optionalRelease.versionCode != dismissedOptionalVersionCode) {
+                                OptionalUpdateBanner(
+                                    release = optionalRelease,
+                                    onOpenUpdates = { subRouteStack.add(SubRoute.AppUpdates) },
+                                    onDismiss = { appUpdateManager.dismissOptionalPrompt(optionalRelease.versionCode) },
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                                 )
-                                MainTab.TASKS -> TasksScreen(
-                                    viewModel = tasksViewModel,
-                                    onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
-                                    onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
-                                    onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) },
-                                    onRepeatShiftClick = openRepeatShift1To2
-                                )
-                                MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
-                                    viewModel = systemIncidentViewModel
-                                )
-                                MainTab.PROFILE -> ProfileScreen(
-                                    viewModel = profileViewModel,
-                                    onLogoutSuccess = onLogoutSuccess,
-                                    onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
-                                    onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
-                                    onNavigateToAdmin = { currentTab = MainTab.ADMIN },
-                                    canManageUsers = canManageUsers,
-                                    canSelfJoinGroups = canSelfJoinGroups
-                                )
-                                MainTab.ADMIN -> AdminScreen(
-                                    viewModel = adminViewModel,
-                                    workRolesViewModel = workRolesViewModel
-                                )
+                            }
+                            AnimatedContent(
+                                targetState = currentTab,
+                                transitionSpec = {
+                                    fadeIn(animationSpec = tween(160)) togetherWith fadeOut(animationSpec = tween(120))
+                                },
+                                label = "main_tab_transition",
+                                modifier = Modifier.weight(1f)
+                            ) { activeTab ->
+                                when (activeTab) {
+                                    MainTab.HOME -> HomeScreen(
+                                        viewModel = homeViewModel,
+                                        onNavigateToTasks = { currentTab = MainTab.TASKS },
+                                        onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
+                                        onNavigateToProfile = { currentTab = MainTab.PROFILE },
+                                        onNavigateToAdmin = { currentTab = MainTab.ADMIN },
+                                        onNavigateToIncidents = {
+                                            systemIncidentViewModel.selectTab(1)
+                                            currentTab = MainTab.INCIDENTS
+                                        },
+                                        onNavigateToReports = {
+                                            systemIncidentViewModel.selectTab(2)
+                                            currentTab = MainTab.INCIDENTS
+                                        },
+                                        onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
+                                        onSignedOut = onLogoutSuccess,
+                                        tasks = allTasks,
+                                        incidents = allIncidents,
+                                        notifications = notifications,
+                                        onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
+                                        onIncidentClick = { incident ->
+                                            systemIncidentViewModel.selectTab(1)
+                                            systemIncidentViewModel.selectIncidentForDetail(incident)
+                                            currentTab = MainTab.INCIDENTS
+                                        },
+                                        onOpenNotifications = { showNotificationsSheet = true }
+                                    )
+                                    MainTab.TASKS -> TasksScreen(
+                                        viewModel = tasksViewModel,
+                                        onCreateTaskClick = { subRouteStack.add(SubRoute.CreateTask()) },
+                                        onTaskClick = { task -> subRouteStack.add(SubRoute.TaskDetail(task)) },
+                                        onManageGroupsClick = { subRouteStack.add(SubRoute.GroupsList) },
+                                        onRepeatShiftClick = openRepeatShift1To2
+                                    )
+                                    MainTab.INCIDENTS -> SystemIncidentRegisterScreen(
+                                        viewModel = systemIncidentViewModel
+                                    )
+                                    MainTab.PROFILE -> ProfileScreen(
+                                        viewModel = profileViewModel,
+                                        onLogoutSuccess = onLogoutSuccess,
+                                        onNavigateToSettings = { subRouteStack.add(SubRoute.Settings) },
+                                        onNavigateToAlarmSettings = { subRouteStack.add(SubRoute.AlarmReliabilitySettings) },
+                                        onNavigateToGroups = { subRouteStack.add(SubRoute.GroupsList) },
+                                        onNavigateToAdmin = { currentTab = MainTab.ADMIN },
+                                        canManageUsers = canManageUsers,
+                                        canSelfJoinGroups = canSelfJoinGroups
+                                    )
+                                    MainTab.ADMIN -> AdminScreen(
+                                        viewModel = adminViewModel,
+                                        workRolesViewModel = workRolesViewModel
+                                    )
+                                }
                             }
                         }
                     }

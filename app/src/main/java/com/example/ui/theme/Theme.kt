@@ -38,7 +38,10 @@ data class NothingColors(
     val capsuleNavBorder: Color,
     val capsuleNavActivePill: Color,
     val capsuleNavActiveContent: Color,
-    val capsuleNavInactiveContent: Color
+    val capsuleNavInactiveContent: Color,
+    val glassSurface: Color,
+    val glassSurfaceElevated: Color,
+    val glassHighlightEdge: Color
 )
 
 private val DarkNothingColors = NothingColors(
@@ -56,11 +59,14 @@ private val DarkNothingColors = NothingColors(
     red = NothingRed,
     amber = NothingAmber,
     green = NothingGreen,
-    capsuleNavBg = Color(0xF5141417),
-    capsuleNavBorder = Color(0xFF2E2E35),
+    capsuleNavBg = Color(0xEC141417),
+    capsuleNavBorder = Color(0xFF33333A),
     capsuleNavActivePill = NothingDarkText,
     capsuleNavActiveContent = NothingDarkBg,
-    capsuleNavInactiveContent = NothingDarkSecondaryText
+    capsuleNavInactiveContent = NothingDarkSecondaryText,
+    glassSurface = Color(0xDB141418),
+    glassSurfaceElevated = Color(0xE01D1D22),
+    glassHighlightEdge = Color(0x28FFFFFF)
 )
 
 private val LightNothingColors = NothingColors(
@@ -78,11 +84,14 @@ private val LightNothingColors = NothingColors(
     red = NothingRed,
     amber = NothingAmber,
     green = NothingGreen,
-    capsuleNavBg = Color(0xF5FFFFFF),
+    capsuleNavBg = Color(0xECFFFFFF),
     capsuleNavBorder = Color(0xFFD2D2D8),
     capsuleNavActivePill = NothingLightText,
     capsuleNavActiveContent = Color.White,
-    capsuleNavInactiveContent = NothingLightSecondaryText
+    capsuleNavInactiveContent = NothingLightSecondaryText,
+    glassSurface = Color(0xE6FFFFFF),
+    glassSurfaceElevated = Color(0xECF0F0EC),
+    glassHighlightEdge = Color(0x99FFFFFF)
 )
 
 val LocalNothingColors = staticCompositionLocalOf { DarkNothingColors }

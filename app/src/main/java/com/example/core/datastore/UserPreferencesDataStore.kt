@@ -4,9 +4,13 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.core.model.AppReleaseInfo
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -25,6 +29,13 @@ enum class AppThemeMode(val label: String) {
             entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: SYSTEM
     }
 }
+
+data class NotificationPreferences(
+    val taskAlertsEnabled: Boolean = true,
+    val incidentAlertsEnabled: Boolean = true,
+    val soundEnabled: Boolean = true,
+    val vibrationEnabled: Boolean = true
+)
 
 data class UserSession(
     val accessToken: String?,
@@ -57,6 +68,15 @@ class UserPreferencesDataStore(private val context: Context) {
         private val KEY_CUSTOM_SUPABASE_URL = stringPreferencesKey("custom_supabase_url")
         private val KEY_CUSTOM_SUPABASE_KEY = stringPreferencesKey("custom_supabase_key")
         private val KEY_APP_THEME_MODE = stringPreferencesKey("app_theme_mode")
+
+        private val KEY_NOTIF_TASKS = booleanPreferencesKey("notif_tasks_enabled")
+        private val KEY_NOTIF_INCIDENTS = booleanPreferencesKey("notif_incidents_enabled")
+        private val KEY_NOTIF_SOUND = booleanPreferencesKey("notif_sound_enabled")
+        private val KEY_NOTIF_VIBRATION = booleanPreferencesKey("notif_vibration_enabled")
+
+        private val KEY_LAST_UPDATE_CHECK_MS = longPreferencesKey("last_update_check_ms")
+        private val KEY_CACHED_RELEASE_JSON = stringPreferencesKey("cached_latest_release_json")
+        private val KEY_DISMISSED_UPDATE_CODE = intPreferencesKey("dismissed_update_version_code")
     }
 
     private fun readSession(): UserSession {
@@ -164,6 +184,66 @@ class UserPreferencesDataStore(private val context: Context) {
     suspend fun saveThemeMode(mode: AppThemeMode) {
         context.appDataStore.edit { prefs ->
             prefs[KEY_APP_THEME_MODE] = mode.name
+        }
+    }
+
+    val notificationPreferencesFlow: Flow<NotificationPreferences> = context.appDataStore.data.map { prefs ->
+        NotificationPreferences(
+            taskAlertsEnabled = prefs[KEY_NOTIF_TASKS] ?: true,
+            incidentAlertsEnabled = prefs[KEY_NOTIF_INCIDENTS] ?: true,
+            soundEnabled = prefs[KEY_NOTIF_SOUND] ?: true,
+            vibrationEnabled = prefs[KEY_NOTIF_VIBRATION] ?: true
+        )
+    }
+
+    suspend fun getNotificationPreferences(): NotificationPreferences = notificationPreferencesFlow.first()
+
+    suspend fun updateNotificationPreferences(
+        taskAlertsEnabled: Boolean? = null,
+        incidentAlertsEnabled: Boolean? = null,
+        soundEnabled: Boolean? = null,
+        vibrationEnabled: Boolean? = null
+    ) {
+        context.appDataStore.edit { prefs ->
+            if (taskAlertsEnabled != null) prefs[KEY_NOTIF_TASKS] = taskAlertsEnabled
+            if (incidentAlertsEnabled != null) prefs[KEY_NOTIF_INCIDENTS] = incidentAlertsEnabled
+            if (soundEnabled != null) prefs[KEY_NOTIF_SOUND] = soundEnabled
+            if (vibrationEnabled != null) prefs[KEY_NOTIF_VIBRATION] = vibrationEnabled
+        }
+    }
+
+    val lastUpdateCheckAtFlow: Flow<Long> = context.appDataStore.data.map { prefs ->
+        prefs[KEY_LAST_UPDATE_CHECK_MS] ?: 0L
+    }
+
+    val cachedLatestReleaseFlow: Flow<AppReleaseInfo?> = context.appDataStore.data.map { prefs ->
+        AppReleaseInfo.fromJsonString(prefs[KEY_CACHED_RELEASE_JSON])
+    }
+
+    val dismissedUpdateVersionCodeFlow: Flow<Int> = context.appDataStore.data.map { prefs ->
+        prefs[KEY_DISMISSED_UPDATE_CODE] ?: 0
+    }
+
+    suspend fun getLastUpdateCheckAt(): Long = lastUpdateCheckAtFlow.first()
+
+    suspend fun getCachedLatestRelease(): AppReleaseInfo? = cachedLatestReleaseFlow.first()
+
+    suspend fun getDismissedUpdateVersionCode(): Int = dismissedUpdateVersionCodeFlow.first()
+
+    suspend fun saveUpdateCheckResult(checkedAtMs: Long, release: AppReleaseInfo?) {
+        context.appDataStore.edit { prefs ->
+            prefs[KEY_LAST_UPDATE_CHECK_MS] = checkedAtMs
+            if (release != null) {
+                prefs[KEY_CACHED_RELEASE_JSON] = release.toJsonString()
+            } else {
+                prefs.remove(KEY_CACHED_RELEASE_JSON)
+            }
+        }
+    }
+
+    suspend fun setDismissedUpdateVersionCode(versionCode: Int) {
+        context.appDataStore.edit { prefs ->
+            prefs[KEY_DISMISSED_UPDATE_CODE] = versionCode
         }
     }
 

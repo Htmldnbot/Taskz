@@ -116,6 +116,13 @@ object SupabaseConfig {
         return list.toList()
     }
 
+    fun sanitizeDisplayEmail(raw: String?): String? {
+        val clean = raw?.trim()?.lowercase()?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            ?: return null
+        if (clean.endsWith("@taskzapp.org") || clean.endsWith("@taskzapp.com")) return null
+        return if (clean.contains("@")) clean else null
+    }
+
     fun isValidUuid(value: String?): Boolean {
         if (value.isNullOrBlank()) return false
         return try {

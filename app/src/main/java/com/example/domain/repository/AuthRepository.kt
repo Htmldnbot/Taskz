@@ -140,8 +140,22 @@ class AuthRepository(
             photoBytes = photoBytes,
             photoFilename = photoFilename,
             onboardingRole = safeRole,
-            centreCode = centreCode
+            centreCode = centreCode,
+            emailHint = cleanEmail
         )
+    }
+
+    private suspend fun resolveProfileEmail(
+        profile: UserProfile,
+        accessToken: String,
+        sessionEmail: String? = null,
+        emailHint: String? = null
+    ): String? {
+        return SupabaseConfig.sanitizeDisplayEmail(profile.email)
+            ?: SupabaseConfig.sanitizeDisplayEmail(sessionEmail)
+            ?: SupabaseConfig.sanitizeDisplayEmail(emailHint)
+            ?: supabaseClient.extractEmailFromJwt(accessToken)
+            ?: supabaseClient.fetchCurrentAuthUserEmail(accessToken)
     }
 
     private suspend fun finalizeAuthenticatedSession(
@@ -152,7 +166,8 @@ class AuthRepository(
         photoBytes: ByteArray?,
         photoFilename: String?,
         onboardingRole: com.example.core.model.TaskzRole = com.example.core.model.TaskzRole.IT_MANAGER,
-        centreCode: String? = null
+        centreCode: String? = null,
+        emailHint: String? = null
     ): Result<UserProfile> {
         val activeToken = session.accessToken
         var photoPath: String? = null
@@ -227,7 +242,16 @@ class AuthRepository(
         } else {
             null
         }
-        val finalProfile = resolvedProfile.copy(avatarSignedUrl = signedUrl)
+        val resolvedEmail = resolveProfileEmail(
+            profile = resolvedProfile,
+            accessToken = activeToken,
+            sessionEmail = session.email,
+            emailHint = emailHint
+        )
+        val finalProfile = resolvedProfile.copy(
+            email = resolvedEmail,
+            avatarSignedUrl = signedUrl
+        )
 
         profileDao.insertProfile(ProfileEntity.fromDomain(finalProfile))
         userPrefs.saveSession(
@@ -261,7 +285,11 @@ class AuthRepository(
         val session = supabaseClient.loginWithEmail(cleanEmail, password)
             .getOrElse { return Result.failure(it) }
 
-        val result = loadProfileAndSaveSession(session, allowPendingProfileCompletion = true)
+        val result = loadProfileAndSaveSession(
+            session = session,
+            allowPendingProfileCompletion = true,
+            emailHint = cleanEmail
+        )
         result.onSuccess { prof ->
             if (prof.employeeId.isNotBlank()) {
                 userPrefs.saveEmailEmployeeHint(cleanEmail, prof.employeeId)
@@ -292,7 +320,8 @@ class AuthRepository(
         val result = loadProfileAndSaveSession(
             session = session,
             allowPendingProfileCompletion = true,
-            fallbackFullName = displayNameHint.orEmpty()
+            fallbackFullName = displayNameHint.orEmpty(),
+            emailHint = emailHint
         )
         result.onSuccess { prof ->
             val cleanEmail = emailHint?.trim()?.lowercase()
@@ -309,7 +338,8 @@ class AuthRepository(
     private suspend fun loadProfileAndSaveSession(
         session: AuthSessionResponse,
         allowPendingProfileCompletion: Boolean = false,
-        fallbackFullName: String = ""
+        fallbackFullName: String = "",
+        emailHint: String? = null
     ): Result<UserProfile> {
         val profile = supabaseClient.fetchProfileById(session.accessToken, session.userId)
             .getOrElse {
@@ -325,12 +355,16 @@ class AuthRepository(
                     employeeId = "",
                     mustChangePassword = false
                 )
+                val pendingEmail = SupabaseConfig.sanitizeDisplayEmail(session.email)
+                    ?: SupabaseConfig.sanitizeDisplayEmail(emailHint)
+                    ?: supabaseClient.extractEmailFromJwt(session.accessToken)
                 return Result.success(
                     UserProfile(
                         id = session.userId,
                         employeeId = "",
                         fullName = fallbackFullName,
                         mobile = "",
+                        email = pendingEmail,
                         appRole = "employee",
                         isActive = true
                     )
@@ -350,7 +384,16 @@ class AuthRepository(
         } else {
             null
         }
-        val finalProfile = profile.copy(avatarSignedUrl = signedUrl)
+        val resolvedEmail = resolveProfileEmail(
+            profile = profile,
+            accessToken = session.accessToken,
+            sessionEmail = session.email,
+            emailHint = emailHint
+        )
+        val finalProfile = profile.copy(
+            email = resolvedEmail,
+            avatarSignedUrl = signedUrl
+        )
 
         userPrefs.saveSession(
             accessToken = session.accessToken,
@@ -406,7 +449,16 @@ class AuthRepository(
         } else {
             null
         }
-        val finalProfile = refreshedProfile.copy(avatarSignedUrl = signedUrl)
+        val resolvedEmail = resolveProfileEmail(
+            profile = refreshedProfile,
+            accessToken = validToken,
+            sessionEmail = null,
+            emailHint = null
+        )
+        val finalProfile = refreshedProfile.copy(
+            email = resolvedEmail,
+            avatarSignedUrl = signedUrl
+        )
 
         userPrefs.saveSession(
             accessToken = validToken,
@@ -612,7 +664,16 @@ class AuthRepository(
                 } else {
                     null
                 }
-                val enriched = remoteProfile.copy(avatarSignedUrl = signedUrl)
+                val resolvedEmail = resolveProfileEmail(
+                    profile = remoteProfile,
+                    accessToken = validToken,
+                    sessionEmail = cachedProfile?.email,
+                    emailHint = null
+                )
+                val enriched = remoteProfile.copy(
+                    email = resolvedEmail,
+                    avatarSignedUrl = signedUrl
+                )
 
                 profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
                 syncMetadataDao.updateLastServerFetch(System.currentTimeMillis())

@@ -6,6 +6,7 @@ import android.os.Bundle
 import com.example.core.datastore.UserPreferencesDataStore
 import com.example.core.network.NetworkMonitor
 import com.example.core.network.SupabaseConfig
+import com.example.core.update.AppUpdateManager
 import com.example.data.local.TaskzDatabase
 import com.example.data.remote.GoogleAuthManager
 import com.example.data.remote.SupabaseClient
@@ -55,6 +56,9 @@ class TaskzApplication : Application() {
     lateinit var pushNotificationManager: PushNotificationManager
         private set
 
+    lateinit var appUpdateManager: AppUpdateManager
+        private set
+
     lateinit var taskzSyncManager: TaskzSyncManager
         private set
 
@@ -96,7 +100,8 @@ class TaskzApplication : Application() {
         permissionManager = TaskzPermissionManager()
         realtimeManager = TaskzRealtimeManager()
         deviceTokenManager = DeviceTokenManager(this, userPreferences, supabaseClient)
-        pushNotificationManager = PushNotificationManager(this, database.authorizationDao())
+        pushNotificationManager = PushNotificationManager(this, database.authorizationDao(), userPreferences)
+        appUpdateManager = AppUpdateManager(this, userPreferences, networkMonitor, supabaseClient)
 
         // 2. Initialize Repositories
         authRepository = AuthRepository(
@@ -178,6 +183,7 @@ class TaskzApplication : Application() {
                 isAppInForeground = true
                 if (wasBackground) {
                     taskzSyncManager.onAppForegrounded()
+                    appUpdateManager.checkIfDue("foreground")
                 }
             }
             override fun onActivityResumed(activity: Activity) {}
@@ -204,6 +210,7 @@ class TaskzApplication : Application() {
             }
             syncRepository.initializeSyncState()
             taskzSyncManager.start(applicationScope)
+            appUpdateManager.checkIfDue("launch")
             runCatching { deviceTokenManager.fetchAndRegisterFcmTokenIfAvailable() }
         }
 

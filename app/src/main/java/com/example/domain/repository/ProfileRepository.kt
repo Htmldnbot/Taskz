@@ -18,6 +18,17 @@ class ProfileRepository(
 
     suspend fun getCachedProfile(): UserProfile? = profileDao.getCachedProfile()?.toDomain()
 
+    private suspend fun resolveEmail(
+        profile: UserProfile,
+        token: String,
+        cachedEmail: String? = null
+    ): String? {
+        return com.example.core.network.SupabaseConfig.sanitizeDisplayEmail(profile.email)
+            ?: com.example.core.network.SupabaseConfig.sanitizeDisplayEmail(cachedEmail)
+            ?: supabaseClient.extractEmailFromJwt(token)
+            ?: supabaseClient.fetchCurrentAuthUserEmail(token)
+    }
+
     suspend fun refreshProfile(): Result<UserProfile> {
         val session = userPrefs.getUserSession()
         val token = com.example.TaskzApplication.instance.authRepository.getValidAccessToken().getOrNull()
@@ -26,6 +37,7 @@ class ProfileRepository(
         val userId = session.userId
             ?: return Result.failure(IOException("No active user ID"))
 
+        val cachedEmail = profileDao.getCachedProfile()?.email
         val result = supabaseClient.fetchProfileById(token, userId)
         val profile = result.getOrElse { return Result.failure(it) }
             ?: return Result.failure(IOException("Profile record not found"))
@@ -41,7 +53,11 @@ class ProfileRepository(
             null
         }
 
-        val enriched = profile.copy(avatarSignedUrl = signedUrl)
+        val resolvedEmail = resolveEmail(profile, token, cachedEmail)
+        val enriched = profile.copy(
+            email = resolvedEmail,
+            avatarSignedUrl = signedUrl
+        )
         profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
         return Result.success(enriched)
     }
@@ -109,7 +125,11 @@ class ProfileRepository(
             null
         }
 
-        val enriched = updatedProfile.copy(avatarSignedUrl = signedUrl)
+        val resolvedEmail = resolveEmail(updatedProfile, token, currentCached?.email)
+        val enriched = updatedProfile.copy(
+            email = resolvedEmail,
+            avatarSignedUrl = signedUrl
+        )
         profileDao.insertProfile(ProfileEntity.fromDomain(enriched))
         return Result.success(enriched)
     }
